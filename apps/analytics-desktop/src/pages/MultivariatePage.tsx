@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, Box, CheckCircle2, ChevronDown, CopyPlus, Database, GitBranch, Layers3, Play, RefreshCw, Save, ScatterChart, TableProperties, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
@@ -13,7 +13,8 @@ import {
 } from '../analysis/multivariateEngine.js'
 import { useMultivariateEngine } from '../analysis/useMultivariateEngine.js'
 import { GeoEyeChart } from '../components/GeoEyeChart.js'
-import { EDA_DATASET_QUERY_KEY, loadEdaDatasets, type EdaDataset, type EdaVariableDefinition } from '../data/edaDemo.js'
+import { type EdaDataset, type EdaVariableDefinition } from '../data/edaDemo.js'
+import { useProjectEdaDatasets } from '../data/liveEda.js'
 import { currentAnalysisTemplateVersion, recordAnalysisTemplateSave, resolveAnalysisTemplateVersion } from '../data/analysisSaveStore.js'
 import { barGraphImage, scatterGraphImage } from '../data/analysisGraphImages.js'
 import { saveAnalysisResultPackage } from '../data/analysisResultStore.js'
@@ -92,7 +93,7 @@ interface MultivariatePageProps {
 
 export function MultivariatePage({ onNavigate }: MultivariatePageProps) {
   const queryClient = useQueryClient()
-  const datasetsQuery = useQuery({ queryKey: EDA_DATASET_QUERY_KEY, queryFn: () => loadEdaDatasets(), staleTime: Infinity })
+  const datasetsQuery = useProjectEdaDatasets()
   const [datasetId, setDatasetId] = usePersistentState('multivariate.datasetId', 'demo-integrated-gold-geology-v4')
   const [variableKeys, setVariableKeys] = usePersistentState<string[]>('multivariate.variableKeys', ['assay.au', 'assay.cu', 'assay.as', 'geotech.rqd', 'geotech.ucs'])
   const [activeFilterKeys, setActiveFilterKeys] = usePersistentState<string[]>('multivariate.activeFilterKeys', [])
@@ -267,7 +268,7 @@ export function MultivariatePage({ onNavigate }: MultivariatePageProps) {
     })
     setSavedRunId(activeRun.runId)
     setSavedTemplateVersion(templateVersion)
-    void queryClient.invalidateQueries({ queryKey: EDA_DATASET_QUERY_KEY })
+    void queryClient.invalidateQueries({ queryKey: ['eda-datasets'] })
   }
   const selectCluster = (cluster: number) => {
     if (activeRun === null) return

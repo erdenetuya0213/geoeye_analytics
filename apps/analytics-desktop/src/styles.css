@@ -87,10 +87,12 @@ button:focus-visible, input:focus-visible { outline: 2px solid #62a99e; outline-
 .icon-button:hover { background: #eef2ee; }
 .notification-button { position: relative; }
 .notification-button span { position: absolute; top: 6px; right: 6px; width: 5px; height: 5px; background: #d77e42; border: 1.5px solid #fff; border-radius: 50%; }
+.profile-controls { display: flex; align-items: center; gap: 3px; }
 .profile-button { height: 34px; display: flex; align-items: center; gap: 7px; padding: 0 2px 0 0; background: transparent; border: 0; cursor: pointer; }
 .profile-avatar { width: 30px; height: 30px; display: grid; place-items: center; color: #fff; background: #385e54; border-radius: 8px; font-size: 9px; font-weight: 800; }
 .profile-name { color: #334941; font-size: 10px; font-weight: 700; }
 .profile-button svg { color: #87948f; }
+.profile-sign-out { flex: 0 0 auto; }
 
 .page-content { min-height: calc(100vh - 68px); }
 .page { max-width: 1600px; margin: 0 auto; padding: 25px 28px 38px; }
@@ -107,6 +109,8 @@ h2 { margin-bottom: 0; color: #203b33; font-size: 14px; line-height: 1.2; letter
 .button:disabled { opacity: .45; cursor: not-allowed; }
 .button-primary { color: #fff; background: var(--teal); border: 1px solid var(--teal); box-shadow: 0 2px 4px rgb(25 92 81 / 14%); }
 .button-primary:hover { background: var(--teal-dark); border-color: var(--teal-dark); }
+.button-danger { color: var(--destructive-foreground, #fff); background: var(--destructive, #b83d32); border: 1px solid var(--destructive, #b83d32); }
+.button-danger:hover { background: color-mix(in srgb, var(--destructive, #b83d32) 86%, black); border-color: color-mix(in srgb, var(--destructive, #b83d32) 86%, black); }
 .button-secondary { color: #40534c; background: #fff; border: 1px solid #d5ddd7; }
 .button-secondary:hover, .button-ghost:hover { background: #f3f6f3; border-color: #c8d3cb; }
 .button-ghost { color: #53655e; background: transparent; border: 1px solid #dbe2dc; }
@@ -208,6 +212,8 @@ button.dataset-row:hover { background: #fafbf9; }
 .trace-visual { position: relative; height: 270px; margin: 12px 0; background: linear-gradient(180deg, #f8faf8, #f1f4f0); border: 1px solid #e5eae6; border-radius: 8px; }
 .trace-visual svg { position: absolute; inset: 8px 8px 8px 35px; width: calc(100% - 43px); height: calc(100% - 16px); }
 .trace-scale { position: absolute; z-index: 1; inset: 10px auto 10px 9px; display: flex; flex-direction: column; justify-content: space-between; color: #9aa49f; font-size: 6.5px; }
+.trace-empty { position: absolute; inset: 0; display: grid; place-items: center; margin: 0; color: #8e9994; font-size: 8px; }
+.trace-visual svg circle.is-last { fill: #d1813c; stroke: #d1813c; }
 .hole-stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1px; overflow: hidden; margin-bottom: 10px; background: #e7ebe8; border: 1px solid #e7ebe8; border-radius: 7px; }
 .hole-stats div { display: flex; flex-direction: column; gap: 3px; padding: 9px; background: #f8faf8; }
 .hole-stats span { color: #8e9994; font-size: 7px; }.hole-stats strong { color: #365048; font-size: 9px; }
@@ -622,6 +628,9 @@ button.dataset-row:hover { background: #fafbf9; }
 .placeholder-page { min-height: calc(100vh - 68px); }.empty-module { min-height: 490px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }.empty-illustration { position: relative; width: 90px; height: 90px; display: grid; place-items: center; margin-bottom: 20px; color: #5e8c7f; background: #e9f2ee; border-radius: 26px; transform: rotate(-4deg); }.empty-illustration > svg { transform: rotate(4deg); }.empty-illustration span { position: absolute; right: -7px; bottom: -5px; width: 34px; height: 34px; display: grid; place-items: center; color: #a9733e; background: #ffedda; border: 4px solid #fff; border-radius: 50%; transform: rotate(4deg); }.empty-module h2 { margin-bottom: 7px; font-size: 17px; }.empty-module > p:not(.eyebrow) { max-width: 440px; margin-bottom: 18px; color: #7c8883; font-size: 9.5px; line-height: 1.55; }
 
 .dialog-backdrop { position: fixed; z-index: 50; inset: 0; display: grid; place-items: center; padding: 24px; background: rgb(9 26 21 / 50%); backdrop-filter: blur(5px); animation: fadeIn .16s ease; }.connection-dialog { width: min(500px, 100%); overflow: hidden; background: #fff; border: 1px solid rgb(255 255 255 / 30%); border-radius: 13px; box-shadow: var(--shadow-lg); animation: dialogIn .18s ease; }.dialog-header { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 11px; padding: 17px 18px; border-bottom: 1px solid #e9ede9; }.dialog-icon { width: 36px; height: 36px; display: grid; place-items: center; color: #fff; background: #2f796b; border-radius: 9px; }.dialog-header h2 { font-size: 15px; }.dialog-body { display: flex; flex-direction: column; gap: 12px; padding: 17px 18px; }.local-node-card { display: flex; align-items: center; gap: 10px; padding: 11px; background: #f5f8f5; border: 1px solid #e1e8e2; border-radius: 8px; }.node-icon { width: 31px; height: 31px; display: grid; place-items: center; color: #577c70; background: #e6efeb; border-radius: 7px; }.local-node-card > div:nth-child(2) { display: flex; flex: 1; flex-direction: column; gap: 3px; }.local-node-card strong { color: #40574f; font-size: 9px; }.local-node-card span { color: #8b9792; font-size: 7.5px; }.mode-tag { padding: 3px 6px; color: #61746d !important; background: #fff; border: 1px solid #dce3de; border-radius: 4px; font-size: 6.5px !important; font-weight: 800; letter-spacing: .08em; }.form-field { display: flex; flex-direction: column; gap: 6px; color: #596b64; font-size: 8px; font-weight: 750; }.form-field em { color: #9ca6a1; font-size: 7px; font-style: normal; font-weight: 500; }.form-field input { height: 36px; padding: 0 10px; color: #334b43; background: #fff; border: 1px solid #d9e1db; border-radius: 7px; font-size: 9px; }.connection-result { min-height: 38px; display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 7px; font-size: 8px; }.result-checking { color: #7b6c4d; background: #fff6e9; }.result-connected { color: #39735f; background: #eaf5f0; }.result-unavailable { color: #985a50; background: #fbeceb; }.dialog-footer { min-height: 59px; display: flex; align-items: center; justify-content: space-between; padding: 11px 18px; background: #f8faf8; border-top: 1px solid #e9ede9; }.dialog-footer-actions { display: flex; gap: 7px; }
+.sign-out-dialog { width: min(420px, 100%); }
+.sign-out-dialog-icon { color: var(--destructive-foreground, #fff); background: var(--destructive, #b83d32); }
+.sign-out-dialog-body p { margin: 0; color: var(--muted-foreground, #596b64); font-size: 10px; line-height: 1.55; }
 
 /* Secondary labels stay compact, but retain WCAG AA contrast at desktop-app sizes. */
 .command-search kbd,
@@ -1266,6 +1275,7 @@ body { background: #bcc8d2; }
 .theme-supervisor .trace-visual svg path:first-child { stroke: #d8dfe4; }
 .theme-supervisor .trace-visual svg path:nth-child(2) { stroke: #e4572e; }
 .theme-supervisor .trace-visual svg circle { stroke: #e4572e; fill: #fff; }
+.theme-supervisor .trace-visual svg circle.is-last { fill: #e4572e; }
 .theme-supervisor .hole-stats { background: #9eacb6; border-color: #9eacb6; border-radius: 1px; }
 .theme-supervisor .hole-stats div { background: #f3f6f8; }
 .theme-supervisor .coordinate-card { color: #294f69; background: #e4edf3; border-color: #91a8b7; border-radius: 1px; }
@@ -1542,6 +1552,7 @@ body { background: #080a0c; }
 .theme-geoeye-industrial .trace-visual svg path:first-child { stroke: #2c3338; }
 .theme-geoeye-industrial .trace-visual svg path:nth-child(2) { stroke: var(--primary); }
 .theme-geoeye-industrial .trace-visual svg circle { stroke: var(--primary); fill: #171a1d; }
+.theme-geoeye-industrial .trace-visual svg circle.is-last { fill: var(--primary); }
 .theme-geoeye-industrial .hole-stats { background: #3a4248; border-color: #3a4248; border-radius: 2px; }
 .theme-geoeye-industrial .hole-stats div { background: #1d2125; }
 .theme-geoeye-industrial .coordinate-card { color: #70a8bf; background: #1a252a; border-color: #345766; border-radius: 2px; }
@@ -3246,7 +3257,7 @@ button.dataset-record-row:hover { background: #20252a; }
 .theme-geoeye-industrial:is(.theme-solarized, .theme-core-oxide) .trace-visual path:first-of-type { stroke: var(--muted); }
 .theme-geoeye-industrial:is(.theme-solarized, .theme-core-oxide) .trace-visual path:nth-of-type(2) { stroke: var(--primary); }
 .theme-geoeye-industrial:is(.theme-solarized, .theme-core-oxide) .trace-visual circle { fill: #fff; stroke: var(--primary); }
-.theme-geoeye-industrial:is(.theme-solarized, .theme-core-oxide) .trace-visual circle:nth-of-type(5) { fill: var(--primary); stroke: var(--primary); }
+.theme-geoeye-industrial:is(.theme-solarized, .theme-core-oxide) .trace-visual circle.is-last { fill: var(--primary); stroke: var(--primary); }
 .theme-geoeye-industrial:is(.theme-solarized, .theme-core-oxide) .mini-progress { background: var(--muted); }
 .theme-geoeye-industrial:is(.theme-solarized, .theme-core-oxide) .mini-progress i,
 .theme-geoeye-industrial:is(.theme-solarized, .theme-core-oxide) .hole-id i { background: var(--primary); }

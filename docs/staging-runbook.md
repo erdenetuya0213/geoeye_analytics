@@ -167,9 +167,9 @@ account. These are the same accounts GeoEye Field uses; nothing new is created. 
   administrators see all projects. Deactivated accounts cannot sign in;
 - a read-only project role disables every write;
 - **Data Pool** shows the Field feed per source, a **Sync from Field** action, and the dataset registry;
-- **Drillholes** lists the project's drillholes. **Import CSV** publishes collar and survey files to
-  the Data Pool after you enter the EPSG code of the collar coordinates. Holes are matched by name;
-  names that Field has not created are reported, never created.
+- **Drillholes** is the Analytics CSV workspace. **Import CSV** loads mapped collar and survey files,
+  displays those imported records instead of the Data Pool borehole list, and restores the last
+  import when the workspace is reopened.
 
 The analysis workspaces (Explore, Structure, Geotechnical, ...) do not read the Data Pool yet.
 While a real project is open they show a notice instead of sample data. There is no demo
@@ -182,8 +182,8 @@ workspace, in development or production, unless the build sets `VITE_ENABLE_DEMO
 - [ ] `staging:project` reports no `failed` source, and observation counts match expectations from Field.
 - [ ] Field keeps working unchanged against the same database.
 - [ ] `staging:smoke` passes.
-- [ ] Analytics lists the staging projects and drillholes.
-- [ ] A collar and survey imported in Analytics appear in `drillhole_collars` and `drillhole_surveys`.
+- [ ] Analytics lists the staging projects, and Drillholes shows the imported collar and survey rows.
+- [ ] A collar and survey imported in Analytics are restored after reopening the Drillholes workspace.
 - [ ] Supabase Security Advisor shows RLS enabled on every Data Pool table.
 
 ## Troubleshooting

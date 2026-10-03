@@ -1,5 +1,8 @@
+import type { DataPoolClient, ObservationValue, ProjectSummary, VariableDefinition } from '@geoeye/datapool-client'
+import { useQuery } from '@tanstack/react-query'
 import { Filter, RefreshCw, Search, Upload } from 'lucide-react'
 import { useMemo } from 'react'
+import { useDataPoolWorkspace } from '../state/DataPoolWorkspaceContext.js'
 import { usePersistentState } from '../state/persistentState.js'
 import type { SectionId } from '../types.js'
 
@@ -30,7 +33,14 @@ const configs: Record<DatasetSection, DatasetToolConfig> = {
 }
 
 export function DatasetToolPage({ section }: { section: DatasetSection }) {
-  const config = configs[section]
+  const workspace = useDataPoolWorkspace()
+  if (workspace.live && workspace.client !== null && workspace.project !== null) {
+    return <LiveDatasetToolPage client={workspace.client} project={workspace.project} scope={workspace.scope} section={section} />
+  }
+  return <DatasetToolWorkbench config={configs[section]} section={section} />
+}
+
+function DatasetToolWorkbench({ config, section }: { config: DatasetToolConfig; section: DatasetSection }) {
   const [query, setQuery] = usePersistentState(`datasetTool.${section}.query`, '')
   const filteredRows = useMemo(() => config.rows.filter((row) => row.some((cell) => cell.toLowerCase().includes(query.toLowerCase()))), [config.rows, query])
 
@@ -60,4 +70,79 @@ export function DatasetToolPage({ section }: { section: DatasetSection }) {
       </section>
     </div>
   )
+}
+
+function supportsSection(section: DatasetSection, definition: VariableDefinition, sourceLabel: string): boolean {
+  const haystack = `${definition.key} ${definition.displayName} ${sourceLabel}`.toLowerCase()
+  if (section === 'laboratory') return /assay|laborator|geochem|sample/.test(haystack)
+  if (section === 'xrf') return /(^|[. _-])xrf|fluorescence/.test(haystack)
+  return /spectral|spectrum|specim|mineral/.test(haystack)
+}
+
+function displayObservationValue(observation: ObservationValue, definition: VariableDefinition | undefined): string {
+  const value = observation.numericValue
+    ?? observation.categoryValue
+    ?? observation.textValue
+    ?? observation.booleanValue
+    ?? observation.datetimeValue
+  if (value === null) return '—'
+  const unit = observation.unit ?? definition?.canonicalUnit
+  return `${String(value)}${unit === null || unit === undefined || unit === '' ? '' : ` ${unit}`}`
+}
+
+function LiveDatasetToolPage({ client, project, scope, section }: {
+  client: DataPoolClient
+  project: ProjectSummary
+  scope: string
+  section: DatasetSection
+}) {
+  const dataQuery = useQuery({
+    queryKey: ['datapool', scope, project.id, 'dataset-tool', section],
+    queryFn: async (): Promise<DatasetToolConfig> => {
+      const [variables, datasets, holes] = await Promise.all([
+        client.variables(),
+        client.datasets(project.id),
+        client.drillholes(project.id),
+      ])
+      const datasetById = new Map(datasets.map((dataset) => [dataset.id, dataset]))
+      const selectedVariables = variables.filter((variable) => datasets.some((dataset) => (
+        supportsSection(section, variable, `${dataset.name} ${dataset.producerName} ${dataset.producerType}`)
+      )))
+      if (selectedVariables.length === 0) return { ...configs[section], rows: [] }
+      const observations = await client.queryObservations({
+        acceptedOnly: true,
+        limit: 200_000,
+        projectId: project.id,
+        variableKeys: selectedVariables.map((variable) => variable.key),
+      })
+      const definitions = new Map(variables.map((variable) => [variable.key, variable]))
+      const holeNames = new Map(holes.map((hole) => [hole.id, hole.name]))
+      const rows = observations.flatMap((observation): readonly string[][] => {
+        const dataset = datasetById.get(observation.datasetId)
+        const definition = definitions.get(observation.variableKey)
+        if (definition === undefined || dataset === undefined || !supportsSection(section, definition, `${dataset.name} ${dataset.producerName} ${dataset.producerType}`)) return []
+        const interval = observation.depthFrom === null
+          ? 'Project'
+          : observation.depthTo === null || observation.depthTo === observation.depthFrom
+            ? `${observation.depthFrom.toFixed(2)} m`
+            : `${observation.depthFrom.toFixed(2)}–${observation.depthTo.toFixed(2)} m`
+        return [[
+          observation.sourceId,
+          observation.holeId === null ? '—' : holeNames.get(observation.holeId) ?? observation.holeId,
+          interval,
+          definition.displayName,
+          displayObservationValue(observation, definition),
+        ]]
+      })
+      return {
+        columns: ['Source record', 'Drillhole', 'Interval', 'Variable', 'Value'],
+        rows,
+        searchLabel: configs[section].searchLabel,
+      }
+    },
+  })
+
+  if (dataQuery.isPending) return <div className="page dataset-tool-page"><div className="eda-state panel">Loading {configs[section].searchLabel} from {project.name}…</div></div>
+  if (dataQuery.isError) return <div className="page dataset-tool-page"><div className="eda-state panel" role="alert">The connected project data could not be loaded.</div></div>
+  return <DatasetToolWorkbench config={dataQuery.data} section={section} />
 }

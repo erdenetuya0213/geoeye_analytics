@@ -9,6 +9,7 @@ import {
 import type { AnalyticalSeriesResult, VariogramAnalysisResult } from '../analysis/chartResults.js'
 import { TechnicalPlot } from '../components/TechnicalPlot.js'
 import { activities, datasets, projectMetrics } from '../data/demo.js'
+import { useDataPoolWorkspace } from '../state/DataPoolWorkspaceContext.js'
 import type { SectionId } from '../types.js'
 
 interface OverviewPageProps {
@@ -76,6 +77,14 @@ const technicalPlots = [
 ]
 
 export function OverviewPage({ onNavigate }: OverviewPageProps) {
+  const workspace = useDataPoolWorkspace()
+  if (workspace.live && workspace.client !== null && workspace.project !== null) {
+    return <LiveOverviewPage client={workspace.client} onNavigate={onNavigate} project={workspace.project} scope={workspace.scope} />
+  }
+  return <DemoOverviewPage onNavigate={onNavigate} />
+}
+
+function DemoOverviewPage({ onNavigate }: OverviewPageProps) {
   return (
     <div className="page overview-page">
       <section className="supervisor-status-strip" aria-label="Project summary">
@@ -157,3 +166,77 @@ export function OverviewPage({ onNavigate }: OverviewPageProps) {
     </div>
   )
 }
+
+function LiveOverviewPage({ client, onNavigate, project, scope }: {
+  client: DataPoolClient
+  onNavigate: (section: SectionId) => void
+  project: ProjectSummary
+  scope: string
+}) {
+  const projectQuery = useQuery({
+    queryKey: ['datapool', scope, project.id, 'overview'],
+    queryFn: async () => {
+      const [liveDatasets, drillholes, projection, variables] = await Promise.all([
+        client.datasets(project.id),
+        client.drillholes(project.id),
+        client.projectionStatus(project.id),
+        client.variables(),
+      ])
+      return { liveDatasets, drillholes, projection, variables }
+    },
+  })
+  if (projectQuery.isPending) return <div className="page overview-page"><div className="eda-state panel">Loading {project.name}…</div></div>
+  if (projectQuery.isError) return <div className="page overview-page"><div className="eda-state panel" role="alert">The connected project summary could not be loaded.</div></div>
+
+  const { drillholes, liveDatasets, projection, variables } = projectQuery.data
+  const observationCount = projection.reduce((sum, item) => sum + item.observationCount, 0)
+  const sourceCount = projection.reduce((sum, item) => sum + item.sourceRowCount, 0)
+  const issues = projection.reduce((sum, item) => sum + Object.values(item.issueSummary).reduce((subtotal, count) => subtotal + count, 0), 0)
+  const withCollar = drillholes.filter((hole) => hole.collar !== null).length
+  const surveyed = drillholes.filter((hole) => hole.surveyStationCount > 0).length
+
+  return (
+    <div className="page overview-page">
+      <section aria-label="Project summary" className="supervisor-status-strip">
+        <article className="supervisor-status-cell"><span>Drillholes</span><strong>{drillholes.length.toLocaleString()}</strong><small>{withCollar} collars · {surveyed} surveyed</small><em className="trend-neutral">Live</em></article>
+        <article className="supervisor-status-cell"><span>Datasets</span><strong>{liveDatasets.length.toLocaleString()}</strong><small>{variables.length} registered variables</small><em className="trend-neutral">Data Pool</em></article>
+        <article className="supervisor-status-cell"><span>Observations</span><strong>{observationCount.toLocaleString()}</strong><small>{sourceCount.toLocaleString()} source rows</small><em className="trend-up">Accepted</em></article>
+        <article className="supervisor-status-cell"><span>Projection issues</span><strong>{issues.toLocaleString()}</strong><small>{projection.filter((item) => item.lastStatus !== 'ok').length} failed sources</small><em className={issues > 0 ? 'trend-neutral' : 'trend-up'}>{issues > 0 ? 'Review' : 'Current'}</em></article>
+      </section>
+
+      <div className="supervisor-workbench">
+        <section className="panel plot-matrix-panel">
+          <div className="panel-heading workbench-heading"><div><p className="eyebrow">Connected project</p><h2>{project.name}</h2></div><button className="button button-small button-secondary" onClick={() => void projectQuery.refetch()} type="button"><RefreshCw size={14} /> Refresh</button></div>
+          <div className="pool-activity-table">
+            <div className="pool-activity-row pool-activity-header"><span>Source</span><span>Rows</span><span>Observations</span><span>Issues</span><span>Status</span></div>
+            {projection.map((item) => <div className="pool-activity-row" key={item.sourceEntityType}><span><strong>{item.sourceEntityType}</strong></span><span>{item.sourceRowCount.toLocaleString()}</span><span>{item.observationCount.toLocaleString()}</span><span>{Object.values(item.issueSummary).reduce((sum, count) => sum + count, 0).toLocaleString()}</span><span className={item.lastStatus === 'ok' ? 'pool-accepted' : 'validation-label needs-review'}>{item.lastStatus === 'ok' ? <Check size={13} /> : <CircleAlert size={13} />} {item.lastStatus === 'ok' ? 'Current' : 'Failed'}</span></div>)}
+            {projection.length === 0 ? <p className="pool-live-note">No projection run has been recorded yet.</p> : null}
+          </div>
+        </section>
+        <aside className="overview-inspector-column">
+          <section className="panel diagnostics-panel">
+            <div className="panel-heading compact-heading"><div><p className="eyebrow">Validation</p><h2>Project readiness</h2></div></div>
+            <div className="diagnostic-list">
+              <div><span><Check size={14} /> Collar coordinates</span><strong>{withCollar} / {drillholes.length}</strong></div>
+              <div><span><Check size={14} /> Survey traces</span><strong>{surveyed} / {drillholes.length}</strong></div>
+              <div className={issues > 0 ? 'has-warning' : ''}><span>{issues > 0 ? <CircleAlert size={14} /> : <Check size={14} />} Projection inputs</span><strong>{issues > 0 ? `${issues} issues` : 'Ready'}</strong></div>
+              <div><span><Check size={14} /> Accepted observations</span><strong>{observationCount.toLocaleString()}</strong></div>
+            </div>
+            <button className="card-link" onClick={() => onNavigate('data-pool')} type="button">Open Data Pool <ArrowRight size={14} /></button>
+          </section>
+        </aside>
+      </div>
+
+      <section className="panel datasets-panel supervisor-datasets-panel">
+        <div className="panel-heading"><div><p className="eyebrow">Data Pool</p><h2>Project datasets</h2></div></div>
+        <div className="dataset-table">
+          <div className="dataset-row dataset-header"><span>Dataset</span><span>Support</span><span>Version</span><span>Status</span><span>Updated</span></div>
+          {liveDatasets.map((dataset) => <button className="dataset-row" key={dataset.id} onClick={() => onNavigate('data-pool')} type="button"><span className="dataset-name-cell"><i /><span><strong>{dataset.name}</strong><small>{dataset.producerName}</small></span></span><span><span className="support-tag">{dataset.spatialSupport}</span></span><span className="tabular">v{dataset.currentVersion}</span><span>{dataset.status}</span><span className="muted-cell">{new Date(dataset.updatedAt).toLocaleString()}</span></button>)}
+          {liveDatasets.length === 0 ? <p className="pool-live-note">No datasets are registered for this project yet.</p> : null}
+        </div>
+      </section>
+    </div>
+  )
+}
+import type { DataPoolClient, ProjectSummary } from '@geoeye/datapool-client'
+import { useQuery } from '@tanstack/react-query'

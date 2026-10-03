@@ -3,14 +3,15 @@ import { useDeferredValue, useState } from 'react'
 import { DrillholeImportDialog } from '../components/DrillholeImportDialog.js'
 import type { DrillholeImportResult, ImportedCollarRecord, ImportedSurveyRecord } from '../components/DrillholeImportDialog.js'
 import { drillholes } from '../data/demo.js'
-import { saveDrillholeImport } from '../data/drillholeImportStore.js'
+import { readDrillholeImport, saveDrillholeImport } from '../data/drillholeImportStore.js'
 import { useDataPoolWorkspace } from '../state/DataPoolWorkspaceContext.js'
-import { LiveDrillholesPage } from './LiveDrillholesPage.js'
 import { usePersistentState } from '../state/persistentState.js'
+import { buildDrillholeTrace, formatTraceDepth } from '../visualization/drillholeTrace.js'
 
 type DrillholeView = 'collar' | 'survey' | 'validation'
 
 const initialCollars: ImportedCollarRecord[] = drillholes.map((hole, index) => ({
+  crs: 'EPSG:32648',
   holeId: hole.id,
   easting: 518426.32 - index * 19,
   northing: 5324118.76 + index * 15,
@@ -34,57 +35,88 @@ function coordinate(value: number) {
   return value.toLocaleString('en-US', { maximumFractionDigits: 2, minimumFractionDigits: 2 })
 }
 
-export function DrillholesPage() {
-  const workspace = useDataPoolWorkspace()
-  if (workspace.live && workspace.client !== null && workspace.project !== null) {
-    return <LiveDrillholesPage client={workspace.client} project={workspace.project} scope={workspace.scope} />
-  }
-  return <DemoDrillholesPage />
+function normalizedHoleId(value: string) {
+  return value.trim().toLocaleLowerCase()
 }
 
-function DemoDrillholesPage() {
+function sameHole(left: string, right: string) {
+  return normalizedHoleId(left) === normalizedHoleId(right)
+}
+
+function collarStatus(collar: ImportedCollarRecord | undefined) {
+  if (collar === undefined) return 'Missing'
+  return [collar.easting, collar.northing, collar.elevation].every(Number.isFinite) ? 'Accepted' : 'Review'
+}
+
+function surveyStatus(records: readonly ImportedSurveyRecord[]) {
+  if (records.length === 0) return 'Missing'
+  const valid = (records.at(-1)?.depth ?? 0) > 0 && records.every((record, index) => (
+    Number.isFinite(record.depth)
+    && record.depth >= 0
+    && Number.isFinite(record.azimuth)
+    && record.azimuth >= 0
+    && record.azimuth < 360
+    && Number.isFinite(record.dip)
+    && record.dip >= -90
+    && record.dip <= 90
+    && (index === 0 || record.depth > (records[index - 1]?.depth ?? -1))
+  ))
+  return valid ? 'Accepted' : 'Review'
+}
+
+function metric(value: number | undefined, suffix: string) {
+  return value === undefined ? '—' : `${value.toFixed(1)}${suffix}`
+}
+
+export function DrillholesPage() {
+  const workspace = useDataPoolWorkspace()
+  const seedDemo = !workspace.live
+  return <CsvDrillholesPage key={seedDemo ? 'demo' : 'csv'} seedDemo={seedDemo} />
+}
+
+function CsvDrillholesPage({ seedDemo }: { seedDemo: boolean }) {
   const [query, setQuery] = usePersistentState('drillholes.query', '')
   const [selectedId, setSelectedId] = usePersistentState<string>('drillholes.selectedId', drillholes[0].id)
   const [view, setView] = usePersistentState<DrillholeView>('drillholes.view', 'collar')
-  const [collars, setCollars] = useState<ImportedCollarRecord[]>(initialCollars)
-  const [surveys, setSurveys] = useState<ImportedSurveyRecord[]>(initialSurveys)
+  const [savedImport] = useState(readDrillholeImport)
+  const [collars, setCollars] = useState<ImportedCollarRecord[]>(() => savedImport?.collar ?? (seedDemo ? initialCollars : []))
+  const [surveys, setSurveys] = useState<ImportedSurveyRecord[]>(() => savedImport?.survey ?? (seedDemo ? initialSurveys : []))
   const [showImport, setShowImport] = useState(false)
   const [importSummary, setImportSummary] = useState('')
   const deferredQuery = useDeferredValue(query)
 
-  const surveyGroups = Array.from(new Set(surveys.map((record) => record.holeId))).map((holeId) => {
-    const records = surveys.filter((record) => record.holeId === holeId).sort((a, b) => a.depth - b.depth)
+  const surveyGroups = Array.from(new Set(surveys.map((record) => normalizedHoleId(record.holeId)))).map((normalizedId) => {
+    const records = surveys.filter((record) => normalizedHoleId(record.holeId) === normalizedId).sort((a, b) => a.depth - b.depth)
     const last = records.at(-1)
-    return { holeId, records, last }
+    return { holeId: records[0]?.holeId ?? normalizedId, records, last }
   })
-  const validationIds = Array.from(new Set([...collars.map((record) => record.holeId), ...surveys.map((record) => record.holeId)]))
+  const validationIds = Array.from(new Map([...collars, ...surveys].map((record) => [normalizedHoleId(record.holeId), record.holeId])).values())
 
   const sourceRows = view === 'collar'
-    ? collars.map((record) => [record.holeId, coordinate(record.easting), coordinate(record.northing), `${coordinate(record.elevation)} m`, 'EPSG:32648', 'Accepted'])
+    ? collars.map((record) => [record.holeId, coordinate(record.easting), coordinate(record.northing), `${coordinate(record.elevation)} m`, record.crs ?? '—', collarStatus(record)])
     : view === 'survey'
-      ? surveyGroups.map(({ holeId, records, last }) => [holeId, String(records.length), `${(last?.depth ?? 0).toFixed(1)} m`, `${(last?.azimuth ?? 0).toFixed(1)}°`, `${(last?.dip ?? 0).toFixed(1)}°`, 'Accepted'])
+      ? surveyGroups.map(({ holeId, records, last }) => [holeId, String(records.length), metric(last?.depth, ' m'), metric(last?.azimuth, '°'), metric(last?.dip, '°'), surveyStatus(records)])
       : validationIds.map((holeId) => {
-        const known = drillholes.find((hole) => hole.id === holeId)
-        const collarReady = collars.some((record) => record.holeId === holeId)
-        const surveyReady = surveys.some((record) => record.holeId === holeId)
-        const review = !collarReady || !surveyReady || known?.collar === 'Review' || known?.survey === 'Review'
-        return [holeId, collarReady ? known?.collar ?? 'Accepted' : 'Missing', surveyReady ? known?.survey ?? 'Accepted' : 'Missing', known?.logged === known?.depth ? 'Complete' : 'Partial', review ? 'Review' : 'Continuous', review ? 'Review' : 'Accepted']
+        const known = seedDemo ? drillholes.find((hole) => hole.id === holeId) : undefined
+        const collarQa = collarStatus(collars.find((record) => sameHole(record.holeId, holeId)))
+        const holeSurvey = surveys.filter((record) => sameHole(record.holeId, holeId)).sort((a, b) => a.depth - b.depth)
+        const surveyQa = surveyStatus(holeSurvey)
+        const review = collarQa !== 'Accepted' || surveyQa !== 'Accepted' || known?.collar === 'Review' || known?.survey === 'Review'
+        return [holeId, known?.collar ?? collarQa, known?.survey ?? surveyQa, holeSurvey.length > 0 ? 'Computed' : 'Missing', known === undefined ? 'Not loaded' : known.logged === known.depth ? 'Complete' : 'Partial', review ? 'Review' : 'Accepted']
       })
 
   const supportRows = sourceRows.filter((row) => (row[0] ?? '').toLowerCase().includes(deferredQuery.toLowerCase()))
-  const effectiveSelectedId = supportRows.some((row) => row[0] === selectedId) ? selectedId : (supportRows[0]?.[0] ?? selectedId)
-  const selectedSurveyRecords = surveys.filter((record) => record.holeId === effectiveSelectedId).sort((a, b) => a.depth - b.depth)
-  const selectedSurvey = selectedSurveyRecords.at(-1)
-  const selectedCollar = collars.find((record) => record.holeId === effectiveSelectedId)
-  const knownSelected = drillholes.find((hole) => hole.id === effectiveSelectedId)
-  const selected = knownSelected ?? {
+  const selectedRow = supportRows.find((row) => sameHole(row[0] ?? '', selectedId))
+  const effectiveSelectedId = selectedRow?.[0] ?? supportRows[0]?.[0] ?? ''
+  const selectedSurveyRecords = surveys.filter((record) => sameHole(record.holeId, effectiveSelectedId)).sort((a, b) => a.depth - b.depth)
+  const firstSurvey = selectedSurveyRecords[0]
+  const selectedCollar = collars.find((record) => sameHole(record.holeId, effectiveSelectedId))
+  const knownSelected = seedDemo ? drillholes.find((hole) => hole.id === effectiveSelectedId) : undefined
+  const trace = buildDrillholeTrace(selectedSurveyRecords)
+  const selected = effectiveSelectedId === '' ? null : {
+    depth: trace.totalDepth,
     id: effectiveSelectedId,
-    depth: selectedSurvey?.depth ?? 0,
-    logged: 0,
-    structures: 0,
-    collar: selectedCollar === undefined ? 'Review' : 'Validated',
-    survey: selectedSurvey === undefined ? 'Review' : 'Validated',
-    status: 'Imported',
+    status: knownSelected?.status ?? (collarStatus(selectedCollar) === 'Accepted' && surveyStatus(selectedSurveyRecords) === 'Accepted' ? 'Ready' : 'Incomplete'),
   }
 
   const views = [
@@ -94,8 +126,8 @@ function DemoDrillholesPage() {
   ] as const
 
   const applyImport = (result: DrillholeImportResult) => {
-    if (result.collar.length > 0) setCollars(result.collar)
-    if (result.survey.length > 0) setSurveys(result.survey)
+    setCollars(result.collar)
+    setSurveys(result.survey)
     saveDrillholeImport(result)
     setSelectedId(result.collar[0]?.holeId ?? result.survey[0]?.holeId ?? selectedId)
     setView('collar')
@@ -133,6 +165,7 @@ function DemoDrillholesPage() {
             <div className="borehole-data-row borehole-data-header">
               {supportColumns[view].map((column) => <span key={column}>{column}</span>)}
             </div>
+            {supportRows.length === 0 ? <p className="pool-live-note">Import collar and survey CSV files to populate this workspace.</p> : null}
             {supportRows.map((row) => {
               const rowId = row[0] ?? ''
               const review = row[row.length - 1] === 'Review'
@@ -146,22 +179,30 @@ function DemoDrillholesPage() {
         </section>
 
         <aside className="panel hole-detail-panel">
+          {selected === null ? <p className="pool-live-note">No imported drillhole selected.</p> : (
+            <>
           <div className="hole-detail-heading"><div><p className="eyebrow">Selected hole</p><h2>{selected.id}</h2></div><span className="status-chip">{selected.status}</span></div>
           <div className="trace-visual">
-            <div className="trace-scale"><span>0 m</span><span>100</span><span>200</span><span>300</span><span>{Math.round(selected.depth)} m</span></div>
-            <svg aria-label={`Simplified drill trace for ${selected.id}`} viewBox="0 0 180 290" role="img">
-              <path d="M65 12C66 58 78 86 84 128C92 178 100 223 126 278" fill="none" stroke="#d7ded9" strokeLinecap="round" strokeWidth="12" />
-              <path d="M65 12C66 58 78 86 84 128C92 178 100 223 126 278" fill="none" stroke="#287c70" strokeLinecap="round" strokeWidth="4" />
-              {[40, 78, 111, 148, 183, 221, 252].map((y, index) => <circle cx={70 + index * 7.5} cy={y} fill={index === 4 ? '#d1813c' : '#fff'} key={y} r="4" stroke={index === 4 ? '#d1813c' : '#287c70'} strokeWidth="2" />)}
-            </svg>
+            {trace.path === '' ? <p className="trace-empty">No positive-depth survey stations</p> : (
+              <>
+                <div className="trace-scale">{trace.depthTicks.map((depth, index) => <span key={depth}>{formatTraceDepth(depth)}{index === 0 || index === trace.depthTicks.length - 1 ? ' m' : ''}</span>)}</div>
+                <svg aria-label={`Survey-derived drill trace for ${selected.id}`} viewBox="0 0 180 290" role="img">
+                  <path d={trace.path} fill="none" stroke="#d7ded9" strokeLinecap="round" strokeLinejoin="round" strokeWidth="12" />
+                  <path d={trace.path} fill="none" stroke="#287c70" strokeLinecap="round" strokeLinejoin="round" strokeWidth="4" />
+                  {trace.points.map((point, index) => <circle className={index === trace.points.length - 1 ? 'is-last' : undefined} cx={point.x} cy={point.y} key={`${point.depth}-${index}`} r="4" strokeWidth="2" />)}
+                </svg>
+              </>
+            )}
           </div>
           <div className="hole-stats">
-            <div><span>Total depth</span><strong>{selected.depth.toFixed(1)} m</strong></div>
-            <div><span>Azimuth</span><strong>{(selectedSurvey?.azimuth ?? 42.6).toFixed(1)}°</strong></div>
-            <div><span>Dip</span><strong>{(selectedSurvey?.dip ?? -62).toFixed(1)}°</strong></div>
-            <div><span>Structures</span><strong>{selected.structures}</strong></div>
+            <div><span>Total depth</span><strong>{metric(selected.depth ?? undefined, ' m')}</strong></div>
+            <div><span>Collar azimuth</span><strong>{metric(firstSurvey?.azimuth, '°')}</strong></div>
+            <div><span>Collar dip</span><strong>{metric(firstSurvey?.dip, '°')}</strong></div>
+            <div><span>Survey stations</span><strong>{selectedSurveyRecords.length}</strong></div>
           </div>
-          <div className="coordinate-card"><MapPin size={17} /><div><span>Collar · EPSG:32648</span><strong>E {coordinate(selectedCollar?.easting ?? 0)} · N {coordinate(selectedCollar?.northing ?? 0)} · RL {coordinate(selectedCollar?.elevation ?? 0)}</strong></div></div>
+          <div className="coordinate-card"><MapPin size={17} /><div><span>{selectedCollar === undefined ? 'Collar' : `Collar · ${selectedCollar.crs ?? 'CRS not supplied'}`}</span><strong>{selectedCollar === undefined ? 'No collar imported' : `E ${coordinate(selectedCollar.easting)} · N ${coordinate(selectedCollar.northing)} · RL ${coordinate(selectedCollar.elevation)}`}</strong></div></div>
+            </>
+          )}
         </aside>
       </div>
 

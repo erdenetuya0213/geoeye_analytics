@@ -1,6 +1,6 @@
 import { DataPoolClient, DataPoolError } from '@geoeye/datapool-client'
 import { LoaderCircle, LogIn, PlugZap, Server, X, XCircle } from 'lucide-react'
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { demoWorkspaceAllowed } from '../data/demoPolicy.js'
 import type { ConnectionSettings, ConnectionState } from '../types.js'
 
@@ -33,7 +33,13 @@ export function ConnectionDialog({ initialSettings, mode = 'sign-in', onClose, o
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const mounted = useRef(true)
   const connectionMode = mode === 'connection'
+
+  useEffect(() => {
+    mounted.current = true
+    return () => { mounted.current = false }
+  }, [])
 
   useEffect(() => {
     if (required) return undefined
@@ -51,18 +57,21 @@ export function ConnectionDialog({ initialSettings, mode = 'sign-in', onClose, o
     setError('')
     try {
       const result = await new DataPoolClient({ endpoint }).login({ email, password })
+      if (!mounted.current) return
       onSave({ version: 1, endpoint, token: result.accessToken }, 'connected')
     } catch (failure) {
+      if (!mounted.current) return
       setError(signInErrorMessage(failure))
       setPassword('')
     } finally {
-      setBusy(false)
+      if (mounted.current) setBusy(false)
     }
   }
 
   return (
     <div className={`dialog-backdrop ${required ? 'is-sign-in-gate' : ''}`} role="presentation" onMouseDown={required ? undefined : onClose}>
       <form
+        aria-busy={busy}
         aria-labelledby="connection-title"
         aria-modal="true"
         className="connection-dialog"
@@ -120,6 +129,11 @@ export function ConnectionDialog({ initialSettings, mode = 'sign-in', onClose, o
             </button>
           ) : <span />}
           <div className="dialog-footer-actions">
+            {required ? null : (
+              <button className="button button-ghost" onClick={onClose} type="button">
+                Cancel
+              </button>
+            )}
             <button className="button button-primary" disabled={busy} type="submit">
               {busy ? <LoaderCircle className="spin" size={15} /> : null} {connectionMode ? 'Connect' : 'Sign in'}
             </button>

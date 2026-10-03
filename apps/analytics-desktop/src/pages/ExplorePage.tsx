@@ -1,4 +1,3 @@
-import { useQuery } from '@tanstack/react-query'
 import { AlertTriangle, BarChart3, ChartSpline, ChevronDown, Grid3X3, LayoutDashboard, Play, RefreshCw, ScatterChart, Settings2, TableProperties, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { analyzeCorrelationMatrix, analyzeRelationship, analyzeSwath, type ScatterAnalysisResult } from '../analysis/chartResults.js'
@@ -9,8 +8,9 @@ import { useEdaRunEngine } from '../analysis/useEdaRunEngine.js'
 import { GeoEyeChart } from '../components/GeoEyeChart.js'
 import { GeoEyeFacetChart } from '../components/GeoEyeFacetChart.js'
 import { DownholeCorrelationIcon } from '../components/GeoEyeIcons.js'
-import { EDA_DATASET_QUERY_KEY, loadEdaDatasets, type EdaDataset, type EdaVariableDefinition, type EdaVariableKey } from '../data/edaDemo.js'
+import { type EdaDataset, type EdaVariableDefinition, type EdaVariableKey } from '../data/edaDemo.js'
 import { nextEdaRunNumber, readEdaRunCache, writeEdaRunCache } from '../data/edaRunCache.js'
+import { useProjectEdaDatasets } from '../data/liveEda.js'
 import { useGeoEyeSelection } from '../state/SelectionContext.js'
 import { buildCdfOption, buildCorrelationOption, buildDistributionBoxPlotOption, buildHistogramOption, buildProbabilityPlotOption, buildScatterOption, buildSwathOption } from '../visualization/chartOptions.js'
 import { DownholeCorrelationWorkspace } from './DownholeCorrelationPage.js'
@@ -106,7 +106,7 @@ function distributionSeries(result: DistributionResult | undefined, variable: Ed
 }
 
 export function ExplorePage() {
-  const datasetsQuery = useQuery({ queryKey: EDA_DATASET_QUERY_KEY, queryFn: () => loadEdaDatasets(), staleTime: Infinity })
+  const datasetsQuery = useProjectEdaDatasets()
   const [view, setView] = usePersistentState<ExploreView>('explore.view', initialExploreView)
   const [resultMode, setResultMode] = usePersistentState<ResultMode>('explore.resultMode', 'facets')
   const [datasetId, setDatasetId] = usePersistentState('explore.datasetId', 'demo-als-gold-assays-v4')

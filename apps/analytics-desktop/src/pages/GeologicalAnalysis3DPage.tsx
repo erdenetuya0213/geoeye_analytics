@@ -1,4 +1,3 @@
-import { useQuery } from '@tanstack/react-query'
 import {
   Axis3d, ChevronDown, ChevronLeft, ChevronRight, Crosshair, Cuboid, Eye, Hash,
   EyeOff, Filter, Focus, Grid3X3, Image as ImageIcon, Layers3, Maximize2,
@@ -11,7 +10,7 @@ import type { Scene3DHole, Scene3DStructure } from '../components/GeoEyeScene3D.
 import type { SceneGridDensity } from '../visualization/scene3dThreeMath.js'
 import { readDrillholeImport } from '../data/drillholeImportStore.js'
 import { readAnalysisResultDocument, type AnalysisResultPackage } from '../data/analysisResultStore.js'
-import { EDA_DATASET_QUERY_KEY, loadEdaDatasets } from '../data/edaDemo.js'
+import { useProjectEdaDatasets } from '../data/liveEda.js'
 import { readSpatialViewRequest } from '../data/spatialViewStore.js'
 import { useGeoEyeSelection } from '../state/SelectionContext.js'
 import { sceneCollarRenderPoint, sceneElevation, type SceneBounds, type SceneViewMode } from '../visualization/scene3dProjection.js'
@@ -241,7 +240,7 @@ function valueFor(row: EdaObservation, key: string): string | number | null {
 }
 
 export function GeologicalAnalysis3DPage({ backgroundColor, onBackgroundColorChange, screenText }: GeologicalAnalysis3DPageProps) {
-  const datasetsQuery = useQuery({ queryKey: EDA_DATASET_QUERY_KEY, queryFn: () => loadEdaDatasets(), staleTime: Infinity })
+  const datasetsQuery = useProjectEdaDatasets()
   const handoff = useMemo(() => readSpatialViewRequest(typeof window === 'undefined' ? undefined : window.localStorage), [])
   const datasets = datasetsQuery.data ?? []
   const [datasetId] = useState(handoff?.datasetId ?? 'demo-integrated-gold-geology-v4')

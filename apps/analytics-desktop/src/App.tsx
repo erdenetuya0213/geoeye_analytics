@@ -3,6 +3,7 @@ import { AppShell } from './components/AppShell.js'
 import { ConnectionDialog } from './components/ConnectionDialog.js'
 import type { ConnectionDialogMode } from './components/ConnectionDialog.js'
 import { SettingsDialog } from './components/SettingsDialog.js'
+import { SignOutDialog } from './components/SignOutDialog.js'
 import { themes } from './components/ThemeSwitcher.js'
 import type { ThemeId } from './components/ThemeSwitcher.js'
 import { DataPoolPage } from './pages/DataPoolPage.js'
@@ -105,6 +106,7 @@ export function App() {
   const [sceneTextPreferences, setSceneTextPreferences] = useState(() => loadSceneTextPreferences(window.localStorage))
   const [connectionDialogMode, setConnectionDialogMode] = useState<ConnectionDialogMode | null>(null)
   const [showSettings, setShowSettings] = useState(false)
+  const [showSignOutConfirmation, setShowSignOutConfirmation] = useState(false)
   const sceneBackground = sceneBackgroundPreferences.color
 
   // Set when the user explicitly chooses the sample-data workspace (development only).
@@ -132,6 +134,7 @@ export function App() {
   }, [connectionSettings, preferDemo])
 
   const signOut = useCallback(() => {
+    setShowSignOutConfirmation(false)
     window.sessionStorage.removeItem(connectionTokenStorageKey)
     setPreferDemo(demoWorkspaceAllowed)
     setConnectionSettings((current) => current.token === '' ? current : { ...current, token: '' })
@@ -141,6 +144,10 @@ export function App() {
     // button. Production builds render the required sign-in gate below.
     setConnectionDialogMode('sign-in')
   }, [])
+
+  const requestSignOut = useCallback(() => setShowSignOutConfirmation(true), [])
+  const cancelSignOut = useCallback(() => setShowSignOutConfirmation(false), [])
+  const confirmSignOut = useCallback(() => signOut(), [signOut])
 
   useEffect(() => {
     saveSceneBackgroundPreferences(window.localStorage, sceneBackgroundPreferences)
@@ -253,7 +260,12 @@ export function App() {
   }
 
   return (
-    <DataPoolWorkspaceProvider connectionSettings={connectionSettings} connectionState={connectionState} onSignOut={signOut}>
+    <DataPoolWorkspaceProvider
+      connectionSettings={connectionSettings}
+      connectionState={connectionState}
+      onSessionExpired={signOut}
+      onSignOut={requestSignOut}
+    >
       <StereonetThemeProvider themeId={stereonetTheme}>
         <ChartDesignProvider designId={chartDesign}>
           <AppShell
@@ -279,6 +291,7 @@ export function App() {
         />
       ) : null}
       {showSettings ? <div className={`settings-theme-surface theme-geoeye-industrial ${theme}`}><SettingsDialog chartDesign={chartDesign} onChartDesignChange={changeChartDesign} onClose={closeSettings} onSceneBackgroundChange={changeSceneBackground} onSceneTextChange={changeSceneText} onStereonetThemeChange={changeStereonetTheme} sceneBackground={sceneBackground} sceneBackgroundHistory={sceneBackgroundPreferences.recentColors} sceneText={sceneTextPreferences} stereonetTheme={stereonetTheme} /></div> : null}
+      {showSignOutConfirmation ? <SignOutDialog onCancel={cancelSignOut} onConfirm={confirmSignOut} /> : null}
     </DataPoolWorkspaceProvider>
   )
 }

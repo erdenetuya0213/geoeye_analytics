@@ -66,7 +66,7 @@ export interface EdaDataset {
   producer: string
   project: string
   snapshotAt: string
-  source: 'demo'
+  source: 'demo' | 'live'
   support: string
   variables: readonly EdaVariableDefinition[]
 }

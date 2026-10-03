@@ -2,6 +2,7 @@ import { Check, FileSpreadsheet, Upload, X } from 'lucide-react'
 import { useState } from 'react'
 
 export interface ImportedCollarRecord {
+  crs?: string | undefined
   elevation: number
   easting: number
   holeId: string
@@ -35,6 +36,7 @@ const fields = {
     { key: 'easting', label: 'Easting', aliases: ['easting', 'east', 'x', 'xcoord', 'xcoordinate'] },
     { key: 'northing', label: 'Northing', aliases: ['northing', 'north', 'y', 'ycoord', 'ycoordinate'] },
     { key: 'elevation', label: 'RL / elevation', aliases: ['rl', 'elevation', 'elev', 'z', 'reducedlevel'] },
+    { key: 'crs', label: 'CRS (optional)', aliases: ['crs', 'epsg', 'epsgcode', 'coordinate_reference_system'], optional: true },
   ],
   survey: [
     { key: 'holeId', label: 'Hole ID', aliases: ['holeid', 'hole_id', 'borehole', 'boreholeid', 'bhid', 'id'] },
@@ -101,7 +103,15 @@ function numeric(value: string) {
 }
 
 function mappingComplete(kind: ImportKind, upload: ParsedUpload | null) {
-  return upload !== null && fields[kind].every((field) => upload.mapping[field.key] !== '')
+  return upload !== null && fields[kind].every((field) => ('optional' in field && field.optional) || upload.mapping[field.key] !== '')
+}
+
+function normalizeCrs(value: string) {
+  const trimmed = value.trim()
+  if (trimmed === '') return undefined
+  if (/^\d{4,6}$/.test(trimmed)) return `EPSG:${trimmed}`
+  const epsg = /^epsg\s*[: ]\s*(\d{4,6})$/i.exec(trimmed)
+  return epsg === null ? trimmed : `EPSG:${epsg[1]}`
 }
 
 interface DrillholeImportDialogProps {
@@ -142,6 +152,7 @@ export function DrillholeImportDialog({ onClose, onImport }: DrillholeImportDial
     if (collarUpload === null || surveyUpload === null || !canImport) return
     onImport({
       collar: collarUpload.rows.map((row) => ({
+        crs: normalizeCrs(valueFor(collarUpload, row, 'crs')),
         holeId: valueFor(collarUpload, row, 'holeId'),
         easting: numeric(valueFor(collarUpload, row, 'easting')),
         northing: numeric(valueFor(collarUpload, row, 'northing')),
@@ -187,7 +198,7 @@ export function DrillholeImportDialog({ onClose, onImport }: DrillholeImportDial
               const matched = upload === null ? 0 : fields[kind].filter((field) => upload.mapping[field.key] !== '').length
               return (
                 <section className="csv-mapping-panel" key={kind}>
-                  <div className="csv-mapping-title"><strong>{kind === 'collar' ? 'Collar columns' : 'Survey columns'}</strong><span>{matched}/{fields[kind].length} matched</span></div>
+                  <div className="csv-mapping-title"><strong>{kind === 'collar' ? 'Collar columns' : 'Survey columns'}</strong><span>{matched} mapped</span></div>
                   {fields[kind].map((field) => (
                     <label className="csv-map-row" key={field.key}>
                       <span>{field.label}</span>
@@ -197,7 +208,7 @@ export function DrillholeImportDialog({ onClose, onImport }: DrillholeImportDial
                       </select>
                     </label>
                   ))}
-                  {upload === null ? <p>Select a CSV to detect columns.</p> : mappingComplete(kind, upload) ? <p className="mapping-ok"><Check size={13} /> Ready · {upload.rows.length} rows</p> : <p className="mapping-needed">Map the unmatched headers manually.</p>}
+                  {upload === null ? <p>Select a CSV to detect columns.</p> : mappingComplete(kind, upload) ? <p className="mapping-ok"><Check size={13} /> Ready · {upload.rows.length} rows</p> : <p className="mapping-needed">Map the unmatched required headers manually.</p>}
                 </section>
               )
             })}

@@ -1,4 +1,3 @@
-import { useQuery } from '@tanstack/react-query'
 import {
   Activity, Box, Check, CheckCircle2, ChevronDown, Clock3, Database, GitBranch, History,
   CopyPlus, Layers3, Map as MapIcon, Play, Plus, RefreshCw, Save, Settings2, SlidersHorizontal, TableProperties,
@@ -15,7 +14,8 @@ import {
   readDomainMembershipDocument, saveDomainCandidateSet, type DomainMembershipDocument,
 } from '../data/domainMembershipStore.js'
 import { currentAnalysisTemplateVersion, recordAnalysisTemplateSave, resolveAnalysisTemplateVersion } from '../data/analysisSaveStore.js'
-import { EDA_DATASET_QUERY_KEY, loadEdaDatasets, type EdaDataset } from '../data/edaDemo.js'
+import { type EdaDataset } from '../data/edaDemo.js'
+import { useProjectEdaDatasets } from '../data/liveEda.js'
 import { readMultivariateDomainEvidence } from '../data/multivariateEvidenceStore.js'
 import { saveSpatialViewRequest } from '../data/spatialViewStore.js'
 import { barGraphImage } from '../data/analysisGraphImages.js'
@@ -145,7 +145,7 @@ function ChartCard({ children, detail, title }: { children: React.ReactNode; det
 }
 
 export function DomainPage({ onNavigate }: DomainPageProps) {
-  const datasetsQuery = useQuery({ queryKey: EDA_DATASET_QUERY_KEY, queryFn: () => loadEdaDatasets(), staleTime: Infinity })
+  const datasetsQuery = useProjectEdaDatasets()
   const multivariateEvidence = useMemo(() => readMultivariateDomainEvidence(typeof window === 'undefined' ? undefined : window.localStorage), [])
   // New multivariate evidence starts a fresh configuration instead of restoring the previous one.
   const evidenceScope = multivariateEvidence?.runId ?? ''

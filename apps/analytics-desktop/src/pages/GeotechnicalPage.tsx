@@ -31,7 +31,6 @@ import {
   type Rmr76IntervalResult,
 } from '../analysis/geotechnicalWorkflow.js'
 import { GEOTECHNICAL_REFERENCES } from '../analysis/geotechnical.js'
-import { EDA_DATASET_QUERY_KEY } from '../data/edaDemo.js'
 import {
   currentAnalysisTemplateVersion,
   recordAnalysisTemplateSave,
@@ -256,7 +255,7 @@ export function GeotechnicalPage({ onNavigate }: GeotechnicalPageProps) {
     setSavedScenarioName(versionLabel)
     setTemplateVersion(nextVersion)
     setSaveAsOpen(false)
-    void queryClient.invalidateQueries({ queryKey: EDA_DATASET_QUERY_KEY })
+    void queryClient.invalidateQueries({ queryKey: ['eda-datasets'] })
   }
 
   const chooseStatus = (status: Rmr76IntervalResult['status']) => {

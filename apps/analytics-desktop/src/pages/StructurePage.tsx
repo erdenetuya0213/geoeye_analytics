@@ -11,6 +11,7 @@ import { saveAnalysisResultPackage } from '../data/analysisResultStore.js'
 import { saveStructureDerivedValues } from '../data/structureDerivedStore.js'
 import { nextStructureLogVersionNumber, readLatestStructureLogVersion, readStructureLogVersions, writeStructureLogVersion } from '../data/structureLogStore.js'
 import { useStereonetTheme } from '../state/StereonetThemeContext.js'
+import { useDataPoolWorkspace } from '../state/DataPoolWorkspaceContext.js'
 import { usePersistentState } from '../state/persistentState.js'
 import {
   fallbackStructureCollars,
@@ -94,9 +95,91 @@ function mergeImportedDrillholes() {
 }
 
 export function StructurePage() {
+  const workspace = useDataPoolWorkspace()
+  const liveData = useQuery({
+    enabled: workspace.live && workspace.client !== null && workspace.project !== null,
+    queryKey: ['datapool', workspace.scope, workspace.project?.id ?? 'no-project', 'structure-workspace'],
+    queryFn: () => loadLiveStructureData(workspace.client!, workspace.project!),
+  })
+  if (workspace.live && (workspace.projectsLoading || liveData.isPending)) return <div className="page structure-page"><div className="eda-state panel">Loading structural observations from the Data Pool…</div></div>
+  if (workspace.live && (workspace.client === null || workspace.project === null || liveData.isError)) return <div className="page structure-page"><div className="eda-state panel" role="alert">The connected project's structural data could not be loaded.</div></div>
+  if (workspace.live && liveData.data !== undefined) return <StructureWorkbench data={liveData.data} />
+  return <StructureWorkbench />
+}
+
+interface StructureWorkspaceData {
+  collars: CollarRecord[]
+  observations: StructureObservation[]
+  surveys: SurveyStation[]
+  templates: Array<{ id: string; label: string; observationCount: number }>
+}
+
+async function loadLiveStructureData(client: DataPoolClient, project: ProjectSummary): Promise<StructureWorkspaceData> {
+  const [variables, holes] = await Promise.all([client.variables(), client.drillholes(project.id)])
+  const availableKeys = new Set(variables.map((variable) => variable.key))
+  const variableKeys = ['structure.alpha', 'structure.beta'].filter((key) => availableKeys.has(key))
+  const observations = variableKeys.length === 0 ? [] : await client.queryObservations({
+    acceptedOnly: true,
+    limit: 200_000,
+    projectId: project.id,
+    variableKeys,
+  })
+  const holeNames = new Map(holes.map((hole) => [hole.id, hole.name]))
+  const grouped = new Map<string, { alpha?: number; beta?: number; depth: number; holeId: string; ids: string[] }>()
+  observations.forEach((observation) => {
+    if (observation.holeId === null || observation.numericValue === null) return
+    const key = `${observation.datasetId}|${observation.sourceId}|${observation.holeId}|${observation.depthFrom ?? 0}`
+    const current = grouped.get(key) ?? {
+      depth: observation.depthFrom ?? 0,
+      holeId: holeNames.get(observation.holeId) ?? observation.holeId,
+      ids: [],
+    }
+    if (observation.variableKey === 'structure.alpha') current.alpha = observation.numericValue
+    if (observation.variableKey === 'structure.beta') current.beta = observation.numericValue
+    current.ids.push(observation.id)
+    grouped.set(key, current)
+  })
+  const structureObservations = [...grouped.entries()].flatMap(([key, row]): StructureObservation[] => (
+    row.alpha === undefined || row.beta === undefined ? [] : [{
+      alpha: row.alpha,
+      beta: row.beta,
+      depth: row.depth,
+      holeId: row.holeId,
+      id: row.ids[0] ?? key,
+      structureType: 'unclassified',
+    }]
+  ))
+  const usedHoleNames = new Set(structureObservations.map((observation) => observation.holeId))
+  const collars = holes.flatMap((hole): CollarRecord[] => hole.collar === null || !usedHoleNames.has(hole.name) ? [] : [{
+    easting: hole.collar.easting,
+    elevation: hole.collar.elevation,
+    holeId: hole.name,
+    northing: hole.collar.northing,
+  }])
+  const surveys = (await Promise.all(holes
+    .filter((hole) => usedHoleNames.has(hole.name))
+    .map(async (hole) => (await client.surveys(project.id, hole.id)).map((station): SurveyStation => ({
+      azimuth: station.azimuth,
+      depth: station.measuredDepth,
+      dip: station.dip,
+      holeId: hole.name,
+    })))))
+    .flat()
+  return {
+    collars,
+    observations: structureObservations,
+    surveys,
+    templates: [{ id: `live-${project.id}`, label: `${project.name} · accepted structures`, observationCount: structureObservations.length }],
+  }
+}
+
+function StructureWorkbench({ data }: { data?: StructureWorkspaceData }) {
   const stereonetTheme = useStereonetTheme()
-  const drillholeData = useMemo(mergeImportedDrillholes, [])
-  const [templateId, setTemplateId] = usePersistentState('structure.templateId', structureTemplates[0].id)
+  const demoDrillholes = useMemo(mergeImportedDrillholes, [])
+  const drillholeData = data === undefined ? demoDrillholes : { collars: data.collars, importedHoleIds: new Set<string>(), surveys: data.surveys }
+  const templates = data?.templates ?? structureTemplates
+  const sourceObservations = data?.observations ?? fieldStructureObservations
+  const [templateId, setTemplateId] = usePersistentState('structure.templateId', templates[0]?.id ?? 'structure-empty')
   const [holeFilter, setHoleFilter] = usePersistentState('structure.holeFilter', 'all')
   const [structureTypeFilter, setStructureTypeFilter] = usePersistentState<'all' | StructureTypeId>('structure.structureTypeFilter', 'all')
   const [colorBy, setColorBy] = usePersistentState<'jointSet' | 'structureType'>('structure.colorBy', 'jointSet')
@@ -175,8 +258,8 @@ export function StructurePage() {
     setVisibleBoundaryIds(new Set())
   }, [holeFilter, templateId])
 
-  const selectedTemplate = structureTemplates.find((template) => template.id === templateId) ?? structureTemplates[0]
-  const templateObservations = fieldStructureObservations.slice(0, selectedTemplate.observationCount)
+  const selectedTemplate = templates.find((template) => template.id === templateId) ?? templates[0] ?? { id: 'structure-empty', label: 'No structural observations', observationCount: 0 }
+  const templateObservations = sourceObservations.slice(0, selectedTemplate.observationCount)
   const availableHoles = Array.from(new Set(templateObservations.map((observation) => observation.holeId)))
   const filteredObservations = holeFilter === 'all'
     ? templateObservations
@@ -728,3 +811,5 @@ export function StructurePage() {
     </div>
   )
 }
+import type { DataPoolClient, ProjectSummary } from '@geoeye/datapool-client'
+import { useQuery } from '@tanstack/react-query'

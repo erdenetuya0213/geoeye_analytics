@@ -60,11 +60,13 @@ interface ProviderProps {
   children: ReactNode
   connectionSettings: ConnectionSettings
   connectionState: ConnectionState
-  /** Called on sign-out and when the Data Pool no longer accepts the session. */
+  /** Called when the user explicitly requests sign-out. */
   onSignOut: () => void
+  /** Called immediately when the Data Pool no longer accepts the session. */
+  onSessionExpired: () => void
 }
 
-export function DataPoolWorkspaceProvider({ children, connectionSettings, connectionState, onSignOut }: ProviderProps) {
+export function DataPoolWorkspaceProvider({ children, connectionSettings, connectionState, onSessionExpired, onSignOut }: ProviderProps) {
   const live = connectionState === 'connected'
   const client = useMemo(
     () => live ? createDataPoolClient(connectionSettings) : null,
@@ -91,8 +93,8 @@ export function DataPoolWorkspaceProvider({ children, connectionSettings, connec
 
   const expired = isUnauthorized(projectsQuery.error)
   useEffect(() => {
-    if (expired) onSignOut()
-  }, [expired, onSignOut])
+    if (expired) onSessionExpired()
+  }, [expired, onSessionExpired])
 
   const selectProject = useCallback((projectId: string) => {
     window.localStorage.setItem(projectStorageKey, projectId)

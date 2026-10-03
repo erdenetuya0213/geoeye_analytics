@@ -17,6 +17,8 @@ function initials(name: string): string {
 export function Topbar({ onSignIn, onThemeChange, theme }: TopbarProps) {
   const workspace = useDataPoolWorkspace()
   const userName = workspace.session?.user.displayName ?? null
+  const userEmail = workspace.session?.user.email ?? null
+  const userLabel = userName?.trim() || userEmail || 'Signed in'
   // Projects are grouped by the organization (tenant) that owns them.
   const organizations = [...new Set(workspace.projects.map((project) => project.organizationName ?? ''))]
     .sort((left, right) => left.localeCompare(right))
@@ -62,19 +64,21 @@ export function Topbar({ onSignIn, onThemeChange, theme }: TopbarProps) {
       <div className="topbar-actions">
         <ThemeSwitcher onChange={onThemeChange} theme={theme} />
         {workspace.live ? (
-          <button
-            aria-label={userName === null ? 'Sign out' : `Sign out ${userName}`}
-            className="profile-button"
-            onClick={workspace.signOut}
-            title={userName === null
-              ? 'Signed in. Click to sign out.'
-              : `Signed in as ${workspace.session?.user.email ?? userName}. Click to sign out.`}
-            type="button"
-          >
-            {userName === null ? null : <span className="profile-avatar">{initials(userName)}</span>}
-            <span className="profile-name">{userName ?? 'Signed in'}</span>
-            <LogOut size={14} />
-          </button>
+          <div aria-label="Account" className="profile-controls" role="group">
+            <span className="profile-button" title={userEmail === null ? userLabel : `Signed in as ${userEmail}`}>
+              <span aria-hidden="true" className="profile-avatar">{initials(userLabel)}</span>
+              <span className="profile-name">{userLabel}</span>
+            </span>
+            <button
+              aria-label={userLabel === 'Signed in' ? 'Sign out' : `Sign out ${userLabel}`}
+              className="icon-button profile-sign-out"
+              onClick={workspace.signOut}
+              title="Sign out"
+              type="button"
+            >
+              <LogOut aria-hidden="true" size={16} />
+            </button>
+          </div>
         ) : (
           <button aria-label="Sign in to GeoEye Analytics" className="profile-button" onClick={onSignIn} type="button">
             <span className="profile-name">Sign in</span>
