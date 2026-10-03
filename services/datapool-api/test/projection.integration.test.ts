@@ -393,6 +393,38 @@ describeWithPostgres('Field projection and shared drillhole data', () => {
     expect(unknownProject.status).toBe(404)
   })
 
+  it('hides inactive projects and drill holes recorded in the deletion ledger', async () => {
+    await admin.query('UPDATE projects SET is_active = false WHERE id = $1', [emptyProjectId])
+    await admin.query(`
+      INSERT INTO depth_registration_deletions (entity_type, entity_id, project_id, hole_id)
+      VALUES ('drill_holes', $1, $2, $1)
+    `, [otherHoleId, projectId])
+
+    try {
+      const projects = await api<Array<{ id: string; drillholeCount: number }>>('GET', '/v1/projects')
+      expect(projects.payload).toEqual([
+        expect.objectContaining({ id: projectId, drillholeCount: 1 }),
+      ])
+
+      const holes = await api<Array<{ id: string }>>('GET', `/v1/projects/${projectId}/drillholes`)
+      expect(holes.payload.map((hole) => hole.id)).toEqual([holeId])
+
+      const inactiveProject = await api('GET', `/v1/projects/${emptyProjectId}/drillholes`)
+      expect(inactiveProject.status).toBe(404)
+      const deletedHole = await api(
+        'GET',
+        `/v1/projects/${projectId}/drillholes/${otherHoleId}/surveys`,
+      )
+      expect(deletedHole.status).toBe(404)
+    } finally {
+      await admin.query(
+        "DELETE FROM depth_registration_deletions WHERE entity_type = 'drill_holes' AND entity_id = $1",
+        [otherHoleId],
+      )
+      await admin.query('UPDATE projects SET is_active = true WHERE id = $1', [emptyProjectId])
+    }
+  })
+
   it('projects every project and reports an empty one without failing', async () => {
     const results = await runAllProjections(runtime)
     expect(results.map((result) => result.projectId)).toEqual([projectId, emptyProjectId])

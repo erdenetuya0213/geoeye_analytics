@@ -314,7 +314,7 @@ export function createDataPoolServer(options: DataPoolServerOptions): Server {
 
       if (method === 'GET' && url.pathname === '/v1/projects') {
         const projects = await options.store.listProjects()
-        sendJson(response, 200, projects.flatMap((project) => {
+        sendJson(response, 200, projects.filter((project) => project.isActive).flatMap((project) => {
           const permission = permissionFor(principal, project.id)
           return permission === null ? [] : [{ ...project, canWrite: permission === 'write' }]
         }))

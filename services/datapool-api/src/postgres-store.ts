@@ -676,7 +676,7 @@ export class PostgresDataPoolStore implements DataPoolStore {
   // (`name`/`title`, `hole_name`/`name`) instead of binding to one table layout.
   async listProjects(): Promise<ProjectSummary[]> {
     const organizations = await this.#tableExists('organizations')
-    const deletions = await this.#tableReadable('depth_registration_deletions')
+    const deletions = await this.#deletionLedgerPresent()
     const currentHole = deletions
       ? `AND NOT EXISTS (
            SELECT 1 FROM depth_registration_deletions AS deletion
@@ -726,7 +726,7 @@ export class PostgresDataPoolStore implements DataPoolStore {
 
   async listDrillholes(projectId: string): Promise<DrillholeSummary[]> {
     await this.#requireProject(this.#pool, projectId)
-    const deletions = await this.#tableReadable('depth_registration_deletions')
+    const deletions = await this.#deletionLedgerPresent()
     const currentHole = deletions
       ? `AND NOT EXISTS (
            SELECT 1 FROM depth_registration_deletions AS deletion
@@ -787,7 +787,7 @@ export class PostgresDataPoolStore implements DataPoolStore {
       this.#tableReadable('logging_structures'),
       this.#tableReadable('generated_logs'),
       this.#tableReadable('core_rows'),
-      this.#tableReadable('depth_registration_deletions'),
+      this.#deletionLedgerPresent(),
     ])
 
     if (!templatesPresent) return { projectId, templates: [], submissions: [] }
@@ -1214,7 +1214,11 @@ export class PostgresDataPoolStore implements DataPoolStore {
     const readOnlyAccount = user.role === 'viewer'
     if (await this.#tableExists('project_members')) {
       const direct = await this.#pool.query<{ project_id: string; role: string | null }>(`
-        SELECT project_id, role FROM project_members WHERE user_id = $1
+        SELECT member.project_id, member.role
+        FROM project_members AS member
+        JOIN projects AS project ON project.id = member.project_id
+        WHERE member.user_id = $1
+          AND COALESCE((to_jsonb(project) ->> 'is_active')::boolean, true)
       `, [userId])
       for (const row of direct.rows) {
         const readOnly = readOnlyAccount || row.role === 'viewer' || row.role === 'view'
@@ -1228,6 +1232,7 @@ export class PostgresDataPoolStore implements DataPoolStore {
         JOIN organization_members AS member
           ON member.organization_id::text = to_jsonb(project) ->> 'organization_id'
         WHERE member.user_id = $1 AND member.role IN ('owner', 'admin')
+          AND COALESCE((to_jsonb(project) ->> 'is_active')::boolean, true)
       `, [userId])
       for (const row of viaOrganization.rows) {
         projects.set(row.project_id, readOnlyAccount ? 'read' : 'write')
@@ -1283,13 +1288,33 @@ export class PostgresDataPoolStore implements DataPoolStore {
     return result.rows[0]?.readable === true
   }
 
+  /**
+   * The deletion ledger is optional on older Field schemas. Once present it is
+   * authoritative, so a missing SELECT grant must fail closed instead of making
+   * logically deleted drill holes visible again.
+   */
+  async #deletionLedgerPresent(): Promise<boolean> {
+    if (!await this.#tableExists('depth_registration_deletions')) return false
+    if (!await this.#tableReadable('depth_registration_deletions')) {
+      throw new Error(
+        'Database role cannot read public.depth_registration_deletions; rerun db:provision-role',
+      )
+    }
+    return true
+  }
+
   async #requireProject(executor: Pool | PoolClient, projectId: string): Promise<void> {
-    const result = await executor.query('SELECT 1 FROM projects WHERE id = $1', [projectId])
+    const result = await executor.query(`
+      SELECT 1
+      FROM projects AS project
+      WHERE project.id = $1
+        AND COALESCE((to_jsonb(project) ->> 'is_active')::boolean, true)
+    `, [projectId])
     if (result.rowCount === 0) throw notFound(`Project ${projectId} was not found`)
   }
 
   async #requireDrillhole(executor: Pool | PoolClient, projectId: string, holeId: string): Promise<void> {
-    const deletions = await this.#tableReadable('depth_registration_deletions')
+    const deletions = await this.#deletionLedgerPresent()
     const currentHole = deletions
       ? `AND NOT EXISTS (
            SELECT 1 FROM depth_registration_deletions AS deletion

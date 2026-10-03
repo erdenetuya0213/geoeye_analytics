@@ -189,9 +189,27 @@ async function inspect(client: PoolClient): Promise<void> {
   }
 
   const apiRole = await client.query(`SELECT 1 FROM pg_roles WHERE rolname = 'geoeye_api'`)
-  report('info', (apiRole.rowCount ?? 0) > 0
+  const apiRoleExists = (apiRole.rowCount ?? 0) > 0
+  report('info', apiRoleExists
     ? 'Runtime role geoeye_api exists'
     : 'Runtime role geoeye_api does not exist yet; run `db:provision-role` after migrating')
+  if (apiRoleExists && await tableColumns(client, 'depth_registration_deletions') !== null) {
+    const deletionGrant = await client.query<{ readable: boolean }>(`
+      SELECT has_table_privilege(
+        'geoeye_api',
+        'public.depth_registration_deletions',
+        'SELECT'
+      ) AS readable
+    `)
+    if (deletionGrant.rows[0]?.readable === true) {
+      report('ok', 'Runtime role can read the Field deletion ledger')
+    } else {
+      report(
+        'block',
+        'Runtime role cannot read public.depth_registration_deletions; rerun `db:provision-role`',
+      )
+    }
+  }
 
   // 4. Supabase exposure. Tables in public without RLS are reachable through
   // the Supabase Data API with the anon key.

@@ -495,11 +495,28 @@ describe('Data Pool HTTP server', () => {
   })
 
   it('lists shared projects and their drillholes', async () => {
-    const endpoint = await start(new FakeStore())
+    const store = new FakeStore()
+    const activeProjects = await store.listProjects()
+    vi.spyOn(store, 'listProjects').mockResolvedValue([
+      ...activeProjects,
+      {
+        id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        name: 'Archived project',
+        description: null,
+        isActive: false,
+        drillholeCount: 0,
+        organizationId: null,
+        organizationName: null,
+        canWrite: true,
+      },
+    ])
+    const endpoint = await start(store)
 
     const projects = await fetch(`${endpoint}/v1/projects`)
     expect(projects.status).toBe(200)
-    await expect(projects.json()).resolves.toMatchObject([{ id: projectId, drillholeCount: 1 }])
+    await expect(projects.json()).resolves.toEqual([
+      expect.objectContaining({ id: projectId, drillholeCount: 1 }),
+    ])
 
     const holes = await fetch(`${endpoint}/v1/projects/${projectId}/drillholes`)
     expect(holes.status).toBe(200)

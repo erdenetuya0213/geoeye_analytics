@@ -61,6 +61,18 @@ CREATE TABLE IF NOT EXISTS drill_holes (
   UNIQUE (project_id, hole_name)
 );
 
+-- Field keeps drill-hole rows for synchronization history and records logical
+-- deletions here. Analytics must treat matching rows as absent.
+CREATE TABLE IF NOT EXISTS depth_registration_deletions (
+  entity_type VARCHAR NOT NULL,
+  entity_id UUID NOT NULL,
+  project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+  hole_id UUID REFERENCES drill_holes(id) ON DELETE CASCADE,
+  deleted_by UUID REFERENCES profiles(id) ON DELETE SET NULL,
+  deleted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (entity_type, entity_id)
+);
+
 CREATE TABLE IF NOT EXISTS core_boxes (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

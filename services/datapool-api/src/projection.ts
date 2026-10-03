@@ -708,7 +708,12 @@ export async function runProjectProjection(
 ): Promise<ProjectionRunResult> {
   const resolved = { force: options.force ?? false, includeUnaccepted: options.includeUnaccepted ?? false }
   const known = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(projectId)
-    && (await pool.query('SELECT 1 FROM projects WHERE id = $1', [projectId])).rowCount === 1
+    && (await pool.query(`
+      SELECT 1
+      FROM projects AS project
+      WHERE project.id = $1
+        AND COALESCE((to_jsonb(project) ->> 'is_active')::boolean, true)
+    `, [projectId])).rowCount === 1
   if (!known) {
     return {
       projectId,
@@ -736,7 +741,12 @@ export async function runAllProjections(
   pool: Pool,
   options: ProjectionOptions = {},
 ): Promise<ProjectionRunResult[]> {
-  const projects = await pool.query<{ id: string }>('SELECT id::text AS id FROM projects ORDER BY id')
+  const projects = await pool.query<{ id: string }>(`
+    SELECT project.id::text AS id
+    FROM projects AS project
+    WHERE COALESCE((to_jsonb(project) ->> 'is_active')::boolean, true)
+    ORDER BY project.id
+  `)
   const results: ProjectionRunResult[] = []
   for (const project of projects.rows) {
     results.push(await runProjectProjection(pool, project.id, options))
