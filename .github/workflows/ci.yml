@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: geoeye
+          POSTGRES_USER: geoeye
+          POSTGRES_PASSWORD: geoeye
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U geoeye -d geoeye"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      # Integration tests create and drop their own databases on this server.
+      TEST_DATABASE_URL: postgres://geoeye:geoeye@127.0.0.1:5432/geoeye
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Typecheck and test (unit and PostgreSQL integration)
+        run: pnpm check
+      - name: Build the API container
+        run: docker build -f Dockerfile.datapool-api -t geoeye-datapool-api .
+      - name: Build the web container
+        run: docker build -f Dockerfile.analytics-web -t geoeye-analytics-web .
+      - name: Validate the production stack definition
+        run: |
+          cp .env.production.example .env.production
+          docker compose --env-file .env.production -f compose.production.yaml config --quiet
+          docker run --rm -e GEOEYE_SITE_ADDRESS=analytics.example.com geoeye-analytics-web caddy validate --config /etc/caddy/Caddyfile

@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "geoeye-analytics-engine"
+version = "0.1.0"
+description = "Provider-neutral Python execution boundary for GeoEye Analytics"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.26,<2.5",
+  "polars>=1.12,<2",
+  "scikit-learn>=1.5,<2",
+  "scipy>=1.12,<2",
+]
+
+[project.optional-dependencies]
+workflow = [
+  "pygeostat>=1.2,<2",
+]
+reference = [
+  "geostatspy>=0.0.79,<0.1",
+  "numba>=0.59",
+  "pandas>=2.2,<3",
+  "statsmodels>=0.14",
+  "tqdm>=4.66",
+]
+data = [
+  "duckdb>=1.2,<2",
+  "pandas>=2.2,<3",
+  "pyarrow>=18",
+]
+all = [
+  "duckdb>=1.2,<2",
+  "geostatspy>=0.0.79,<0.1",
+  "numba>=0.59",
+  "pandas>=2.2,<3",
+  "pyarrow>=18",
+  "pygeostat>=1.2,<2",
+  "statsmodels>=0.14",
+  "tqdm>=4.66",
+]
+
+[project.scripts]
+geoeye-analytics-engine = "geoeye_analytics.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,44 @@
+{
+  "name": "geoeye-analytics-platform",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.25.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "pnpm -r --if-present build",
+    "check": "pnpm typecheck && pnpm test",
+    "db:up": "docker compose up -d --wait postgres",
+    "db:down": "docker compose down -v",
+    "db:preflight": "pnpm --filter @geoeye/datapool-api... build && pnpm --filter @geoeye/datapool-api preflight",
+    "db:migrate": "pnpm --filter @geoeye/datapool-api... build && pnpm --filter @geoeye/datapool-api migrate",
+    "db:provision-role": "pnpm --filter @geoeye/datapool-api... build && pnpm --filter @geoeye/datapool-api provision:role",
+    "db:project": "pnpm --filter @geoeye/datapool-api... build && pnpm --filter @geoeye/datapool-api project",
+    "dev:api": "pnpm --filter @geoeye/datapool-api... build && pnpm --filter @geoeye/datapool-api start",
+    "dev:ui": "pnpm --filter @geoeye/analytics-desktop dev",
+    "smoke": "pnpm --filter @geoeye/datapool-api... build && pnpm --filter @geoeye/datapool-api smoke",
+    "staging:preflight": "pnpm --filter @geoeye/datapool-api... build && node --env-file=.env.staging services/datapool-api/dist/preflight.js",
+    "staging:migrate": "pnpm --filter @geoeye/datapool-api... build && node --env-file=.env.staging services/datapool-api/dist/migrate.js",
+    "staging:provision-role": "pnpm --filter @geoeye/datapool-api... build && node --env-file=.env.staging services/datapool-api/dist/provision-role.js",
+    "staging:project": "pnpm --filter @geoeye/datapool-api... build && node --env-file=.env.staging services/datapool-api/dist/project.js",
+    "staging:api": "pnpm --filter @geoeye/datapool-api... build && node --env-file=.env.staging services/datapool-api/dist/main.js",
+    "staging:smoke": "pnpm --filter @geoeye/datapool-api... build && node --env-file=.env.staging services/datapool-api/dist/smoke.js",
+    "production:preflight": "pnpm --filter @geoeye/datapool-api... build && node --env-file=.env.production --env-file=.env.release services/datapool-api/dist/preflight.js",
+    "production:migrate": "pnpm --filter @geoeye/datapool-api... build && node --env-file=.env.production --env-file=.env.release services/datapool-api/dist/migrate.js",
+    "production:provision-role": "pnpm --filter @geoeye/datapool-api... build && node --env-file=.env.production --env-file=.env.release services/datapool-api/dist/provision-role.js",
+    "production:project": "pnpm --filter @geoeye/datapool-api... build && node --env-file=.env.production services/datapool-api/dist/project.js",
+    "production:smoke": "pnpm --filter @geoeye/datapool-api... build && node --env-file=.env.production services/datapool-api/dist/smoke.js",
+    "production:up": "docker compose --env-file .env.production -f compose.production.yaml up -d --build",
+    "production:down": "docker compose --env-file .env.production -f compose.production.yaml down",
+    "production:logs": "docker compose --env-file .env.production -f compose.production.yaml logs -f --tail 200",
+    "test:postgres": "node scripts/test-postgres.mjs",
+    "test": "pnpm build && pnpm -r --if-present test",
+    "typecheck": "pnpm build && pnpm -r --if-present typecheck"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "vitest": "3.2.4"
+  }
+}

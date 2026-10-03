@@ -1,0 +1,1316 @@
+openapi: 3.1.0
+info:
+  title: GeoEye Data Pool API
+  version: 0.3.0
+  description: Stable contract between GeoEye producers, GeoEye Analytics, and a Data Pool node.
+servers:
+  - url: http://localhost:8080
+    description: Local development Data Pool node
+security:
+  - bearerAuth: []
+paths:
+  /health:
+    get:
+      operationId: health
+      security: []
+      responses:
+        "200":
+          description: Service is accepting HTTP requests
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    const: ok
+        "503":
+          description: PostgreSQL or the Data Pool schema is unavailable
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    const: unavailable
+  /live:
+    get:
+      operationId: live
+      security: []
+      responses:
+        "200":
+          description: Service process is accepting HTTP requests
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    const: ok
+  /v1/auth/login:
+    post:
+      operationId: login
+      description: >-
+        Signs in with a GeoEye account, the same accounts GeoEye Field uses. Returns a
+        session token to send as a bearer token. Repeated failures are throttled.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+      responses:
+        "200":
+          description: Signed in
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResult"
+        "401":
+          description: The email or password is incorrect, or the account is deactivated
+        "403":
+          description: The account must set a new password in GeoEye Field first
+        "429":
+          description: Too many failed attempts
+  /v1/auth/me:
+    get:
+      operationId: getSession
+      responses:
+        "200":
+          description: The signed-in user and their organizations
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        "404":
+          description: The credential is a service token, not a user session
+  /v1/variables:
+    get:
+      operationId: listVariables
+      responses:
+        "200":
+          description: Semantic variable registry
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/VariableDefinition"
+  /v1/projects:
+    get:
+      operationId: listProjects
+      description: >-
+        Projects the caller may open. A signed-in user sees the projects they are a member of,
+        plus every project of an organization they own or administer. Any other project id is
+        answered with 404 on every route.
+      responses:
+        "200":
+          description: Projects in this Data Pool
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ProjectSummary"
+  /v1/projects/{projectId}/drillholes:
+    get:
+      operationId: listDrillholes
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      responses:
+        "200":
+          description: Drillholes of the project with their collar and survey coverage
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DrillholeSummary"
+        "404":
+          description: Project not found
+  /v1/projects/{projectId}/logging:
+    get:
+      operationId: listFieldLogging
+      description: Active GeoEye Field templates and the current holes containing data for each template. Deleted holes are excluded.
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      responses:
+        "200":
+          description: Filled Field logging grouped by hole and template
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FieldLoggingOverview"
+        "404":
+          description: Project not found
+  /v1/projects/{projectId}/drillholes/{holeId}/collar:
+    put:
+      operationId: saveCollar
+      description: Creates or replaces the collar of one drillhole. The coordinate reference system is registered on first use.
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/HoleId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CollarInput"
+      responses:
+        "200":
+          description: Saved collar
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Collar"
+        "404":
+          description: Drillhole not found in the project
+  /v1/projects/{projectId}/drillholes/{holeId}/surveys:
+    get:
+      operationId: listSurveys
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/HoleId"
+      responses:
+        "200":
+          description: Downhole survey stations ordered by measured depth
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SurveyStation"
+        "404":
+          description: Drillhole not found in the project
+    put:
+      operationId: replaceSurveys
+      description: Atomically replaces the whole downhole survey of one drillhole.
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/HoleId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [stations]
+              properties:
+                stations:
+                  type: array
+                  maxItems: 20000
+                  description: measuredDepth must be unique within the request.
+                  items:
+                    $ref: "#/components/schemas/SurveyStationInput"
+      responses:
+        "200":
+          description: Stored survey stations ordered by measured depth
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SurveyStation"
+        "404":
+          description: Drillhole not found in the project
+  /v1/projects/{projectId}/projection:
+    get:
+      operationId: getProjectionStatus
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      responses:
+        "200":
+          description: State of each Field source projected for the project
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ProjectionStatus"
+        "404":
+          description: Project not found
+    post:
+      operationId: runProjection
+      description: >-
+        Reconciles the analytical read model with what GeoEye Field currently holds.
+        Field tables are only read. An unchanged source is skipped unless force is true.
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                force:
+                  type: boolean
+                  default: false
+      responses:
+        "200":
+          description: Outcome per Field source. A failed source is reported here, not as an HTTP error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectionRunResult"
+        "404":
+          description: Project not found
+  /v1/projection-bindings:
+    get:
+      operationId: listProjectionBindings
+      parameters:
+        - in: query
+          name: projectId
+          required: false
+          description: Adds the bindings of this project to the global defaults.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Semantic bindings from Field source fields to variables
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ProjectionBinding"
+    put:
+      operationId: saveProjectionBindings
+      description: >-
+        Creates or updates bindings keyed by project, source entity type, and source field.
+        A project binding overrides the global default for the same source field; set
+        isActive to false to switch a default off for one project.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [bindings]
+              properties:
+                bindings:
+                  type: array
+                  minItems: 1
+                  maxItems: 500
+                  items:
+                    $ref: "#/components/schemas/ProjectionBindingInput"
+      responses:
+        "200":
+          description: Saved bindings
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ProjectionBinding"
+        "404":
+          description: Variable or project not found
+        "409":
+          description: The target variable is not a primary variable
+  /v1/datasets:
+    get:
+      operationId: listDatasets
+      parameters:
+        - in: query
+          name: projectId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Project datasets
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Dataset"
+  /v1/observations/query:
+    post:
+      operationId: queryObservations
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ObservationQuery"
+      responses:
+        "200":
+          description: Canonical observations matching the query
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ObservationValue"
+  /v1/analysis-runs:
+    post:
+      operationId: createAnalysisRun
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAnalysisRun"
+      responses:
+        "201":
+          description: Created immutable analysis run
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalysisRun"
+  /v1/analysis-runs/{runId}/derived-values:
+    post:
+      operationId: saveDerivedValues
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [values]
+              properties:
+                values:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/DerivedValueInput"
+      responses:
+        "201":
+          description: Created derived values
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ids]
+                properties:
+                  ids:
+                    type: array
+                    items:
+                      type: string
+                      format: uuid
+  /v1/analysis-runs/{runId}/accept:
+    post:
+      operationId: acceptAnalysisRun
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: Accepted analysis run; prior accepted run may be superseded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalysisRun"
+  /v1/analysis-result-packages:
+    get:
+      operationId: listAnalysisResultPackages
+      description: Lists saved analysis files and graph images available for reuse in 3D Analysis.
+      parameters:
+        - in: query
+          name: tenantKey
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: query
+          name: projectId
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - in: query
+          name: datasetId
+          schema:
+            type: string
+            format: uuid
+        - in: query
+          name: boreholeId
+          schema:
+            type: string
+            format: uuid
+        - in: query
+          name: feature
+          schema:
+            type: string
+            enum: [structure, geotechnical, multivariate, domain]
+      responses:
+        "200":
+          description: Matching reusable analysis result packages, newest version first
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AnalysisResultPackageRecord"
+    post:
+      operationId: saveAnalysisResultPackage
+      description: >-
+        Atomically catalogs the GeoEye-owned analysis file and graph images for a saved run.
+        overwrite replaces the active feature package; new-version creates the next shared
+        logging-template version and preserves prior versions.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SaveAnalysisResultPackage"
+      responses:
+        "201":
+          description: Saved analysis result package
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SavedAnalysisResultPackage"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+  parameters:
+    ProjectId:
+      in: path
+      name: projectId
+      required: true
+      schema:
+        type: string
+        format: uuid
+    HoleId:
+      in: path
+      name: holeId
+      required: true
+      schema:
+        type: string
+        format: uuid
+    RunId:
+      in: path
+      name: runId
+      required: true
+      schema:
+        type: string
+        format: uuid
+  schemas:
+    ProjectSummary:
+      type: object
+      required: [id, name, description, isActive, drillholeCount, organizationId, organizationName, canWrite]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: [string, "null"]
+        isActive:
+          type: boolean
+        drillholeCount:
+          type: integer
+          minimum: 0
+        organizationId:
+          type: [string, "null"]
+          format: uuid
+          description: The tenant that owns the project.
+        organizationName:
+          type: [string, "null"]
+        canWrite:
+          type: boolean
+          description: False when the caller's role on the project is read-only.
+    SessionUser:
+      type: object
+      required: [id, email, displayName, role, isPlatformAdmin]
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+        displayName:
+          type: string
+        role:
+          type: string
+        isPlatformAdmin:
+          type: boolean
+    Session:
+      type: object
+      required: [user, organizations]
+      properties:
+        user:
+          $ref: "#/components/schemas/SessionUser"
+        organizations:
+          type: array
+          items:
+            type: object
+            required: [id, name, slug, role]
+            properties:
+              id:
+                type: string
+                format: uuid
+              name:
+                type: string
+              slug:
+                type: [string, "null"]
+              role:
+                type: [string, "null"]
+    LoginResult:
+      allOf:
+        - $ref: "#/components/schemas/Session"
+        - type: object
+          required: [accessToken, tokenType, expiresAt]
+          properties:
+            accessToken:
+              type: string
+            tokenType:
+              const: bearer
+            expiresAt:
+              type: string
+              format: date-time
+    CrsReference:
+      type: object
+      required: [authority, code]
+      properties:
+        authority:
+          type: string
+          examples: [EPSG]
+        code:
+          type: string
+          examples: ["32648"]
+        name:
+          type: string
+    CollarInput:
+      type: object
+      required: [easting, northing, elevation, crs, source]
+      properties:
+        easting:
+          type: number
+        northing:
+          type: number
+        elevation:
+          type: number
+        latitude:
+          type: [number, "null"]
+          minimum: -90
+          maximum: 90
+        longitude:
+          type: [number, "null"]
+          minimum: -180
+          maximum: 180
+        crs:
+          $ref: "#/components/schemas/CrsReference"
+        surveyMethod:
+          type: [string, "null"]
+        accuracy:
+          type: [number, "null"]
+          minimum: 0
+        source:
+          type: string
+          minLength: 1
+    Collar:
+      type: object
+      required: [easting, northing, elevation, latitude, longitude, crs, surveyMethod, accuracy, source, updatedAt]
+      properties:
+        easting:
+          type: number
+        northing:
+          type: number
+        elevation:
+          type: number
+        latitude:
+          type: [number, "null"]
+        longitude:
+          type: [number, "null"]
+        crs:
+          type: object
+          required: [authority, code, name]
+          properties:
+            authority:
+              type: string
+            code:
+              type: string
+            name:
+              type: string
+        surveyMethod:
+          type: [string, "null"]
+        accuracy:
+          type: [number, "null"]
+        source:
+          type: string
+        updatedAt:
+          type: string
+          format: date-time
+    SurveyStationInput:
+      type: object
+      required: [measuredDepth, azimuth, dip, source]
+      properties:
+        measuredDepth:
+          type: number
+          minimum: 0
+        azimuth:
+          type: number
+          minimum: 0
+          exclusiveMaximum: 360
+        dip:
+          type: number
+          minimum: -90
+          maximum: 90
+          description: Negative values point downward.
+        surveyMethod:
+          type: [string, "null"]
+        tool:
+          type: [string, "null"]
+        accuracy:
+          type: [number, "null"]
+          minimum: 0
+        source:
+          type: string
+          minLength: 1
+        surveyedAt:
+          type: [string, "null"]
+          format: date-time
+    SurveyStation:
+      type: object
+      required: [id, measuredDepth, azimuth, dip, surveyMethod, tool, accuracy, source, surveyedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        measuredDepth:
+          type: number
+        azimuth:
+          type: number
+        dip:
+          type: number
+        surveyMethod:
+          type: [string, "null"]
+        tool:
+          type: [string, "null"]
+        accuracy:
+          type: [number, "null"]
+        source:
+          type: string
+        surveyedAt:
+          type: [string, "null"]
+          format: date-time
+    DrillholeSummary:
+      type: object
+      required: [id, projectId, name, collar, surveyStationCount]
+      properties:
+        id:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        collar:
+          oneOf:
+            - $ref: "#/components/schemas/Collar"
+            - type: "null"
+        surveyStationCount:
+          type: integer
+          minimum: 0
+    FieldLoggingTemplate:
+      type: object
+      required: [id, name, version]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        version:
+          type: integer
+          minimum: 1
+    FieldLoggingSubmission:
+      type: object
+      required: [projectId, holeId, holeName, templateId, templateName, templateVersion, depthFrom, depthTo, selectedRowCount, intervalCount, structureCount, generatedLogCount, updatedAt]
+      properties:
+        projectId:
+          type: string
+          format: uuid
+        holeId:
+          type: string
+          format: uuid
+        holeName:
+          type: string
+        templateId:
+          type: string
+          format: uuid
+        templateName:
+          type: string
+        templateVersion:
+          type: integer
+          minimum: 1
+        depthFrom:
+          type: [number, "null"]
+          minimum: 0
+        depthTo:
+          type: [number, "null"]
+          minimum: 0
+        selectedRowCount:
+          type: integer
+          minimum: 0
+        intervalCount:
+          type: integer
+          minimum: 0
+        structureCount:
+          type: integer
+          minimum: 0
+        generatedLogCount:
+          type: integer
+          minimum: 0
+        updatedAt:
+          type: [string, "null"]
+          format: date-time
+    FieldLoggingOverview:
+      type: object
+      required: [projectId, templates, submissions]
+      properties:
+        projectId:
+          type: string
+          format: uuid
+        templates:
+          type: array
+          items:
+            $ref: "#/components/schemas/FieldLoggingTemplate"
+        submissions:
+          type: array
+          items:
+            $ref: "#/components/schemas/FieldLoggingSubmission"
+    ProjectionExtraction:
+      oneOf:
+        - type: object
+          required: [kind, key]
+          properties:
+            kind:
+              const: selection
+            key:
+              type: string
+              description: Template field id inside Field selections_json.
+        - type: object
+          required: [kind, column]
+          properties:
+            kind:
+              const: column
+            column:
+              enum: [angleDeg, structureType]
+    ProjectionBindingInput:
+      type: object
+      required: [projectId, sourceEntityType, sourceField, variableKey, extraction]
+      properties:
+        projectId:
+          type: [string, "null"]
+          format: uuid
+          description: Null defines a default for every project.
+        sourceEntityType:
+          const: field.logging_structure
+        sourceField:
+          type: string
+        variableKey:
+          type: string
+        extraction:
+          $ref: "#/components/schemas/ProjectionExtraction"
+        isActive:
+          type: boolean
+          default: true
+    ProjectionBinding:
+      type: object
+      required: [id, projectId, sourceEntityType, sourceField, variableKey, extraction, isActive]
+      properties:
+        id:
+          type: string
+          format: uuid
+        projectId:
+          type: [string, "null"]
+          format: uuid
+        sourceEntityType:
+          type: string
+        sourceField:
+          type: string
+        variableKey:
+          type: string
+        extraction:
+          type: object
+          additionalProperties: true
+        isActive:
+          type: boolean
+    ProjectionIssueSummary:
+      type: object
+      description: >-
+        Count of source rows or values not projected, keyed by reason: unaccepted_source,
+        invalid_value, invalid_depth, invalid_selections_json, unknown_variable,
+        invalid_binding, duplicate_binding, missing_value.
+      additionalProperties:
+        type: integer
+        minimum: 0
+    ProjectionStatus:
+      type: object
+      required: [projectId, sourceEntityType, datasetId, sourceRowCount, observationCount, issueCount, issueSummary, lastStatus, lastError, lastRunAt, lastChangedAt]
+      properties:
+        projectId:
+          type: string
+          format: uuid
+        sourceEntityType:
+          enum: [field.logging_structure, field.core_row]
+        datasetId:
+          type: [string, "null"]
+          format: uuid
+        sourceRowCount:
+          type: integer
+          minimum: 0
+        observationCount:
+          type: integer
+          minimum: 0
+        issueCount:
+          type: integer
+          minimum: 0
+        issueSummary:
+          $ref: "#/components/schemas/ProjectionIssueSummary"
+        lastStatus:
+          enum: [ok, failed]
+        lastError:
+          type: [string, "null"]
+        lastRunAt:
+          type: string
+          format: date-time
+        lastChangedAt:
+          type: [string, "null"]
+          format: date-time
+    ProjectionRunResult:
+      type: object
+      required: [projectId, sources]
+      properties:
+        projectId:
+          type: string
+          format: uuid
+        sources:
+          type: array
+          items:
+            type: object
+            required: [sourceEntityType, outcome, datasetId, sourceRowCount, observationCount, issueCount, issueSummary, message]
+            properties:
+              sourceEntityType:
+                type: string
+              outcome:
+                enum: [projected, unchanged, skipped, failed]
+              datasetId:
+                type: [string, "null"]
+                format: uuid
+              sourceRowCount:
+                type: integer
+                minimum: 0
+              observationCount:
+                type: integer
+                minimum: 0
+              issueCount:
+                type: integer
+                minimum: 0
+              issueSummary:
+                $ref: "#/components/schemas/ProjectionIssueSummary"
+              message:
+                type: [string, "null"]
+    VariableDefinition:
+      type: object
+      required: [key, displayName, description, dataType, canonicalUnit, origin, spatialSupport, compatibleAnalyses]
+      properties:
+        key:
+          type: string
+          pattern: "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$"
+        displayName:
+          type: string
+        description:
+          type: string
+        dataType:
+          type: string
+          enum: [numeric, text, category, boolean, datetime]
+        canonicalUnit:
+          type: [string, "null"]
+        origin:
+          type: string
+          enum: [primary, integrated, derived, interpreted]
+        spatialSupport:
+          type: string
+          enum: [point, interval, orientation, raster, none]
+        compatibleAnalyses:
+          type: array
+          items:
+            type: string
+    Dataset:
+      type: object
+      required: [id, projectId, name, producerType, producerName, spatialSupport, status, currentVersion, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: [string, "null"]
+        producerType:
+          type: string
+          enum: [field, laboratory, instrument, analytics, external]
+        producerName:
+          type: string
+        sourceSystem:
+          type: [string, "null"]
+        spatialSupport:
+          type: string
+          enum: [point, interval, orientation, raster, none]
+        status:
+          type: string
+          enum: [active, archived]
+        currentVersion:
+          type: integer
+          minimum: 1
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    ObservationQuery:
+      type: object
+      required: [projectId, variableKeys]
+      properties:
+        projectId:
+          type: string
+          format: uuid
+        variableKeys:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        datasetIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        holeIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        depthFrom:
+          type: number
+          minimum: 0
+        depthTo:
+          type: number
+          minimum: 0
+        acceptedOnly:
+          type: boolean
+          default: true
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 200000
+          default: 50000
+          description: Page size. Request further pages with offset until a page is shorter than limit.
+        offset:
+          type: integer
+          minimum: 0
+          default: 0
+    ObservationValue:
+      type: object
+      required: [id, projectId, datasetId, sourceType, sourceId, variableKey, quality]
+      properties:
+        id:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        datasetId:
+          type: string
+          format: uuid
+        datasetVersionId:
+          type: [string, "null"]
+          format: uuid
+        sourceType:
+          type: string
+        sourceId:
+          type: string
+        holeId:
+          type: [string, "null"]
+          format: uuid
+        depthFrom:
+          type: [number, "null"]
+        depthTo:
+          type: [number, "null"]
+        variableKey:
+          type: string
+        numericValue:
+          type: [number, "null"]
+        textValue:
+          type: [string, "null"]
+        categoryValue:
+          type: [string, "null"]
+        booleanValue:
+          type: [boolean, "null"]
+        datetimeValue:
+          type: [string, "null"]
+          format: date-time
+        unit:
+          type: [string, "null"]
+        quality:
+          type: string
+          enum: [raw, reviewed, accepted, flagged]
+        observedAt:
+          type: [string, "null"]
+          format: date-time
+    CreateAnalysisRun:
+      type: object
+      required: [projectId, analysisType, algorithmVersion, datasetSnapshot, parameters]
+      properties:
+        projectId:
+          type: string
+          format: uuid
+        analysisType:
+          type: string
+        algorithmVersion:
+          type: string
+        datasetSnapshot:
+          type: object
+          additionalProperties: true
+        parameters:
+          type: object
+          additionalProperties: true
+    AnalysisRun:
+      allOf:
+        - $ref: "#/components/schemas/CreateAnalysisRun"
+        - type: object
+          required: [id, createdBy, createdAt, status]
+          properties:
+            id:
+              type: string
+              format: uuid
+            createdBy:
+              type: [string, "null"]
+              format: uuid
+            createdAt:
+              type: string
+              format: date-time
+            status:
+              type: string
+              enum: [draft, running, saved, accepted, failed, cancelled, superseded]
+    DerivedValueInput:
+      type: object
+      required: [variableKey, sourceEntityType, sourceEntityId, inputObservationIds]
+      properties:
+        variableKey:
+          type: string
+        sourceEntityType:
+          type: string
+        sourceEntityId:
+          type: string
+        holeId:
+          type: [string, "null"]
+          format: uuid
+        depthFrom:
+          type: [number, "null"]
+        depthTo:
+          type: [number, "null"]
+        numericValue:
+          type: [number, "null"]
+        textValue:
+          type: [string, "null"]
+        categoryValue:
+          type: [string, "null"]
+        confidence:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 1
+        status:
+          type: string
+          enum: [draft, saved, accepted, superseded]
+          default: draft
+        inputObservationIds:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            format: uuid
+    AnalysisResultArtifactInput:
+      type: object
+      required: [boreholeId, artifactType, objectKey, fileName, mediaType]
+      properties:
+        boreholeId:
+          type: [string, "null"]
+          format: uuid
+        artifactType:
+          type: string
+          enum: [analysis_file, graph_image]
+        objectKey:
+          type: string
+          minLength: 1
+        fileName:
+          type: string
+          minLength: 1
+        mediaType:
+          type: string
+          enum: [application/json, image/png]
+        byteSize:
+          type: [integer, "null"]
+          minimum: 0
+          default: null
+        checksumSha256:
+          type: [string, "null"]
+          pattern: "^[a-f0-9]{64}$"
+          default: null
+        metadata:
+          type: object
+          additionalProperties: true
+          default: {}
+    SaveAnalysisResultPackage:
+      type: object
+      required:
+        - tenantKey
+        - projectId
+        - datasetId
+        - analysisRunId
+        - feature
+        - mode
+        - fallbackTemplateVersion
+        - sourceFileName
+        - inputName
+        - analysisFileKey
+        - derivedFieldKeys
+        - artifacts
+      properties:
+        tenantKey:
+          type: string
+          minLength: 1
+        projectId:
+          type: string
+          format: uuid
+        datasetId:
+          type: string
+          format: uuid
+        analysisRunId:
+          type: string
+          format: uuid
+        feature:
+          type: string
+          enum: [structure, geotechnical, multivariate, domain]
+        mode:
+          type: string
+          enum: [overwrite, new-version]
+        fallbackTemplateVersion:
+          type: integer
+          minimum: 1
+        sourceFileName:
+          type: string
+          minLength: 1
+        inputName:
+          type: string
+          minLength: 1
+        analysisFileKey:
+          type: string
+          minLength: 1
+        derivedFieldKeys:
+          type: array
+          items:
+            type: string
+            minLength: 1
+        metadata:
+          type: object
+          additionalProperties: true
+          default: {}
+        artifacts:
+          type: array
+          minItems: 1
+          description: Must contain exactly one analysis_file whose objectKey equals analysisFileKey.
+          items:
+            $ref: "#/components/schemas/AnalysisResultArtifactInput"
+    SavedAnalysisResultPackage:
+      type: object
+      required:
+        - id
+        - tenantKey
+        - projectId
+        - datasetId
+        - analysisRunId
+        - feature
+        - templateVersion
+        - sourceFileName
+        - inputName
+        - analysisFileKey
+        - derivedFieldKeys
+        - artifactIds
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenantKey:
+          type: string
+        projectId:
+          type: string
+          format: uuid
+        datasetId:
+          type: string
+          format: uuid
+        analysisRunId:
+          type: string
+          format: uuid
+        feature:
+          type: string
+          enum: [structure, geotechnical, multivariate, domain]
+        templateVersion:
+          type: integer
+          minimum: 1
+        sourceFileName:
+          type: string
+        inputName:
+          type: string
+        analysisFileKey:
+          type: string
+        derivedFieldKeys:
+          type: array
+          items:
+            type: string
+        artifactIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        createdAt:
+          type: string
+          format: date-time
+    SavedAnalysisResultArtifact:
+      allOf:
+        - $ref: "#/components/schemas/AnalysisResultArtifactInput"
+        - type: object
+          required: [id]
+          properties:
+            id:
+              type: string
+              format: uuid
+    AnalysisResultPackageRecord:
+      allOf:
+        - $ref: "#/components/schemas/SavedAnalysisResultPackage"
+        - type: object
+          required: [artifacts]
+          properties:
+            artifacts:
+              type: array
+              items:
+                $ref: "#/components/schemas/SavedAnalysisResultArtifact"

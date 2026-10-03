@@ -1,0 +1,78 @@
+# GeoEye Analytics production stack: Data Pool API + web UI on one Docker host.
+# PostgreSQL is not here on purpose: it is the Supabase project named in .env.production.
+#
+#   docker compose -f compose.production.yaml up -d --build
+#
+# Requires .env.production (runtime settings only; see .env.production.example).
+# Release-only credentials live in .env.release and never enter a container.
+
+name: geoeye-analytics
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.datapool-api
+    image: ${GEOEYE_API_IMAGE:-geoeye-datapool-api:local}
+    env_file: .env.production
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: "8080"
+    # Reachable only from the web container; never published on the host.
+    expose:
+      - "8080"
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.analytics-web
+    image: ${GEOEYE_WEB_IMAGE:-geoeye-analytics-web:local}
+    environment:
+      GEOEYE_SITE_ADDRESS: ${GEOEYE_SITE_ADDRESS:?Set GEOEYE_SITE_ADDRESS to the public host name}
+      DATAPOOL_UPSTREAM: api:8080
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      # Certificates and ACME account. Losing this volume forces re-issuance.
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+
+volumes:
+  caddy_data:
+  caddy_config:

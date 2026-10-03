@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: geoeye
+      POSTGRES_USER: geoeye
+      POSTGRES_PASSWORD: geoeye
+    ports:
+      - "54329:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U geoeye -d geoeye"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - ./database/dev/0000_field_prerequisites.sql:/docker-entrypoint-initdb.d/0000_field_prerequisites.sql:ro

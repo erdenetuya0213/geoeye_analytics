@@ -1,0 +1,14 @@
+.git
+.codex-temp
+.env
+.env.*
+!.env.example
+!.env.production.example
+!.env.staging.example
+!.env.release.example
+**/node_modules
+**/dist
+**/coverage
+artifacts
+analytics-engine/.pytest_cache
+*.log

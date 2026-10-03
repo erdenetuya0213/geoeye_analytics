@@ -1,0 +1,37 @@
+{
+  "name": "@geoeye/datapool-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/main.js",
+    "migrate": "node dist/migrate.js",
+    "provision:role": "node dist/provision-role.js",
+    "project": "node dist/project.js",
+    "preflight": "node dist/preflight.js",
+    "smoke": "node dist/smoke.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@geoeye/field-projection": "workspace:*",
+    "@geoeye/types": "workspace:*",
+    "@geoeye/variable-registry": "workspace:*",
+    "hash-wasm": "4.12.0",
+    "pg": "8.16.3",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "24.6.0",
+    "@types/pg": "8.15.5"
+  }
+}

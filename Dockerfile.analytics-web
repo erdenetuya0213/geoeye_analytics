@@ -1,0 +1,29 @@
+# syntax=docker/dockerfile:1
+# GeoEye Analytics web UI served by Caddy, which also terminates TLS and proxies
+# /api/* to the Data Pool API so the browser only ever talks to one origin.
+FROM node:22-alpine AS build
+
+RUN corepack enable
+WORKDIR /workspace
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
+COPY packages/geoeye-types/package.json packages/geoeye-types/tsconfig.json packages/geoeye-types/
+COPY packages/datapool-client/package.json packages/datapool-client/tsconfig.json packages/datapool-client/
+COPY apps/analytics-desktop/package.json apps/analytics-desktop/tsconfig.json apps/analytics-desktop/
+RUN pnpm install --frozen-lockfile --filter @geoeye/analytics-desktop...
+
+COPY packages/geoeye-types packages/geoeye-types
+COPY packages/datapool-client packages/datapool-client
+COPY apps/analytics-desktop apps/analytics-desktop
+
+# Baked into the bundle. Keep /api so the UI and API share an origin.
+ARG VITE_DATAPOOL_ENDPOINT=/api
+ENV VITE_DATAPOOL_ENDPOINT=${VITE_DATAPOOL_ENDPOINT}
+RUN pnpm --filter @geoeye/analytics-desktop... build
+
+FROM caddy:2-alpine AS runtime
+
+COPY deploy/Caddyfile /etc/caddy/Caddyfile
+COPY --from=build /workspace/apps/analytics-desktop/dist /srv
+
+EXPOSE 80 443 443/udp

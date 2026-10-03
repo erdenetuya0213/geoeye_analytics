@@ -1,0 +1,46 @@
+# syntax=docker/dockerfile:1
+FROM node:22-alpine AS build
+
+RUN corepack enable
+WORKDIR /workspace
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
+COPY packages/geoeye-types/package.json packages/geoeye-types/tsconfig.json packages/geoeye-types/
+COPY packages/variable-registry/package.json packages/variable-registry/tsconfig.json packages/variable-registry/
+COPY packages/field-projection/package.json packages/field-projection/tsconfig.json packages/field-projection/
+COPY services/datapool-api/package.json services/datapool-api/tsconfig.json services/datapool-api/
+RUN pnpm install --frozen-lockfile --filter @geoeye/datapool-api...
+
+COPY packages/geoeye-types packages/geoeye-types
+COPY packages/variable-registry packages/variable-registry
+COPY packages/field-projection packages/field-projection
+COPY services/datapool-api services/datapool-api
+RUN pnpm --filter @geoeye/datapool-api... build
+
+FROM node:22-alpine AS runtime
+
+RUN corepack enable
+WORKDIR /app
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY packages/geoeye-types/package.json packages/geoeye-types/
+COPY packages/variable-registry/package.json packages/variable-registry/
+COPY packages/field-projection/package.json packages/field-projection/
+COPY services/datapool-api/package.json services/datapool-api/
+RUN pnpm install --prod --frozen-lockfile --filter @geoeye/datapool-api...
+
+COPY --from=build /workspace/packages/geoeye-types/dist packages/geoeye-types/dist
+COPY --from=build /workspace/packages/variable-registry/dist packages/variable-registry/dist
+COPY --from=build /workspace/packages/field-projection/dist packages/field-projection/dist
+COPY --from=build /workspace/services/datapool-api/dist services/datapool-api/dist
+COPY database database
+
+ENV NODE_ENV=production \
+    HOST=0.0.0.0 \
+    PORT=8080
+EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:8080/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+
+USER node
+CMD ["node", "services/datapool-api/dist/main.js"]
