@@ -34,6 +34,15 @@ describe('persistent workspace state', () => {
     expect(readPersistedState(memoryStorage(), 'explore.view', 'statistics')).toBeUndefined()
   })
 
+  it('does not share transient values between project storage adapters', () => {
+    const firstProject = memoryStorage()
+    const secondProject = memoryStorage()
+    writePersistedState(firstProject, 'explore.view', 'histogram')
+
+    expect(readPersistedState(firstProject, 'explore.view', 'statistics')).toBe('histogram')
+    expect(readPersistedState(secondProject, 'explore.view', 'statistics')).toBeUndefined()
+  })
+
   it('round-trips sets and nested objects', () => {
     const storage = memoryStorage()
     writePersistedState(storage, 'view3d.visibleLayers', new Set(['collars', 'grid']))

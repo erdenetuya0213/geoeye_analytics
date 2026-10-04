@@ -86,7 +86,7 @@ function SceneTextPreview({ backgroundColor, preferences }: { backgroundColor: s
   } as CSSProperties
   return <div aria-hidden="true" className="scene-text-preview" data-text-box="false" style={style}>
     <i /><i /><i />
-    <span className="is-hole">GOR-DD-017</span>
+    <span className="is-hole">DH-001</span>
     <span className="is-depth">−164.8 m</span>
     <span className="is-axis">498 X</span>
   </div>

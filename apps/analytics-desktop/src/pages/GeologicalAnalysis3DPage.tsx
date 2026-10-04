@@ -46,6 +46,9 @@ import {
   type SceneViewportContents,
 } from '../visualization/sceneViewportContent.js'
 import { usePersistentState } from '../state/persistentState.js'
+import { useProjectStorage } from '../state/ProjectStorageContext.js'
+import { useDataPoolWorkspace } from '../state/DataPoolWorkspaceContext.js'
+import { desktopBridge } from '../desktop/bridge.js'
 import {
   anchoredSelection,
   createSavedSceneSelection,
@@ -240,10 +243,12 @@ function valueFor(row: EdaObservation, key: string): string | number | null {
 }
 
 export function GeologicalAnalysis3DPage({ backgroundColor, onBackgroundColorChange, screenText }: GeologicalAnalysis3DPageProps) {
+  const storage = useProjectStorage()
+  const workspace = useDataPoolWorkspace()
   const datasetsQuery = useProjectEdaDatasets()
-  const handoff = useMemo(() => readSpatialViewRequest(typeof window === 'undefined' ? undefined : window.localStorage), [])
+  const handoff = useMemo(() => readSpatialViewRequest(storage), [storage])
   const datasets = datasetsQuery.data ?? []
-  const [datasetId] = useState(handoff?.datasetId ?? 'demo-integrated-gold-geology-v4')
+  const [datasetId] = useState(handoff?.datasetId ?? '')
   // A new handoff from another module wins over the view state saved for the previous one.
   const handoffScope = handoff?.createdAt ?? ''
   const [camera, setCamera] = usePersistentState<CameraMode>('view3d.camera', initialCamera, { scope: handoffScope })
@@ -280,11 +285,11 @@ export function GeologicalAnalysis3DPage({ backgroundColor, onBackgroundColorCha
   const [paneGizmos, setPaneGizmos] = usePersistentState<Record<number, boolean>>('view3d.paneGizmos', () => ({ 0: true, 1: true, 2: true, 3: true }))
   const [sceneLayout, setSceneLayout] = useState<SceneSplitLayout>(() => {
     if (typeof window === 'undefined') return parseSceneSplitLayout(null)
-    try { return parseSceneSplitLayout(window.localStorage.getItem(sceneLayoutStorageKey)) } catch { return parseSceneSplitLayout(null) }
+    try { return parseSceneSplitLayout(storage.getItem(sceneLayoutStorageKey)) } catch { return parseSceneSplitLayout(null) }
   })
   const [paneContent, setPaneContent] = useState<SceneViewportContents>(() => {
     if (typeof window === 'undefined') return {}
-    try { return parseSceneViewportContents(window.localStorage.getItem(SCENE_VIEWPORT_CONTENT_STORAGE_KEY)) } catch { return {} }
+    try { return parseSceneViewportContents(storage.getItem(SCENE_VIEWPORT_CONTENT_STORAGE_KEY)) } catch { return {} }
   })
   const [activePane, setActivePane] = usePersistentState('view3d.activePane', 0)
   const [graphDropPane, setGraphDropPane] = useState<number | null>(null)
@@ -308,13 +313,25 @@ export function GeologicalAnalysis3DPage({ backgroundColor, onBackgroundColorCha
   const { replaceSelection, selectedIds, toggleSelection } = useGeoEyeSelection()
   const dataset = datasets.find((item) => item.id === datasetId) ?? datasets[0]
   const importedDrillholes = useMemo(
-    () => typeof window === 'undefined' ? undefined : readDrillholeImport(),
-    [],
+    () => typeof window === 'undefined' ? undefined : readDrillholeImport(storage),
+    [storage],
   )
-  const savedAnalysisResults = useMemo(
-    () => readAnalysisResultDocument(typeof window === 'undefined' ? undefined : window.localStorage).packages,
-    [],
+  const [savedAnalysisResults, setSavedAnalysisResults] = useState(
+    () => readAnalysisResultDocument(storage).packages,
   )
+
+  useEffect(() => {
+    const bridge = desktopBridge()
+    if (bridge === undefined || workspace.storageAddress === null) {
+      setSavedAnalysisResults(readAnalysisResultDocument(storage).packages)
+      return
+    }
+    let active = true
+    void bridge.readAnalysisResultPackages(workspace.storageAddress).then((packages) => {
+      if (active) setSavedAnalysisResults(packages)
+    })
+    return () => { active = false }
+  }, [storage, workspace.storageAddress])
 
   useEffect(() => () => {
     if (splitFrameRef.current !== null) cancelAnimationFrame(splitFrameRef.current)
@@ -327,9 +344,12 @@ export function GeologicalAnalysis3DPage({ backgroundColor, onBackgroundColorCha
   const holes = [...new Set(rows.map((row) => row.holeId))]
   const rowSourceIdSet = new Set(rows.flatMap((row) => sourceIds(row)))
   const applicableAnalysisResults = savedAnalysisResults.filter((result) => (
-    result.templateId === dataset.id
-    || result.sourceObservationIds.some((id) => rowSourceIdSet.has(id))
-    || result.boreholeIds.some((id) => holes.includes(id))
+    (workspace.project === null || result.projectId === workspace.project.id)
+    && (
+      result.templateId === dataset.id
+      || result.sourceObservationIds.some((id) => rowSourceIdSet.has(id))
+      || result.boreholeIds.some((id) => holes.includes(id))
+    )
   ))
   const importedCollars = new Map((importedDrillholes?.collar ?? []).map((collar) => [collar.holeId, collar]))
   const collarElevationFrom = (row: EdaObservation | undefined) => {
@@ -414,11 +434,11 @@ export function GeologicalAnalysis3DPage({ backgroundColor, onBackgroundColorCha
   const updateSceneLayout = (next: SceneSplitLayout) => {
     setSceneLayout(next)
     setActivePane((current) => current < next.count ? current : 0)
-    try { window.localStorage.setItem(sceneLayoutStorageKey, JSON.stringify(next)) } catch { /* Keep the workspace usable when storage is unavailable. */ }
+    try { storage.setItem(sceneLayoutStorageKey, JSON.stringify(next)) } catch { /* Keep the workspace usable when storage is unavailable. */ }
   }
   const updatePaneContent = (next: SceneViewportContents) => {
     setPaneContent(next)
-    try { window.localStorage.setItem(SCENE_VIEWPORT_CONTENT_STORAGE_KEY, JSON.stringify(next)) } catch { /* Keep the pane content for this session when storage is unavailable. */ }
+    try { storage.setItem(SCENE_VIEWPORT_CONTENT_STORAGE_KEY, JSON.stringify(next)) } catch { /* Keep the pane content for this session when storage is unavailable. */ }
   }
   const openGraphInViewport = (resultId: string, objectKey: string, requestedPane = activePane) => {
     const pane = graphViewportPane(sceneLayout.count, requestedPane)
@@ -435,7 +455,7 @@ export function GeologicalAnalysis3DPage({ backgroundColor, onBackgroundColorCha
     const nextLayout = { ...sceneLayout, [axis]: next }
     setSceneLayout(nextLayout)
     splitStageRef.current?.style.setProperty(`--scene-split-${axis}`, `${next}%`)
-    try { window.localStorage.setItem(sceneLayoutStorageKey, JSON.stringify(nextLayout)) } catch { /* Keep resizing when storage is unavailable. */ }
+    try { storage.setItem(sceneLayoutStorageKey, JSON.stringify(nextLayout)) } catch { /* Keep resizing when storage is unavailable. */ }
   }
   const startSplitResize = (axis: SceneSplitAxis, event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault()
@@ -493,9 +513,9 @@ export function GeologicalAnalysis3DPage({ backgroundColor, onBackgroundColorCha
     if (typeof window === 'undefined' || appliedQuery === '' || queryRows.length === 0) return
     const saved = createSavedSceneSelection(selectionLabel, queryRows, appliedQuery)
     let existing: unknown = []
-    try { existing = JSON.parse(window.localStorage.getItem(sceneSelectionStorageKey) ?? '[]') } catch { existing = [] }
+    try { existing = JSON.parse(storage.getItem(sceneSelectionStorageKey) ?? '[]') } catch { existing = [] }
     const selections = Array.isArray(existing) ? existing : []
-    window.localStorage.setItem(sceneSelectionStorageKey, JSON.stringify([...selections, saved]))
+    storage.setItem(sceneSelectionStorageKey, JSON.stringify([...selections, saved]))
     setSavedSelectionMessage(`${saved.label} saved · ${saved.sourceObservationIds.length} source IDs`)
   }
   const usePreset = (preset: SectionDefinition['preset']) => setSection((current) => ({

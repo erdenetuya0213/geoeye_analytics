@@ -1,4 +1,4 @@
-import type { EdaDataset, EdaVariableKey } from '../data/edaDemo.js'
+import type { EdaDataset, EdaVariableKey } from '../data/edaTypes.js'
 import { calculateDistribution, type DistributionRequest, type DistributionResult, type WeightingMethod } from './distributionEngine.js'
 
 export interface EdaRunConfiguration {

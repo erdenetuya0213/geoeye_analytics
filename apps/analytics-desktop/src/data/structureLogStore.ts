@@ -40,18 +40,17 @@ export function upsertStructureLogVersion(
   return versions.map((version, index) => index === existingIndex ? next : version)
 }
 
-export function readStructureLogVersions(): StructureLogVersion[] {
-  if (typeof window === 'undefined') return []
+export function readStructureLogVersions(storage: StorageAdapter = appStorage): StructureLogVersion[] {
   try {
-    const parsed = JSON.parse(window.localStorage.getItem(storageKey) ?? '[]') as unknown
+    const parsed = JSON.parse(storage.getItem(storageKey) ?? '[]') as unknown
     return Array.isArray(parsed) ? parsed as StructureLogVersion[] : []
   } catch {
     return []
   }
 }
 
-export function readLatestStructureLogVersion(templateId: string, holeFilter: string) {
-  return readStructureLogVersions()
+export function readLatestStructureLogVersion(templateId: string, holeFilter: string, storage: StorageAdapter = appStorage) {
+  return readStructureLogVersions(storage)
     .filter((version) => version.templateId === templateId && version.holeFilter === holeFilter)
     .sort((a, b) => b.version - a.version)[0]
 }
@@ -68,7 +67,7 @@ export function nextStructureLogVersionNumber(
   return latestVersion + 1
 }
 
-export function writeStructureLogVersion(version: StructureLogVersion) {
-  if (typeof window === 'undefined') return
-  window.localStorage.setItem(storageKey, JSON.stringify(upsertStructureLogVersion(readStructureLogVersions(), version)))
+export function writeStructureLogVersion(version: StructureLogVersion, storage: StorageAdapter = appStorage) {
+  storage.setItem(storageKey, JSON.stringify(upsertStructureLogVersion(readStructureLogVersions(storage), version)))
 }
+import { appStorage, type StorageAdapter } from '../desktop/runtime.js'

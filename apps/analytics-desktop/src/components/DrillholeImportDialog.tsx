@@ -1,5 +1,7 @@
 import { Check, FileSpreadsheet, Upload, X } from 'lucide-react'
 import { useState } from 'react'
+import type { ImportSourceFile } from '../desktop/bridge.js'
+import { readImportSource } from '../data/importSource.js'
 
 export interface ImportedCollarRecord {
   crs?: string | undefined
@@ -24,6 +26,8 @@ export interface DrillholeImportResult {
 type ImportKind = 'collar' | 'survey'
 
 interface ParsedUpload {
+  source: ImportSourceFile
+  contents: string
   fileName: string
   headers: string[]
   mapping: Record<string, string>
@@ -116,16 +120,21 @@ function normalizeCrs(value: string) {
 
 interface DrillholeImportDialogProps {
   onClose: () => void
-  onImport: (result: DrillholeImportResult) => void
+  onImport: (result: DrillholeImportResult, files: ImportSourceFile[]) => Promise<void>
 }
 
 export function DrillholeImportDialog({ onClose, onImport }: DrillholeImportDialogProps) {
   const [uploads, setUploads] = useState<Record<ImportKind, ParsedUpload | null>>({ collar: null, survey: null })
   const [errors, setErrors] = useState<Record<ImportKind, string>>({ collar: '', survey: '' })
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
 
   const readFile = async (kind: ImportKind, file: File | undefined) => {
     if (file === undefined) return
-    const parsed = parseCsv(await file.text())
+    let source: ImportSourceFile
+    try { source = await readImportSource(file) } catch (error) { setErrors(current => ({ ...current, [kind]: error instanceof Error ? error.message : 'The CSV could not be read.' })); return }
+    const { contents } = source
+    const parsed = parseCsv(contents)
     const headers = parsed[0] ?? []
     const rows = parsed.slice(1)
     if (headers.length < 2 || rows.length === 0) {
@@ -133,7 +142,7 @@ export function DrillholeImportDialog({ onClose, onImport }: DrillholeImportDial
       return
     }
     setErrors((current) => ({ ...current, [kind]: '' }))
-    setUploads((current) => ({ ...current, [kind]: { fileName: file.name, headers, rows, mapping: createMapping(kind, headers) } }))
+    setUploads((current) => ({ ...current, [kind]: { source, contents, fileName: file.name, headers, rows, mapping: createMapping(kind, headers) } }))
   }
 
   const updateMapping = (kind: ImportKind, field: string, header: string) => {
@@ -146,11 +155,14 @@ export function DrillholeImportDialog({ onClose, onImport }: DrillholeImportDial
 
   const canImport = mappingComplete('collar', uploads.collar) && mappingComplete('survey', uploads.survey)
 
-  const completeImport = () => {
+  const completeImport = async () => {
     const collarUpload = uploads.collar
     const surveyUpload = uploads.survey
     if (collarUpload === null || surveyUpload === null || !canImport) return
-    onImport({
+    if (saving) return
+    setSaving(true)
+    setSaveError(null)
+    try { await onImport({
       collar: collarUpload.rows.map((row) => ({
         crs: normalizeCrs(valueFor(collarUpload, row, 'crs')),
         holeId: valueFor(collarUpload, row, 'holeId'),
@@ -164,7 +176,9 @@ export function DrillholeImportDialog({ onClose, onImport }: DrillholeImportDial
         azimuth: numeric(valueFor(surveyUpload, row, 'azimuth')),
         dip: numeric(valueFor(surveyUpload, row, 'dip')),
       })).filter((record) => record.holeId !== ''),
-    })
+    }, [collarUpload, surveyUpload].map(upload => upload.source))
+    } catch (error) { setSaveError(error instanceof Error ? error.message : 'Import could not be saved.') }
+    finally { setSaving(false) }
   }
 
   return (
@@ -173,7 +187,7 @@ export function DrillholeImportDialog({ onClose, onImport }: DrillholeImportDial
         <header className="csv-import-header">
           <FileSpreadsheet size={22} />
           <h2 id="csv-import-title">Import collar + survey CSV</h2>
-          <button aria-label="Close CSV import" className="icon-button" onClick={onClose} type="button"><X size={17} /></button>
+          <button aria-label="Close CSV import" className="icon-button" disabled={saving} onClick={onClose} type="button"><X size={17} /></button>
         </header>
 
         <div className="csv-import-body">
@@ -221,9 +235,10 @@ export function DrillholeImportDialog({ onClose, onImport }: DrillholeImportDial
         </div>
 
         <footer className="csv-import-footer">
+          {saveError !== null ? <p role="alert">{saveError}</p> : null}
           <span>{canImport ? 'Both files are mapped and ready.' : 'Two mapped CSV files are required.'}</span>
-          <button className="button button-secondary" onClick={onClose} type="button">Cancel</button>
-          <button className="button button-primary" disabled={!canImport} onClick={completeImport} type="button">Import records</button>
+          <button className="button button-secondary" disabled={saving} onClick={onClose} type="button">Cancel</button>
+          <button className="button button-primary" disabled={!canImport || saving} onClick={() => void completeImport()} type="button">{saving ? 'Saving files…' : 'Import records'}</button>
         </footer>
       </section>
     </div>

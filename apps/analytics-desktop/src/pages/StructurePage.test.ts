@@ -176,6 +176,18 @@ describe('live structure adapter', () => {
         reviewStatus: 'draft',
         structureType: 'Joint',
         templateId,
+      }, {
+        alpha: 55,
+        beta: null,
+        depthFrom: 20.8,
+        depthTo: 20.8,
+        holeId,
+        id: '00000000-0000-4000-8000-000000000010',
+        orientationStatus: 'photo_cylinder_fit;beta_reference_missing;review_required',
+        projectId: project.id,
+        reviewStatus: 'draft',
+        structureType: 'Joint',
+        templateId,
       }]),
       queryObservations: vi.fn().mockResolvedValue([]),
       surveys: vi.fn().mockResolvedValue([]),
@@ -198,6 +210,20 @@ describe('live structure adapter', () => {
       id: '00000000-0000-4000-8000-000000000009',
       structureType: 'Joint',
     }])
+    expect(result.inventoryByTemplate[templateId]).toEqual({
+      byHole: {
+        'TT2026-002-GT': {
+          detectedCount: 2,
+          missingAlphaCount: 0,
+          missingBetaCount: 1,
+          orientedCount: 1,
+        },
+      },
+      detectedCount: 2,
+      missingAlphaCount: 0,
+      missingBetaCount: 1,
+      orientedCount: 1,
+    })
     expect(result.drillholesByTemplate[templateId]).toEqual(['TT2026-002-GT'])
   })
 })

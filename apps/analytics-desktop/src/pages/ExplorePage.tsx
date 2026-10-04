@@ -6,15 +6,17 @@ import { buildEdaRunRequest, edaConfigurationSignature, type EdaPopulationResult
 import type { DistributionResult, WeightingMethod } from '../analysis/distributionEngine.js'
 import { useEdaRunEngine } from '../analysis/useEdaRunEngine.js'
 import { GeoEyeChart } from '../components/GeoEyeChart.js'
+import { EdaDatasetOptions } from '../components/EdaDatasetOptions.js'
 import { GeoEyeFacetChart } from '../components/GeoEyeFacetChart.js'
 import { DownholeCorrelationIcon } from '../components/GeoEyeIcons.js'
-import { type EdaDataset, type EdaVariableDefinition, type EdaVariableKey } from '../data/edaDemo.js'
+import { type EdaDataset, type EdaVariableDefinition, type EdaVariableKey } from '../data/edaTypes.js'
 import { nextEdaRunNumber, readEdaRunCache, writeEdaRunCache } from '../data/edaRunCache.js'
 import { useProjectEdaDatasets } from '../data/liveEda.js'
 import { useGeoEyeSelection } from '../state/SelectionContext.js'
 import { buildCdfOption, buildCorrelationOption, buildDistributionBoxPlotOption, buildHistogramOption, buildProbabilityPlotOption, buildScatterOption, buildSwathOption } from '../visualization/chartOptions.js'
 import { DownholeCorrelationWorkspace } from './DownholeCorrelationPage.js'
 import { usePersistentState } from '../state/persistentState.js'
+import { useProjectStorage } from '../state/ProjectStorageContext.js'
 
 type ExploreView = 'statistics' | 'distribution' | 'relationships' | 'swath' | 'downhole'
 type ResultMode = 'facets' | 'detail'
@@ -106,10 +108,11 @@ function distributionSeries(result: DistributionResult | undefined, variable: Ed
 }
 
 export function ExplorePage() {
+  const storage = useProjectStorage()
   const datasetsQuery = useProjectEdaDatasets()
   const [view, setView] = usePersistentState<ExploreView>('explore.view', initialExploreView)
   const [resultMode, setResultMode] = usePersistentState<ResultMode>('explore.resultMode', 'facets')
-  const [datasetId, setDatasetId] = usePersistentState('explore.datasetId', 'demo-als-gold-assays-v4')
+  const [datasetId, setDatasetId] = usePersistentState('explore.datasetId', '')
   const [variableKeys, setVariableKeys] = usePersistentState<EdaVariableKey[]>('explore.variableKeys', ['assay.au', 'assay.cu', 'assay.as'])
   const [activeFilterKeys, setActiveFilterKeys] = usePersistentState<string[]>('explore.activeFilterKeys', [])
   const [filterValues, setFilterValues] = usePersistentState<Record<string, string>>('explore.filterValues', {})
@@ -125,10 +128,10 @@ export function ExplorePage() {
   const [activePopulationId, setActivePopulationId] = usePersistentState<string | null>('explore.activePopulationId', null)
   const [distributionChart, setDistributionChart] = usePersistentState<DistributionChart>('explore.distributionChart', 'all')
   const [facetChart, setFacetChart] = usePersistentState<FacetChart>('explore.facetChart', 'histogram')
-  const [relationshipDatasetIds, setRelationshipDatasetIds] = usePersistentState<string[]>('explore.relationshipDatasetIds', ['demo-als-gold-assays-v4', 'demo-geotechnical-log-v4'])
-  const [xDatasetId, setXDatasetId] = usePersistentState('explore.xDatasetId', 'demo-als-gold-assays-v4')
+  const [relationshipDatasetIds, setRelationshipDatasetIds] = usePersistentState<string[]>('explore.relationshipDatasetIds', [])
+  const [xDatasetId, setXDatasetId] = usePersistentState('explore.xDatasetId', '')
   const [xVariableKey, setXVariableKey] = usePersistentState<EdaVariableKey>('explore.xVariableKey', 'assay.au')
-  const [yDatasetId, setYDatasetId] = usePersistentState('explore.yDatasetId', 'demo-geotechnical-log-v4')
+  const [yDatasetId, setYDatasetId] = usePersistentState('explore.yDatasetId', '')
   const [yVariableKey, setYVariableKey] = usePersistentState<EdaVariableKey>('explore.yVariableKey', 'geotech.rqd')
   const [relationshipView, setRelationshipView] = usePersistentState<RelationshipView>('explore.relationshipView', 'facets')
   const [relationshipPopulationId, setRelationshipPopulationId] = usePersistentState<string | null>('explore.relationshipPopulationId', null)
@@ -175,7 +178,7 @@ export function ExplorePage() {
     if (cacheHydratedRef.current || datasets.length === 0 || typeof window === 'undefined') return
     cacheHydratedRef.current = true
     const current = (run: EdaRunResult) => datasets.find((candidate) => candidate.id === run.configuration.datasetId)?.snapshotAt === run.configuration.snapshotAt
-    const cachedRuns = readEdaRunCache(window.localStorage)
+    const cachedRuns = readEdaRunCache(storage)
     const restored = cachedRuns.find((run) => run.runId === activeRunId && current(run))
     if (restored !== undefined) {
       // The saved workspace state already holds the configuration and view that go with this run.
@@ -188,20 +191,20 @@ export function ExplorePage() {
     autoRunRequestedRef.current = true
     setActiveRunId(cached.runId)
     setActiveRun(cached); setActivePopulationId(cached.populations[0]?.populationId ?? null); setDatasetId(cached.configuration.datasetId); setVariableKeys(cached.configuration.variableKeys); setActiveFilterKeys(cached.configuration.activeFilterKeys); setFilterValues(cached.configuration.filterValues); setCompareBy(cached.configuration.compareBy); setSecondGroup(cached.configuration.secondGroup); setWeightingMethod(cached.configuration.weighting.method); setDeclusteringCellSize(cached.configuration.weighting.cellSize); setResultMode('facets')
-  }, [datasets])
+  }, [datasets, storage])
 
   useEffect(() => {
     if (runEngine.result === null) return
     setActiveRun(runEngine.result); setActiveRunId(runEngine.result.runId); setActivePopulationId(runEngine.result.populations[0]?.populationId ?? null); setResultMode('facets'); setRelationshipView('facets'); setRelationshipPopulationId(null); clearSelection()
-    if (typeof window !== 'undefined') writeEdaRunCache(window.localStorage, runEngine.result)
-  }, [clearSelection, runEngine.result])
+    if (typeof window !== 'undefined') writeEdaRunCache(storage, runEngine.result)
+  }, [clearSelection, runEngine.result, storage])
 
   useEffect(() => {
     if (autoRunRequestedRef.current || draftConfiguration === null || draftConfiguration.variableKeys.length === 0 || dataset === undefined || activeRun !== null || submittedRequest !== null) return
     autoRunRequestedRef.current = true
-    const runNumber = typeof window === 'undefined' ? 1 : nextEdaRunNumber(window.localStorage)
+    const runNumber = typeof window === 'undefined' ? 1 : nextEdaRunNumber(storage)
     setSubmittedRequest(buildEdaRunRequest(draftConfiguration, dataset, runNumber))
-  }, [activeRun, dataset, draftConfiguration, submittedRequest])
+  }, [activeRun, dataset, draftConfiguration, storage, submittedRequest])
 
   if (datasetsQuery.isPending) return <div className="page explore-page"><div className="eda-state panel">Opening the local analytical database…</div></div>
   if (datasetsQuery.isError) return <div className="page explore-page"><div className="eda-state panel">The local analytical database could not be opened.</div></div>
@@ -273,7 +276,7 @@ export function ExplorePage() {
   const removeFilter = (key: string) => { setActiveFilterKeys((current) => current.filter((candidate) => candidate !== key)); setFilterValues((current) => Object.fromEntries(Object.entries(current).filter(([candidate]) => candidate !== key))); clearSelection() }
   const startRun = () => {
     if (draftConfiguration === null || draftConfiguration.variableKeys.length === 0 || runEngine.pending) return
-    const runNumber = typeof window === 'undefined' ? (activeRun?.runNumber ?? 0) + 1 : nextEdaRunNumber(window.localStorage)
+    const runNumber = typeof window === 'undefined' ? (activeRun?.runNumber ?? 0) + 1 : nextEdaRunNumber(storage)
     setSubmittedRequest(buildEdaRunRequest(draftConfiguration, dataset, runNumber))
   }
   const openView = (nextView: ExploreView) => {
@@ -396,7 +399,7 @@ export function ExplorePage() {
     <h1 className="sr-only">Exploratory data analysis</h1>
 
     <div className="analysis-toolbar eda-toolbar eda-run-toolbar">
-      <label className="tool-select tool-select-field eda-dataset-select"><span>Dataset</span><select aria-label="EDA dataset" onChange={(event) => selectDataset(event.target.value)} value={dataset.id}>{datasets.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><ChevronDown size={14} /></label>
+      <label className="tool-select tool-select-field eda-dataset-select"><span>Dataset</span><select aria-label="EDA dataset" onChange={(event) => selectDataset(event.target.value)} value={dataset.id}><EdaDatasetOptions datasets={datasets} /></select><ChevronDown size={14} /></label>
       <details className="eda-variable-picker"><summary aria-label="Select EDA variables"><span>Variables</span><strong>{dataset.variables.filter((item) => variableKeys.includes(item.key)).map((item) => item.shortLabel).join(', ')}</strong><ChevronDown size={14} /></summary><div>{dataset.variables.map((item) => <label key={item.key}><input checked={variableKeys.includes(item.key)} onChange={() => toggleVariable(item.key)} type="checkbox" /><span>{item.shortLabel}</span><small>{item.label} · {item.unit}</small></label>)}</div></details>
       {activeFilterKeys.map((key) => {
         const dimension = dataset.dimensions.find((candidate) => candidate.key === key)

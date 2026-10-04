@@ -1,6 +1,7 @@
 import type { DataPoolClient, ProjectSummary } from '@geoeye/datapool-client'
 import { describe, expect, it, vi } from 'vitest'
-import { buildLocalEdaDatasets, loadLiveEdaDatasets } from './liveEda.js'
+import { buildLocalEdaDatasets, edaDatasetKind, loadLiveEdaDatasets } from './liveEda.js'
+import type { LocalProjectSnapshot } from './localProjectDb.js'
 
 const project: ProjectSummary = {
   canWrite: true,
@@ -74,6 +75,78 @@ describe('live EDA adapter', () => {
       lithology: 'Diorite',
       sampleId: 'A-1',
       values: { 'laboratory.au_g_t': 1.42 },
+    })
+  })
+
+  it('exposes cached logging data and a drillhole-depth integrated view alongside lab data', () => {
+    const holeId = '00000000-0000-4000-8000-000000000004'
+    const snapshot: LocalProjectSnapshot = {
+      datasets: [],
+      drillholes: [{
+        collar: {
+          accuracy: null,
+          crs: { authority: 'EPSG', code: '32648', name: 'WGS 84 / UTM zone 48N' },
+          easting: 500_100,
+          elevation: 1_420,
+          latitude: null,
+          longitude: null,
+          northing: 4_700_200,
+          source: 'Field',
+          surveyMethod: null,
+          updatedAt: '2026-10-04T00:00:00.000Z',
+        },
+        id: holeId,
+        name: 'DH-001',
+        projectId: project.id,
+        surveyStationCount: 0,
+      }],
+      fieldLogging: {
+        datasets: [{
+          category: 'Geotechnical',
+          columns: [
+            { dataType: 'numeric', key: 'logging.rqd', label: 'RQD', unit: '%' },
+            { dataType: 'category', key: 'logging.lithology', label: 'Lithology', unit: null },
+          ],
+          id: 'core-log',
+          name: 'Core logging',
+          records: [{ depthFrom: 10, depthTo: 12, holeId, id: 'log-row-1', values: { 'logging.lithology': 'Diorite', 'logging.rqd': 88 } }],
+          updatedAt: '2026-10-04T03:00:00.000Z',
+          version: 2,
+        }],
+        projectId: project.id,
+        submissions: [],
+        templates: [],
+      },
+      fieldStructures: [],
+      observations: [],
+      project,
+      projection: [],
+      refreshedAt: '2026-10-04T03:00:00.000Z',
+      surveysByHoleId: {},
+      variables: [],
+      version: 1,
+    }
+    const result = buildLocalEdaDatasets(snapshot, null, {
+      laboratory: {
+        columns: ['Sample ID', 'Hole ID', 'From', 'To', 'Au g/t', 'Batch'],
+        dirty: true,
+        fileName: 'assays.csv',
+        rows: [['A-1', 'DH-001', '10', '12', '1.42', 'B-7']],
+        section: 'laboratory',
+        updatedAt: '2026-10-04T04:00:00.000Z',
+      },
+    }, project)
+
+    expect(result.map(edaDatasetKind)).toEqual(['integrated', 'laboratory', 'logging', 'drillholes'])
+    expect(result.find((dataset) => edaDatasetKind(dataset) === 'logging')).toMatchObject({
+      id: 'local-field-logging-core-log',
+      observations: [expect.objectContaining({ lithology: 'Diorite', values: { 'logging.rqd': 88 } })],
+    })
+    expect(result[0]?.variables.map((variable) => variable.key)).toEqual(expect.arrayContaining(['laboratory.au_g_t', 'logging.rqd', 'collar.easting']))
+    expect(result[0]?.dimensions.map((dimension) => dimension.key)).toEqual(expect.arrayContaining(['assay_source', 'logging_source', 'logging.lithology']))
+    expect(result[0]?.observations[0]).toMatchObject({
+      dimensions: expect.objectContaining({ data_coverage: 'Logging + Lab / Assay', 'logging.lithology': 'Diorite' }),
+      values: expect.objectContaining({ 'laboratory.au_g_t': 1.42, 'logging.rqd': 88 }),
     })
   })
 

@@ -1,4 +1,4 @@
-import type { EdaDataset } from '../data/edaDemo.js'
+import type { EdaDataset } from '../data/edaTypes.js'
 
 export type MultivariateMethod = 'full' | 'correlation' | 'pca' | 'clustering'
 export type MultivariateCorrelationMethod = 'pearson' | 'spearman'
@@ -16,6 +16,7 @@ export interface MultivariateConfiguration {
   method: MultivariateMethod
   missingPolicy: MultivariateMissingPolicy
   scaling: MultivariateScaling
+  secondGroup?: string | null
   snapshotAt: string
   supportLabel: string
   variableKeys: string[]
@@ -133,19 +134,25 @@ export function buildMultivariateRunRequest(
       const selected = configuration.filterValues[key]
       return selected === undefined || selected === 'all' || observation.dimensions[key] === selected
     }))
-    .map((observation): MultivariateInputRow => ({
-      depthFrom: observation.depthFrom,
-      depthTo: observation.depthTo,
-      dimensions: { ...observation.dimensions },
-      group: configuration.groupBy === null ? 'All observations' : observation.dimensions[configuration.groupBy] ?? 'Unassigned',
-      holeId: observation.holeId,
-      observationId: observation.id,
-      sourceDatasetIds: 'analyticalLineage' in observation && Array.isArray(observation.analyticalLineage)
-        ? [...new Set(observation.analyticalLineage.map((entry) => entry.datasetId))]
-        : [configuration.datasetId],
-      sourceObservationIds: [...new Set(observation.sourceObservationIds ?? [observation.sourceObservationId])],
-      values: Object.fromEntries(configuration.variableKeys.map((key) => [key, observation.values[key] ?? null])),
-    }))
+    .map((observation): MultivariateInputRow => {
+      const groupKeys = [configuration.groupBy, configuration.secondGroup]
+        .filter((key): key is string => key !== null && key !== undefined)
+      return {
+        depthFrom: observation.depthFrom,
+        depthTo: observation.depthTo,
+        dimensions: { ...observation.dimensions },
+        group: groupKeys.length === 0
+          ? 'All observations'
+          : groupKeys.map((key) => observation.dimensions[key] ?? 'Unassigned').join(' · '),
+        holeId: observation.holeId,
+        observationId: observation.id,
+        sourceDatasetIds: 'analyticalLineage' in observation && Array.isArray(observation.analyticalLineage)
+          ? [...new Set(observation.analyticalLineage.map((entry) => entry.datasetId))]
+          : [configuration.datasetId],
+        sourceObservationIds: [...new Set(observation.sourceObservationIds ?? [observation.sourceObservationId])],
+        values: Object.fromEntries(configuration.variableKeys.map((key) => [key, observation.values[key] ?? null])),
+      }
+    })
   return {
     configuration,
     configurationSignature: multivariateConfigurationSignature(configuration),

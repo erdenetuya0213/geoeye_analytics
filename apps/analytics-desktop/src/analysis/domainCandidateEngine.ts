@@ -1,7 +1,7 @@
 import type { EdaObservation, SummaryStatistics } from './eda.js'
 import { summarizeValues } from './eda.js'
 import type { DomainType } from './domainAnalysis.js'
-import type { EdaDataset } from '../data/edaDemo.js'
+import type { EdaDataset } from '../data/edaTypes.js'
 import type { MultivariateDomainEvidence } from '../data/multivariateEvidenceStore.js'
 
 export type DomainPrimarySourceKind = 'numeric-ranges' | 'threshold' | 'dimension' | 'multivariate'

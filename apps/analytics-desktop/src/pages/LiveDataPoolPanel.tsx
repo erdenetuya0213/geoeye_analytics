@@ -3,6 +3,7 @@ import { Check, CircleAlert, RefreshCw } from 'lucide-react'
 import { effectiveDrillholes, type LocalDrillholeDraft, type LocalProjectSnapshot } from '../data/localProjectDb.js'
 
 interface LiveDataPoolPanelProps {
+  connected?: boolean
   draft: LocalDrillholeDraft | null
   error: string | null
   onRefresh: () => Promise<void>
@@ -44,7 +45,7 @@ function issueText(summary: Record<string, number>): string {
 }
 
 /** Live view of what the Data Pool holds for the active project. */
-export function LiveDataPoolPanel({ draft, error, onRefresh, project, refreshing, snapshot }: LiveDataPoolPanelProps) {
+export function LiveDataPoolPanel({ connected = true, draft, error, onRefresh, project, refreshing, snapshot }: LiveDataPoolPanelProps) {
   const datasets = snapshot?.datasets ?? []
   const holes = effectiveDrillholes(snapshot, draft)
   const withCollar = holes.filter((hole) => hole.collar !== null).length
@@ -58,10 +59,10 @@ export function LiveDataPoolPanel({ draft, error, onRefresh, project, refreshing
     <>
       <section className="panel pool-sources-panel">
         <div className="panel-heading pool-console-heading">
-          <div><p className="eyebrow">Field feed</p><h2>{project.name}</h2></div>
+          <div><p className="eyebrow">{connected ? 'Field feed' : 'Local workspace'}</p><h2>{project.name}</h2></div>
           <div className="pool-console-actions">
             <span className="record-pill">{holes.length} drillholes · {withCollar} with collar · {surveyed} surveyed</span>
-            <button className="button button-secondary" disabled={refreshing} onClick={() => void onRefresh()} type="button">
+            <button className="button button-secondary" disabled={!connected || refreshing} onClick={() => void onRefresh()} title={connected ? undefined : 'Connect to the Database to refresh'} type="button">
               <RefreshCw className={refreshing ? 'spin' : ''} size={14} /> Refresh local copy
             </button>
           </div>

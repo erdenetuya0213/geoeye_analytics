@@ -100,26 +100,15 @@ function parseRecord(candidate: unknown): PointLoadRecord | null {
   }
 }
 
-const demoInputs: readonly (PointLoadRecordInput & { id: string })[] = [
-  { id: 'plt-018-082', sampleId: 'PLT-018-082', holeId: 'GOR-DD-018', depthFromM: 82, depthToM: 82.18, testType: 'diametral', peakLoadKn: 7.8, equivalentDiameterMm: 47.6, labName: 'GeoEye Core Lab', testedAt: '2026-09-26', validBreak: true },
-  { id: 'plt-018-084', sampleId: 'PLT-018-084', holeId: 'GOR-DD-018', depthFromM: 84, depthToM: 84.2, testType: 'axial', peakLoadKn: 6.4, equivalentDiameterMm: 43.1, labName: 'GeoEye Core Lab', testedAt: '2026-09-26', validBreak: true },
-  { id: 'plt-017-112', sampleId: 'PLT-017-112', holeId: 'GOR-DD-017', depthFromM: 112, depthToM: 112.17, testType: 'diametral', peakLoadKn: 9.1, equivalentDiameterMm: 48.2, labName: 'RockTest Mongolia', testedAt: '2026-09-24', validBreak: true },
-  { id: 'plt-017-115', sampleId: 'PLT-017-115', holeId: 'GOR-DD-017', depthFromM: 115, depthToM: 115.15, testType: 'block-irregular', peakLoadKn: 4.9, equivalentDiameterMm: 39.4, labName: 'RockTest Mongolia', testedAt: '2026-09-24', validBreak: false },
-]
-
-export const pointLoadDemoRecords: readonly PointLoadRecord[] = demoInputs.map(({ id, ...input }) => (
-  createPointLoadRecord(input, id, `${input.testedAt}T08:00:00.000Z`)
-))
-
-export function readPointLoadRecords(storage: StorageLike, seedDemo = true): PointLoadRecord[] {
+export function readPointLoadRecords(storage: StorageLike): PointLoadRecord[] {
   try {
     const raw = storage.getItem(storageKey)
-    if (raw === null) return seedDemo ? [...pointLoadDemoRecords] : []
+    if (raw === null) return []
     const parsed = JSON.parse(raw) as unknown
-    if (!Array.isArray(parsed)) return seedDemo ? [...pointLoadDemoRecords] : []
+    if (!Array.isArray(parsed)) return []
     return parsed.map(parseRecord).filter((record): record is PointLoadRecord => record !== null)
   } catch {
-    return seedDemo ? [...pointLoadDemoRecords] : []
+    return []
   }
 }
 

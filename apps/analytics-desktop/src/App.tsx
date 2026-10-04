@@ -1,14 +1,18 @@
-import { useCallback, useEffect, useState } from 'react'
+import { DataPoolError } from '@geoeye/datapool-client'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { AppShell } from './components/AppShell.js'
 import { ConnectionDialog } from './components/ConnectionDialog.js'
 import type { ConnectionDialogMode } from './components/ConnectionDialog.js'
+import { LoginPage } from './components/LoginPage.js'
+import { desktopBridge, type OfflineLicense } from './desktop/bridge.js'
+import { ActivationProvider } from './desktop/ActivationContext.js'
 import { SettingsDialog } from './components/SettingsDialog.js'
 import { SignOutDialog } from './components/SignOutDialog.js'
 import { themes } from './components/ThemeSwitcher.js'
 import type { ThemeId } from './components/ThemeSwitcher.js'
 import { DataPoolPage } from './pages/DataPoolPage.js'
 import { checkDataPoolConnection } from './data/dataPoolConnection.js'
-import { demoWorkspaceAllowed } from './data/demoPolicy.js'
+import { appStorage, clearStoredCredential, readStoredCredential, saveStoredCredential } from './desktop/runtime.js'
 import { DatasetToolPage } from './pages/DatasetToolPage.js'
 import type { DatasetSection } from './pages/DatasetToolPage.js'
 import { DomainPage } from './pages/DomainPage.js'
@@ -25,6 +29,7 @@ import { StrengthPage } from './pages/StrengthPage.js'
 import { ChartDesignProvider } from './state/ChartDesignContext.js'
 import { loadWorkspaceState, saveWorkspaceState } from './state/persistentState.js'
 import { DataPoolWorkspaceProvider } from './state/DataPoolWorkspaceContext.js'
+import { ProjectStorageProvider } from './state/ProjectStorageContext.js'
 import { StereonetThemeProvider } from './state/StereonetThemeContext.js'
 import type { ConnectionSettings, ConnectionState, SectionId } from './types.js'
 import { DEFAULT_CHART_DESIGN, isChartDesignId, type ChartDesignId } from './visualization/chartDesigns.js'
@@ -33,11 +38,12 @@ import { loadSceneTextPreferences, saveSceneTextPreferences, type SceneTextPrefe
 import { DEFAULT_STEREONET_THEME, isStereonetThemeId, type StereonetThemeId } from './visualization/stereonetThemes.js'
 
 const connectionStorageKey = 'geoeye.analytics.connection.v1'
-const connectionTokenStorageKey = 'geoeye.analytics.connection-token.v1'
 const configuredEndpoint = import.meta.env.VITE_DATAPOOL_ENDPOINT?.trim()
 const defaultConnection: ConnectionSettings = {
   version: 1,
-  endpoint: configuredEndpoint === undefined || configuredEndpoint === '' ? '/api' : configuredEndpoint,
+  endpoint: configuredEndpoint === undefined || configuredEndpoint === ''
+    ? typeof window !== 'undefined' && window.geoeyeDesktop !== undefined ? '' : '/api'
+    : configuredEndpoint,
   token: '',
 }
 const themeStorageKey = 'theme'
@@ -51,34 +57,46 @@ function isDatasetSection(section: SectionId): section is DatasetSection {
 }
 
 function loadTheme(): ThemeId {
-  const stored = window.localStorage.getItem(themeStorageKey)
+  const stored = appStorage.getItem(themeStorageKey)
   return themes.some((theme) => theme.id === stored) ? stored as ThemeId : 'theme-core-console'
 }
 
 function loadChartDesign(): ChartDesignId {
-  const stored = window.localStorage.getItem(chartDesignStorageKey)
+  const stored = appStorage.getItem(chartDesignStorageKey)
   return isChartDesignId(stored) ? stored : DEFAULT_CHART_DESIGN
 }
 
 function loadStereonetTheme(): StereonetThemeId {
-  const stored = window.localStorage.getItem(stereonetThemeStorageKey)
+  const stored = appStorage.getItem(stereonetThemeStorageKey)
   return isStereonetThemeId(stored) ? stored : DEFAULT_STEREONET_THEME
 }
 
 function loadConnection(): ConnectionSettings {
   try {
-    const raw = window.localStorage.getItem(connectionStorageKey)
+    const raw = appStorage.getItem(connectionStorageKey)
     if (raw === null) return defaultConnection
     const candidate = JSON.parse(raw) as Partial<ConnectionSettings>
     if (candidate.version !== 1 || typeof candidate.endpoint !== 'string') {
       return defaultConnection
     }
-    // Access tokens are session-only. Rewriting also removes tokens persisted by older builds.
-    window.localStorage.setItem(connectionStorageKey, JSON.stringify({ version: 1, endpoint: candidate.endpoint }))
+    const endpoint = candidate.endpoint.trim().replace(/\/+$/, '')
+    if (typeof window !== 'undefined' && window.geoeyeDesktop !== undefined) {
+      try {
+        const url = new URL(endpoint)
+        if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new Error('Unsupported protocol')
+      } catch {
+        clearStoredCredential()
+        return defaultConnection
+      }
+    }
+    // Tokens live in Windows-protected storage, not the general settings file.
+    appStorage.setItem(connectionStorageKey, JSON.stringify({ version: 1, endpoint }))
+    const credential = readStoredCredential()
     return {
       version: 1,
-      endpoint: candidate.endpoint,
-      token: window.sessionStorage.getItem(connectionTokenStorageKey) ?? '',
+      endpoint,
+      token: credential?.token ?? '',
+      ...(credential?.accountId === undefined ? {} : { accountId: credential.accountId }),
     }
   } catch {
     return defaultConnection
@@ -95,31 +113,88 @@ function loadInitialSection(): SectionId {
 }
 
 export function App() {
+  const [license, setLicense] = useState<OfflineLicense | null>(null)
+  const [activationLoading, setActivationLoading] = useState(true)
+  const [activationError, setActivationError] = useState<string | null>(null)
+  const activationRequest = useRef(0)
   const [section, setActiveSection] = useState<SectionId>(loadInitialSection)
   const [connectionSettings, setConnectionSettings] = useState<ConnectionSettings>(loadConnection)
-  const [connectionState, setConnectionState] = useState<ConnectionState>('demo')
+  const [connectionState, setConnectionState] = useState<ConnectionState>('checking')
   const [theme, setTheme] = useState<ThemeId>(loadTheme)
   const [chartDesign, setChartDesign] = useState<ChartDesignId>(loadChartDesign)
   const [stereonetTheme, setStereonetTheme] = useState<StereonetThemeId>(loadStereonetTheme)
-  const [sceneBackgroundPreferences, setSceneBackgroundPreferences] = useState(() => loadSceneBackgroundPreferences(window.localStorage))
-  const [sceneTextPreferences, setSceneTextPreferences] = useState(() => loadSceneTextPreferences(window.localStorage))
+  const [sceneBackgroundPreferences, setSceneBackgroundPreferences] = useState(() => loadSceneBackgroundPreferences(appStorage))
+  const [sceneTextPreferences, setSceneTextPreferences] = useState(() => loadSceneTextPreferences(appStorage))
   const [connectionDialogMode, setConnectionDialogMode] = useState<ConnectionDialogMode | null>(null)
   const [showSettings, setShowSettings] = useState(false)
   const [showSignOutConfirmation, setShowSignOutConfirmation] = useState(false)
   const sceneBackground = sceneBackgroundPreferences.color
 
-  // Set when the user explicitly chooses the sample-data workspace (development only).
-  const [preferDemo, setPreferDemo] = useState(false)
+  const acceptActivation = (value: OfflineLicense) => {
+    activationRequest.current += 1
+    setLicense(value)
+    setActivationError(null)
+    setActivationLoading(false)
+  }
 
   useEffect(() => {
-    if (preferDemo) {
-      setConnectionState('demo')
-      return undefined
+    let active = true
+    const refresh = async () => {
+      const request = ++activationRequest.current
+      try {
+        const result = await desktopBridge()?.activationStatus()
+        if (!active || request !== activationRequest.current) return
+        setLicense(result?.license ?? null)
+        setActivationError(result?.error ?? null)
+      } catch {
+        if (!active || request !== activationRequest.current) return
+        setLicense(null)
+        setActivationError('The saved activation could not be verified. Enter your key again.')
+      } finally {
+        if (active && request === activationRequest.current) setActivationLoading(false)
+      }
     }
+    void refresh()
+    const interval = window.setInterval(() => void refresh(), 60_000)
+    const onResume = () => { if (document.visibilityState === 'visible') void refresh() }
+    window.addEventListener('focus', onResume)
+    document.addEventListener('visibilitychange', onResume)
+    return () => {
+      active = false
+      window.clearInterval(interval)
+      window.removeEventListener('focus', onResume)
+      document.removeEventListener('visibilitychange', onResume)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (license === null) return
+    const remaining = Date.parse(license.expiresAt) - Date.now()
+    if (remaining > 2_147_483_647) return // Periodic checks cover long-lived licenses.
+    const timer = window.setTimeout(() => {
+      activationRequest.current += 1
+      setLicense(null)
+      setActivationError('Your activation key has expired. Enter a renewed key to continue.')
+    }, Math.max(0, remaining))
+    return () => window.clearTimeout(timer)
+  }, [license])
+
+  useEffect(() => {
+    if (license === null) return
+    let active = true
+    void desktopBridge()?.databaseConfiguration().then((configuration) => {
+      if (active && configuration !== null) {
+        setConnectionSettings({ version: 1, endpoint: configuration.endpoint, accountId: configuration.accountId, managed: true, token: '' })
+      }
+    }).catch(() => { if (active) setConnectionState('unavailable') })
+    return () => { active = false }
+  }, [license?.accountId])
+
+  useEffect(() => {
     // A Data Pool endpoint is not an authenticated session by itself. In
     // particular, do not let a public/open endpoint sign the user straight
     // back in after they explicitly removed their session token.
-    if (connectionSettings.token === '') {
+    if (license === null || (connectionSettings.token === '' && !connectionSettings.managed)) {
       setConnectionState('unavailable')
       return undefined
     }
@@ -127,33 +202,49 @@ export function App() {
     setConnectionState('checking')
     void checkDataPoolConnection(connectionSettings).then(
       () => { if (active) setConnectionState('connected') },
-      () => { if (active) setConnectionState('unavailable') },
+      (error) => {
+        if (!active) return
+        if (error instanceof DataPoolError && error.status === 401) {
+          clearStoredCredential()
+          setConnectionSettings((current) => ({ ...current, token: '' }))
+        }
+        setConnectionState('unavailable')
+      },
     )
     return () => { active = false }
-  }, [connectionSettings, preferDemo])
+  }, [connectionSettings, license?.accountId])
 
-  const signOut = useCallback(() => {
+  const disconnectDatabase = useCallback(() => {
     setShowSignOutConfirmation(false)
-    window.sessionStorage.removeItem(connectionTokenStorageKey)
-    setPreferDemo(demoWorkspaceAllowed)
+    clearStoredCredential()
     setConnectionSettings((current) => current.token === '' ? current : { ...current, token: '' })
-    setConnectionState(demoWorkspaceAllowed ? 'demo' : 'unavailable')
-    // In demo-enabled builds the shell remains available, so explicitly show
-    // the account form instead of leaving the user at an ambiguous connection
-    // button. Production builds render the required sign-in gate below.
-    setConnectionDialogMode('sign-in')
+    setConnectionState('unavailable')
   }, [])
+
+  const signOut = useCallback(async () => {
+    activationRequest.current += 1
+    try {
+      await desktopBridge()?.logoutActivation()
+      activationRequest.current += 1
+      disconnectDatabase()
+      setConnectionSettings((current) => ({ version: 1, endpoint: current.endpoint, token: '' }))
+      setLicense(null)
+      setActivationError(null)
+    } catch {
+      setActivationError('Sign out could not be saved. Please try again.')
+    }
+  }, [disconnectDatabase])
 
   const requestSignOut = useCallback(() => setShowSignOutConfirmation(true), [])
   const cancelSignOut = useCallback(() => setShowSignOutConfirmation(false), [])
-  const confirmSignOut = useCallback(() => signOut(), [signOut])
+  const confirmSignOut = useCallback(() => { void signOut() }, [signOut])
 
   useEffect(() => {
-    saveSceneBackgroundPreferences(window.localStorage, sceneBackgroundPreferences)
+    saveSceneBackgroundPreferences(appStorage, sceneBackgroundPreferences)
   }, [sceneBackgroundPreferences])
 
   useEffect(() => {
-    saveSceneTextPreferences(window.localStorage, sceneTextPreferences)
+    saveSceneTextPreferences(appStorage, sceneTextPreferences)
   }, [sceneTextPreferences])
 
   const setSection = useCallback((next: SectionId) => {
@@ -171,17 +262,17 @@ export function App() {
   const closeSettings = useCallback(() => setShowSettings(false), [])
 
   const changeTheme = (nextTheme: ThemeId) => {
-    window.localStorage.setItem(themeStorageKey, nextTheme)
+    appStorage.setItem(themeStorageKey, nextTheme)
     setTheme(nextTheme)
   }
 
   const changeChartDesign = (nextDesign: ChartDesignId) => {
-    window.localStorage.setItem(chartDesignStorageKey, nextDesign)
+    appStorage.setItem(chartDesignStorageKey, nextDesign)
     setChartDesign(nextDesign)
   }
 
   const changeStereonetTheme = (nextTheme: StereonetThemeId) => {
-    window.localStorage.setItem(stereonetThemeStorageKey, nextTheme)
+    appStorage.setItem(stereonetThemeStorageKey, nextTheme)
     setStereonetTheme(nextTheme)
   }
 
@@ -199,28 +290,22 @@ export function App() {
   }, [])
 
   const saveConnection = (settings: ConnectionSettings, state: ConnectionState) => {
-    window.localStorage.setItem(
+    appStorage.setItem(
       connectionStorageKey,
       JSON.stringify({ version: settings.version, endpoint: settings.endpoint }),
     )
-    if (settings.token === '') window.sessionStorage.removeItem(connectionTokenStorageKey)
-    else window.sessionStorage.setItem(connectionTokenStorageKey, settings.token)
-    setPreferDemo(state === 'demo')
+    if (settings.token === '') clearStoredCredential()
+    else saveStoredCredential({ token: settings.token, ...(settings.accountId === undefined ? {} : { accountId: settings.accountId }) })
     setConnectionSettings(settings)
     setConnectionState(state)
     setConnectionDialogMode(null)
   }
 
-  const signedIn = connectionSettings.token !== '' && connectionState === 'connected'
-
-  // Production builds have no sample-data workspace: without a session there is
-  // nothing to show except the sign-in form.
-  if (!demoWorkspaceAllowed && !signedIn) {
+  if (activationLoading) return <div className="app-bootstrap-state">Checking offline activation…</div>
+  if (license === null) {
     return (
-      <div className={`app-shell sign-in-gate theme-geoeye-industrial ${theme} chart-design-${chartDesign}`}>
-        {connectionState === 'checking' ? null : (
-          <ConnectionDialog initialSettings={connectionSettings} mode="sign-in" onClose={closeConnection} onSave={saveConnection} required />
-        )}
+      <div className={`login-theme-surface theme-geoeye-industrial ${theme} chart-design-${chartDesign}`}>
+        <LoginPage initialError={activationError} onActivated={acceptActivation} />
       </div>
     )
   }
@@ -255,38 +340,44 @@ export function App() {
   }
 
   return (
+    <ActivationProvider license={license}>
     <DataPoolWorkspaceProvider
+      key={`${license.accountId}:${connectionSettings.accountId ?? 'local'}:${connectionSettings.endpoint}`}
       connectionSettings={connectionSettings}
       connectionState={connectionState}
-      onSessionExpired={signOut}
+      onSessionExpired={disconnectDatabase}
       onSignOut={requestSignOut}
     >
-      <StereonetThemeProvider themeId={stereonetTheme}>
-        <ChartDesignProvider designId={chartDesign}>
-          <AppShell
-            active={section}
-            chartDesign={chartDesign}
-            onNavigate={setSection}
-            onOpenConnection={() => setConnectionDialogMode('connection')}
-            onOpenSettings={() => setShowSettings(true)}
-            onSignIn={() => setConnectionDialogMode('sign-in')}
-            onThemeChange={changeTheme}
-            theme={theme}
-          >
-            {page}
-          </AppShell>
-        </ChartDesignProvider>
-      </StereonetThemeProvider>
-      {connectionDialogMode !== null ? (
-        <ConnectionDialog
-          initialSettings={connectionSettings}
-          mode={connectionDialogMode}
-          onClose={closeConnection}
-          onSave={saveConnection}
-        />
-      ) : null}
-      {showSettings ? <div className={`settings-theme-surface theme-geoeye-industrial ${theme}`}><SettingsDialog chartDesign={chartDesign} onChartDesignChange={changeChartDesign} onClose={closeSettings} onSceneBackgroundChange={changeSceneBackground} onSceneTextChange={changeSceneText} onStereonetThemeChange={changeStereonetTheme} sceneBackground={sceneBackground} sceneBackgroundHistory={sceneBackgroundPreferences.recentColors} sceneText={sceneTextPreferences} stereonetTheme={stereonetTheme} /></div> : null}
-      {showSignOutConfirmation ? <SignOutDialog onCancel={cancelSignOut} onConfirm={confirmSignOut} /> : null}
+      <ProjectStorageProvider>
+        {activationError ? <div role="alert">{activationError}</div> : null}
+        <StereonetThemeProvider themeId={stereonetTheme}>
+          <ChartDesignProvider designId={chartDesign}>
+            <AppShell
+              active={section}
+              chartDesign={chartDesign}
+              onNavigate={setSection}
+              onOpenConnection={() => setConnectionDialogMode('connection')}
+              onOpenSettings={() => setShowSettings(true)}
+              onSignIn={() => setConnectionDialogMode('sign-in')}
+              onThemeChange={changeTheme}
+              theme={theme}
+            >
+              {page}
+            </AppShell>
+          </ChartDesignProvider>
+        </StereonetThemeProvider>
+        {connectionDialogMode !== null ? (
+          <ConnectionDialog
+            initialSettings={connectionSettings}
+            mode={connectionDialogMode}
+            onClose={closeConnection}
+            onSave={saveConnection}
+          />
+        ) : null}
+        {showSettings ? <div className={`settings-theme-surface theme-geoeye-industrial ${theme}`}><SettingsDialog chartDesign={chartDesign} onChartDesignChange={changeChartDesign} onClose={closeSettings} onSceneBackgroundChange={changeSceneBackground} onSceneTextChange={changeSceneText} onStereonetThemeChange={changeStereonetTheme} sceneBackground={sceneBackground} sceneBackgroundHistory={sceneBackgroundPreferences.recentColors} sceneText={sceneTextPreferences} stereonetTheme={stereonetTheme} /></div> : null}
+        {showSignOutConfirmation ? <SignOutDialog onCancel={cancelSignOut} onConfirm={confirmSignOut} /> : null}
+      </ProjectStorageProvider>
     </DataPoolWorkspaceProvider>
+    </ActivationProvider>
   )
 }

@@ -540,11 +540,11 @@ Recommended framework:
 
 | Layer | Framework |
 |---|---|
-| Desktop shell | Tauri 2 |
+| Desktop shell | Electron (sandboxed renderer and narrow preload bridge) |
 | Frontend | React + TypeScript |
 | Build | Vite |
-| Local analytical DB | DuckDB |
-| Analytical file format | Parquet |
+| Local project DB | SQLite (durable normalized working replica) |
+| Analytical file format | Regular JSON/PNG files today; Parquet/Arrow for large columnar workloads |
 | Data interchange | Apache Arrow |
 | Scientific engine | Python |
 | Spatial database | PostgreSQL/PostGIS centrally |
@@ -564,7 +564,7 @@ local RAM
 GPU
 local files
 large 3D datasets
-high-performance analytical cache
+durable local project databases and analytical outputs
 local laboratory outputs
 ```
 
@@ -835,31 +835,36 @@ PostgreSQL → Parquet / Arrow → DuckDB → Python
 
 ## 20. Local Analytics Workspace
 
-Example:
+The Windows application uses two deliberately separate roots:
 
 ```text
-GeoEye/
-└── projects/
-    └── DMP/
-        ├── project.duckdb
-        ├── snapshot.json
-        │
-        ├── data/
-        │   ├── field.parquet
-        │   ├── structures.parquet
-        │   ├── assays.parquet
-        │   ├── xrf.parquet
-        │   └── geotech.parquet
-        │
-        ├── runs/
-        └── cache/
+%LOCALAPPDATA%/GeoEye/Analytics/       application-private root
+├── settings.json                     endpoint, UI, and workspace registry
+├── secrets/database-session.bin      Windows-encrypted session material
+└── Cache/WebData/                    disposable embedded-browser data
+
+<user-selected folder>/GeoEye/        durable, user-owned data root
+├── workspace.json
+├── tenants/<tenant>/projects/<project>/
+│   ├── project.sqlite                normalized synced data and local work
+│   └── objects/                      analysis JSON, PNG, and future large files
+├── imports/
+├── exports/
+└── sync/
 ```
 
-This workspace is **not authoritative storage**.
+The selected workspace is not browser cache. It is the durable local working copy and the initial
+authority for unpublished local edits and generated analysis results. Shared primary observations remain
+authoritative in the Data Pool after synchronization; accepted derived results become shared through the
+Data Pool publication workflow.
 
-It is a local high-performance analytical cache/workspace.
+`project.sqlite` mirrors domain concepts with explicit tables for projects, variables, datasets,
+drillholes, collars, surveys, observations, logging, drafts, sync state, analysis runs, lineage, result
+packages, and artifact metadata. Pending offline changes are recorded in `sync_journal`. Generated files
+are stored as normal files and linked by relative path and SHA-256 checksum.
 
-The Data Pool remains the source of truth.
+Only the application-private root may contain credentials. The user-selected workspace must remain
+portable and must never contain bearer tokens or database passwords.
 
 ---
 
@@ -1569,7 +1574,7 @@ These should be treated as non-negotiable architecture decisions unless formally
 9. **Use an analytical projection for dynamic JSON-based Field observations.**
 10. **Collar/survey are shared Data Pool data; Analytics provides their main editing UI.**
 11. **Analytics performs heavy computation locally.**
-12. **DuckDB/Parquet is an analytical workspace/cache, not the source of truth.**
+12. **The user-selected local workspace is durable filesystem storage, never browser cache; server-synced primary data remains authoritative in the Data Pool.**
 13. **PostgreSQL/PostGIS remains authoritative structured storage.**
 14. **Large objects use S3-compatible storage/MinIO, not PostgreSQL blobs.**
 15. **Cloud and on-prem must use the same database model and API contract.**

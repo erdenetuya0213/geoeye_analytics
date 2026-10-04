@@ -40,7 +40,7 @@ export function SignOutDialog({ onCancel, onConfirm }: SignOutDialogProps) {
         </div>
 
         <div className="dialog-body sign-out-dialog-body">
-          <p id="sign-out-description">You will need to enter your email and password to access this workspace again.</p>
+          <p id="sign-out-description">You will need to enter your email and activation key to access this workspace again. Your local project files stay on this computer.</p>
         </div>
 
         <div className="dialog-footer">

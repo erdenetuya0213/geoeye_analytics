@@ -13,17 +13,21 @@ import {
 } from '../analysis/multivariateEngine.js'
 import { useMultivariateEngine } from '../analysis/useMultivariateEngine.js'
 import { GeoEyeChart } from '../components/GeoEyeChart.js'
-import { type EdaDataset, type EdaVariableDefinition } from '../data/edaDemo.js'
+import { EdaDatasetOptions } from '../components/EdaDatasetOptions.js'
+import { type EdaDataset, type EdaVariableDefinition } from '../data/edaTypes.js'
 import { useProjectEdaDatasets } from '../data/liveEda.js'
 import { currentAnalysisTemplateVersion, recordAnalysisTemplateSave, resolveAnalysisTemplateVersion } from '../data/analysisSaveStore.js'
 import { barGraphImage, scatterGraphImage } from '../data/analysisGraphImages.js'
 import { saveAnalysisResultPackage } from '../data/analysisResultStore.js'
+import { useDurableAction } from '../state/useDurableAction.js'
 import { saveMultivariateDerivedVariables } from '../data/multivariateDerivedStore.js'
 import { saveMultivariateDomainEvidence } from '../data/multivariateEvidenceStore.js'
 import { saveSpatialViewRequest } from '../data/spatialViewStore.js'
 import { useGeoEyeSelection } from '../state/SelectionContext.js'
+import { useDataPoolWorkspace } from '../state/DataPoolWorkspaceContext.js'
 import type { SectionId } from '../types.js'
 import { usePersistentState } from '../state/persistentState.js'
+import { useProjectStorage } from '../state/ProjectStorageContext.js'
 import {
   buildClusterProfilesOption,
   buildClusterScoresOption,
@@ -40,7 +44,7 @@ const scalingLabels: Record<MultivariateScaling, string> = { none: 'None (raw un
 const missingLabels: Record<MultivariateMissingPolicy, string> = { 'complete-case': 'Complete cases', 'median-impute': 'Median imputation' }
 const clusterColors = ['#25887c', '#c7732d', '#6d5a9b', '#5488a5', '#70a58e', '#b06f7b', '#9d874d', '#537067']
 
-function nextRunNumber(storage: Storage) {
+function nextRunNumber(storage: Pick<Storage, 'getItem' | 'setItem'>) {
   const key = 'geoeye.analytics.multivariate-run-number.v1'
   const current = Number.parseInt(storage.getItem(key) ?? '0', 10)
   const next = Number.isFinite(current) ? current + 1 : 1
@@ -68,8 +72,7 @@ function dimensionLabel(dataset: EdaDataset | undefined, key: string | null) {
 
 function comparisonDimensions(dataset: EdaDataset | undefined) {
   if (dataset === undefined) return []
-  const preferred = /lithology|alteration|domain|drillhole|hole|structural|geotech|class/i
-  return dataset.dimensions.filter((dimension) => preferred.test(`${dimension.key} ${dimension.label}`))
+  return dataset.dimensions.filter((dimension) => dimensionValues(dataset, dimension.key).length > 0)
 }
 
 function clusterIsSmall(count: number, total: number) {
@@ -92,9 +95,12 @@ interface MultivariatePageProps {
 }
 
 export function MultivariatePage({ onNavigate }: MultivariatePageProps) {
+  const storage = useProjectStorage()
+  const durable = useDurableAction()
+  const workspace = useDataPoolWorkspace()
   const queryClient = useQueryClient()
   const datasetsQuery = useProjectEdaDatasets()
-  const [datasetId, setDatasetId] = usePersistentState('multivariate.datasetId', 'demo-integrated-gold-geology-v4')
+  const [datasetId, setDatasetId] = usePersistentState('multivariate.datasetId', '')
   const [variableKeys, setVariableKeys] = usePersistentState<string[]>('multivariate.variableKeys', ['assay.au', 'assay.cu', 'assay.as', 'geotech.rqd', 'geotech.ucs'])
   const [activeFilterKeys, setActiveFilterKeys] = usePersistentState<string[]>('multivariate.activeFilterKeys', [])
   const [filterValues, setFilterValues] = usePersistentState<Record<string, string>>('multivariate.filterValues', {})
@@ -102,6 +108,7 @@ export function MultivariatePage({ onNavigate }: MultivariatePageProps) {
   const [missingPolicy, setMissingPolicy] = usePersistentState<MultivariateMissingPolicy>('multivariate.missingPolicy', 'complete-case')
   const [clusterCount, setClusterCount] = usePersistentState('multivariate.clusterCount', 3)
   const [groupBy, setGroupBy] = usePersistentState<string | null>('multivariate.groupBy', 'lithology')
+  const [secondGroup, setSecondGroup] = usePersistentState<string | null>('multivariate.secondGroup', null)
   const [view, setView] = usePersistentState<MultivariateView>('multivariate.view', 'overview')
   const [submittedRequest, setSubmittedRequest] = useState<MultivariateRunRequest | null>(null)
   const [activeRun, setActiveRun] = usePersistentState<MultivariateRunResult | null>('multivariate.activeRun', null)
@@ -129,8 +136,8 @@ export function MultivariatePage({ onNavigate }: MultivariatePageProps) {
 
   const draftConfiguration = useMemo((): MultivariateConfiguration | null => dataset === undefined ? null : ({
     activeFilterKeys, clusterCount, correlationMethod: 'pearson', datasetId: dataset.id, datasetName: dataset.name, filterValues,
-    groupBy, method: 'full', missingPolicy, scaling, snapshotAt: dataset.snapshotAt, supportLabel: dataset.support, variableKeys: effectiveVariableKeys,
-  }), [activeFilterKeys, clusterCount, dataset, effectiveVariableKeys, filterValues, groupBy, missingPolicy, scaling])
+    groupBy, method: 'full', missingPolicy, scaling, secondGroup: groupBy === null ? null : secondGroup, snapshotAt: dataset.snapshotAt, supportLabel: dataset.support, variableKeys: effectiveVariableKeys,
+  }), [activeFilterKeys, clusterCount, dataset, effectiveVariableKeys, filterValues, groupBy, missingPolicy, scaling, secondGroup])
   const draftSignature = draftConfiguration === null ? null : multivariateConfigurationSignature(draftConfiguration)
   const configurationChanged = activeRun !== null && activeRun.configurationSignature !== draftSignature
 
@@ -142,14 +149,17 @@ export function MultivariatePage({ onNavigate }: MultivariatePageProps) {
     if (datasetChanged) setDatasetId(dataset.id)
     if (validKeys.length < Math.min(2, numericKeys.length)) setVariableKeys(numericKeys.slice(0, 6))
     else if (validKeys.length !== variableKeys.length) setVariableKeys(validKeys)
+    if (groupBy !== null && !dataset.dimensions.some((dimension) => dimension.key === groupBy)) setGroupBy(dataset.dimensions[0]?.key ?? null)
+    if (secondGroup !== null && (groupBy === null || !dataset.dimensions.some((dimension) => dimension.key === secondGroup) || secondGroup === groupBy)) setSecondGroup(null)
     if (datasetChanged) {
       autoRunRequestedRef.current = false
       setSubmittedRequest(null)
       setActiveRun(null)
       setHasRun(false)
       setGroupBy(dataset.dimensions.find((dimension) => dimension.key === 'lithology')?.key ?? dataset.dimensions[0]?.key ?? null)
+      setSecondGroup(null)
     }
-  }, [dataset, datasetId, variableKeys])
+  }, [dataset, datasetId, groupBy, secondGroup, variableKeys])
 
   useEffect(() => {
     if (runEngine.result === null) return
@@ -176,7 +186,7 @@ export function MultivariatePage({ onNavigate }: MultivariatePageProps) {
     if (autoRunRequestedRef.current || draftConfiguration === null || dataset === undefined || activeRun !== null || submittedRequest !== null || draftConfiguration.variableKeys.length < 2) return
     autoRunRequestedRef.current = true
     restoringRunRef.current = hasRun
-    const runNumber = typeof window === 'undefined' ? 1 : nextRunNumber(window.localStorage)
+    const runNumber = typeof window === 'undefined' ? 1 : nextRunNumber(storage)
     setSubmittedRequest(buildMultivariateRunRequest(draftConfiguration, dataset, runNumber))
   }, [activeRun, dataset, draftConfiguration, submittedRequest])
 
@@ -193,7 +203,7 @@ export function MultivariatePage({ onNavigate }: MultivariatePageProps) {
   const componentOptions = activeRun === null ? [] : Array.from({ length: activeRun.pca.componentCount }, (_, index) => index)
   const currentTemplateVersion = activeRun === null || typeof window === 'undefined'
     ? 1
-    : currentAnalysisTemplateVersion(window.localStorage, activeRun.configuration.datasetId, 1)
+    : currentAnalysisTemplateVersion(storage, activeRun.configuration.datasetId, 1)
   const smallClusters = activeRun === null ? [] : activeRun.clustering.counts.flatMap((count, index) => clusterIsSmall(count, activeRun.missing.analysisCount) ? [index + 1] : [])
   const orderedRows = activeRun === null ? [] : [...activeRun.rows].sort((left, right) => {
     const leftSelected = left.sourceObservationIds.some((id) => selectedSet.has(id))
@@ -210,6 +220,7 @@ export function MultivariatePage({ onNavigate }: MultivariatePageProps) {
     setActiveFilterKeys([])
     setFilterValues({})
     setGroupBy(next.dimensions.find((dimension) => dimension.key === 'lithology')?.key ?? next.dimensions[0]?.key ?? null)
+    setSecondGroup(null)
     clearSelection()
   }
   const toggleVariable = (key: string) => {
@@ -229,23 +240,23 @@ export function MultivariatePage({ onNavigate }: MultivariatePageProps) {
   const runAnalysis = () => {
     if (draftConfiguration === null || draftConfiguration.variableKeys.length < 2 || runEngine.pending) return
     restoringRunRef.current = false
-    const runNumber = typeof window === 'undefined' ? (activeRun?.runNumber ?? 0) + 1 : nextRunNumber(window.localStorage)
+    const runNumber = typeof window === 'undefined' ? (activeRun?.runNumber ?? 0) + 1 : nextRunNumber(storage)
     setSubmittedRequest(buildMultivariateRunRequest(draftConfiguration, dataset, runNumber))
   }
   const toggleSavedComponent = (component: number) => {
     setSavedPcaComponents((current) => current.includes(component) ? current.filter((candidate) => candidate !== component) : [...current, component].sort())
   }
-  const saveDerived = (createVersion: boolean) => {
-    if (activeRun === null || typeof window === 'undefined' || (!saveClusters && savedPcaComponents.length === 0 && !saveClusterMetrics)) return
+  const saveDerived = (createVersion: boolean) => durable.perform(async () => {
+    if (activeRun === null || workspace.project === null || typeof window === 'undefined' || (!saveClusters && savedPcaComponents.length === 0 && !saveClusterMetrics)) return
     const templateId = activeRun.configuration.datasetId
-    const templateVersion = resolveAnalysisTemplateVersion(window.localStorage, {
+    const templateVersion = resolveAnalysisTemplateVersion(storage, {
       fallbackVersion: 1,
       mode: createVersion ? 'new-version' : 'overwrite',
       templateId,
     })
     const savedAt = new Date().toISOString()
     const analysisFileId = `multivariate/${templateId}/v${templateVersion}.json`
-    const document = saveMultivariateDerivedVariables(window.localStorage, activeRun, {
+    const document = saveMultivariateDerivedVariables(storage, activeRun, {
       clusterMetrics: saveClusterMetrics,
       clusters: saveClusters,
       pcaComponents: savedPcaComponents,
@@ -255,7 +266,7 @@ export function MultivariatePage({ onNavigate }: MultivariatePageProps) {
     const derivedFieldKeys = document.fields
       .filter((field) => field.templateId === templateId && field.templateVersion === templateVersion)
       .map((field) => field.key)
-    recordAnalysisTemplateSave(window.localStorage, {
+    recordAnalysisTemplateSave(storage, {
       analysisFileId,
       derivedFieldKeys,
       feature: 'multivariate',
@@ -264,7 +275,7 @@ export function MultivariatePage({ onNavigate }: MultivariatePageProps) {
       templateId,
       templateVersion,
     })
-    saveAnalysisResultPackage(window.localStorage, {
+    await saveAnalysisResultPackage(storage, {
       analysisFileId,
       analysisPayload: activeRun,
       boreholeIds: activeRun.rows.flatMap((row) => row.holeId === undefined ? [] : [row.holeId]),
@@ -277,18 +288,18 @@ export function MultivariatePage({ onNavigate }: MultivariatePageProps) {
         scatterGraphImage('pca-scores', 'PCA scores · PC1 / PC2', activeRun.rows.map((row) => ({ x: row.scores[0] ?? 0, y: row.scores[1] ?? 0 }))),
       ],
       inputName: activeRun.configuration.variableKeys.join('-'),
-      projectId: runDataset?.project ?? 'Oyu Ridge',
+      projectId: workspace.project.id,
       runId: activeRun.runId,
       sourceFileName: `${activeRun.configuration.datasetName}.json`,
       sourceObservationIds: activeRun.rows.flatMap((row) => row.sourceObservationIds),
       templateId,
       templateVersion,
-      tenantId: 'GeoEye Demo',
+      tenantId: workspace.project.organizationId ?? '_unassigned',
     })
     setSavedRunId(activeRun.runId)
     setSavedTemplateVersion(templateVersion)
     void queryClient.invalidateQueries({ queryKey: ['eda-datasets'] })
-  }
+  })
   const selectCluster = (cluster: number) => {
     if (activeRun === null) return
     replaceSelection(activeRun.rows.filter((row) => row.cluster === cluster).flatMap((row) => row.sourceObservationIds))
@@ -300,7 +311,7 @@ export function MultivariatePage({ onNavigate }: MultivariatePageProps) {
   }
   const sendDomainEvidence = (cluster: number) => {
     if (activeRun === null || typeof window === 'undefined') return
-    saveMultivariateDomainEvidence(window.localStorage, activeRun, [cluster])
+    saveMultivariateDomainEvidence(storage, activeRun, [cluster])
     setEvidenceCluster(cluster)
     selectCluster(cluster)
     onNavigate('domain')
@@ -311,7 +322,7 @@ export function MultivariatePage({ onNavigate }: MultivariatePageProps) {
       ? [...selectedIds]
       : activeRun.rows.filter((row) => row.cluster === cluster).flatMap((row) => row.sourceObservationIds)
     replaceSelection(ids)
-    saveSpatialViewRequest(window.localStorage, {
+    saveSpatialViewRequest(storage, {
       colorBy: cluster === undefined ? 'lithology' : 'candidate',
       datasetId: activeRun.configuration.datasetId,
       label: `Multivariate Run #${String(activeRun.runNumber).padStart(2, '0')}${cluster === undefined ? ' · linked selection' : ` · Cluster C${cluster}`}`,
@@ -334,12 +345,15 @@ export function MultivariatePage({ onNavigate }: MultivariatePageProps) {
   </div>
 
   return <div className="page multivariate-page">
+    {durable.notice ? <p role="status">{durable.notice}</p> : null}
     <h1 className="sr-only">Multivariate analysis</h1>
     <div className="analysis-toolbar eda-toolbar mv-toolbar">
-      <label className="tool-select tool-select-field mv-dataset-select"><span>Dataset snapshot</span><select aria-label="Multivariate dataset" onChange={(event) => changeDataset(event.target.value)} value={dataset.id}>{datasets.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><ChevronDown size={14} /></label>
-      <details className="eda-variable-picker mv-variable-picker"><summary aria-label="Select multivariate variables"><span>Variables</span><strong>{draftVariables.length} selected</strong><ChevronDown size={14} /></summary><div><div className="mv-picker-heading"><span>Numeric inputs</span><small>Choose 2–10</small></div>{dataset.variables.filter((item) => item.dataType !== 'category').map((item) => <label key={item.key}><input checked={variableKeys.includes(item.key)} disabled={!variableKeys.includes(item.key) && variableKeys.length >= 10} onChange={() => toggleVariable(item.key)} type="checkbox" /><span><strong>{item.shortLabel}</strong><small>{item.label} · {item.unit}</small></span>{item.origin === 'derived' ? <em>Derived</em> : null}</label>)}<div className="mv-picker-heading"><span>Categorical context</span><small>Initial comparison</small></div>{dataset.dimensions.map((dimension) => <label key={dimension.key}><input checked={groupBy === dimension.key} onChange={() => setGroupBy(dimension.key)} type="radio" /><span><strong>{dimension.label}</strong><small>Retained for population comparison</small></span></label>)}</div></details>
+      <label className="tool-select tool-select-field mv-dataset-select"><span>Dataset snapshot</span><select aria-label="Multivariate dataset" onChange={(event) => changeDataset(event.target.value)} value={dataset.id}><EdaDatasetOptions datasets={datasets} /></select><ChevronDown size={14} /></label>
+      <details className="eda-variable-picker mv-variable-picker"><summary aria-label="Select multivariate variables"><span>Variables</span><strong>{draftVariables.length} selected</strong><ChevronDown size={14} /></summary><div><div className="mv-picker-heading"><span>Numeric inputs</span><small>Choose 2–10</small></div>{dataset.variables.filter((item) => item.dataType !== 'category').map((item) => <label key={item.key}><input checked={variableKeys.includes(item.key)} disabled={!variableKeys.includes(item.key) && variableKeys.length >= 10} onChange={() => toggleVariable(item.key)} type="checkbox" /><span><strong>{item.shortLabel}</strong><small>{item.label} · {item.unit}</small></span>{item.origin === 'derived' ? <em>Derived</em> : null}</label>)}<div className="mv-picker-heading"><span>Categorical context</span><small>Initial comparison</small></div>{dataset.dimensions.map((dimension) => <label key={dimension.key}><input checked={groupBy === dimension.key} onChange={() => { setGroupBy(dimension.key); if (secondGroup === dimension.key) setSecondGroup(null) }} type="radio" /><span><strong>{dimension.label}</strong><small>Retained for population comparison</small></span></label>)}</div></details>
       {activeFilterKeys.map((key) => { const dimension = dataset.dimensions.find((candidate) => candidate.key === key); if (dimension === undefined) return null; return <div className="eda-filter-control" key={key}><label className="tool-select tool-select-field"><span>{dimension.label}</span><select aria-label={`Filter by ${dimension.label}`} onChange={(event) => { setFilterValues((current) => ({ ...current, [key]: event.target.value })); clearSelection() }} value={filterValues[key] ?? 'all'}><option value="all">All</option>{dimensionValues(dataset, key).map((value) => <option key={value} value={value}>{value}</option>)}</select><ChevronDown size={14} /></label><button aria-label={`Remove ${dimension.label} filter`} onClick={() => removeFilter(key)} type="button"><X size={13} /></button></div> })}
       {availableFilters.length > 0 ? <label className="tool-select tool-select-field eda-add-filter"><span>Filters</span><select aria-label="Add multivariate filter" onChange={(event) => { addFilter(event.target.value); event.target.value = '' }} value=""><option value="">Add filter…</option>{availableFilters.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}</select><ChevronDown size={14} /></label> : null}
+      <label className="tool-select tool-select-field"><span>Compare by</span><select aria-label="Multivariate primary grouping dimension" onChange={(event) => { const value = event.target.value || null; setGroupBy(value); if (value === null || value === secondGroup) setSecondGroup(null) }} value={groupBy ?? ''}><option value="">None</option>{dataset.dimensions.map((dimension) => <option key={dimension.key} value={dimension.key}>{dimension.label}</option>)}</select><ChevronDown size={14} /></label>
+      <label className="tool-select tool-select-field"><span>Second group</span><select aria-label="Multivariate second grouping dimension" disabled={groupBy === null} onChange={(event) => setSecondGroup(event.target.value || null)} value={secondGroup ?? ''}><option value="">None</option>{dataset.dimensions.filter((dimension) => dimension.key !== groupBy).map((dimension) => <option key={dimension.key} value={dimension.key}>{dimension.label}</option>)}</select><ChevronDown size={14} /></label>
       <label className="tool-select tool-select-field"><span>Scaling</span><select aria-label="Scaling method" onChange={(event) => setScaling(event.target.value as MultivariateScaling)} value={scaling}>{Object.entries(scalingLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select><ChevronDown size={14} /></label>
       <label className="tool-select tool-select-field"><span>Missing data</span><select aria-label="Missing data handling" onChange={(event) => setMissingPolicy(event.target.value as MultivariateMissingPolicy)} value={missingPolicy}>{Object.entries(missingLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select><ChevronDown size={14} /></label>
       <label className="tool-select tool-select-field mv-cluster-count"><span>Clusters (k)</span><select aria-label="Cluster count" onChange={(event) => setClusterCount(Number(event.target.value))} value={clusterCount}>{Array.from({ length: 7 }, (_, index) => index + 2).map((value) => <option key={value} value={value}>{value}</option>)}</select><ChevronDown size={14} /></label>

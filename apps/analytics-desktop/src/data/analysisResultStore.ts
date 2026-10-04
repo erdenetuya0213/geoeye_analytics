@@ -1,5 +1,7 @@
 import type { AnalysisFeature } from './analysisSaveStore.js'
 import type { StorageLike } from './geotechnicalDerivedStore.js'
+import { desktopBridge } from '../desktop/bridge.js'
+import { projectStorageAddress } from '../state/ProjectStorageContext.js'
 
 export const ANALYSIS_RESULT_STORAGE_KEY = 'geoeye.analytics.result-packages.v1'
 
@@ -120,7 +122,7 @@ export function saveAnalysisResultPackage(
     analysisPayload?: unknown
     graphs: readonly UnsavedGraphImage[]
   },
-): AnalysisResultDocument {
+): AnalysisResultDocument | Promise<AnalysisResultDocument> {
   const { analysisPayload, ...packageInput } = input
   const resultId = `${input.feature}:${input.templateId}:v${input.templateVersion}`
   const graphs = input.graphs.map((graph): AnalysisGraphImage => {
@@ -200,6 +202,16 @@ export function saveAnalysisResultPackage(
     packages: [result, ...current.packages.filter((candidate) => candidate.resultId !== resultId)].slice(0, 60),
     version: 1,
   }
-  storage.setItem(ANALYSIS_RESULT_STORAGE_KEY, JSON.stringify(next))
+  const bridge = desktopBridge()
+  const address = projectStorageAddress(storage)
+  if (bridge !== undefined && address !== undefined) {
+    return (async () => {
+      await (storage as StorageLike & { flush?: () => Promise<void> }).flush?.()
+      await bridge.saveAnalysisResultPackage({ address, result })
+      return next
+    })()
+  } else {
+    storage.setItem(ANALYSIS_RESULT_STORAGE_KEY, JSON.stringify(next))
+  }
   return next
 }

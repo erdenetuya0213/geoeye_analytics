@@ -1,10 +1,16 @@
 import { DataPoolError, type DataPoolClient, type ProjectSummary, type Session, type TabularImportInput, type TabularImportResult, type TabularImportSection } from '@geoeye/datapool-client'
 import { useQuery } from '@tanstack/react-query'
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { DrillholeImportResult } from '../components/DrillholeImportDialog.js'
 import { createDataPoolClient } from '../data/dataPoolConnection.js'
 import { readDrillholeImport } from '../data/drillholeImportStore.js'
 import { planDrillholePublish } from '../data/drillholePublish.js'
+import { drillholeSyncRequests } from '../data/syncOutbox.js'
+import { useDesktopWorkspace } from '../desktop/DesktopWorkspaceContext.js'
+import { appStorage } from '../desktop/runtime.js'
+import { useOfflineLicense } from '../desktop/ActivationContext.js'
+import { emptyOfflineProject } from '../data/offlineProject.js'
+import { desktopBridge, type ImportSourceFile, type ProjectStorageAddress } from '../desktop/bridge.js'
 import {
   createLocalDrillholeDraft,
   createLocalTabularDraft,
@@ -24,12 +30,16 @@ const projectStorageKey = 'geoeye.analytics.project.v1'
 const legacyImportMigrationKey = 'geoeye.analytics.drillhole-import.migrated.v1'
 
 export interface DataPoolWorkspace {
-  /** True when the app is signed in to a Data Pool rather than showing the demo workspace. */
+  /** True when a project-backed workspace is open, including its offline local copy. */
   live: boolean
+  /** True only while the Database session is available. */
+  connected: boolean
   client: DataPoolClient | null
   /** Cache-key prefix that isolates queries per endpoint and signed-in user. */
   scope: string
-  /** The signed-in user and their organizations; null in the demo workspace. */
+  /** Native filesystem identity for the open project. */
+  storageAddress: ProjectStorageAddress | null
+  /** The signed-in user and their organizations; null while offline or signed out. */
   session: Session | null
   /** Projects the signed-in user may open. Already limited by the Data Pool. */
   projects: readonly ProjectSummary[]
@@ -46,18 +56,21 @@ export interface DataPoolWorkspace {
   localRefreshing: boolean
   localError: string | null
   refreshLocalProject: () => Promise<void>
-  saveDrillholesLocally: (value: DrillholeImportResult) => Promise<void>
-  saveTabularImportLocally: (value: TabularImportInput) => Promise<void>
+  saveDrillholesLocally: (value: DrillholeImportResult, files?: ImportSourceFile[]) => Promise<void>
+  saveTabularImportLocally: (value: TabularImportInput, files?: ImportSourceFile[]) => Promise<void>
+  reloadLocalProject: () => Promise<void>
   publishLocalDrillholes: () => Promise<DrillholePublishReport>
   publishLocalTabularImport: (section: TabularImportSection) => Promise<TabularImportResult>
   selectProject: (projectId: string) => void
   signOut: () => void
 }
 
-const demoWorkspace: DataPoolWorkspace = {
+const emptyWorkspace: DataPoolWorkspace = {
   live: false,
+  connected: false,
   client: null,
-  scope: 'demo',
+  scope: 'signed-out',
+  storageAddress: null,
   session: null,
   projects: [],
   project: null,
@@ -70,6 +83,7 @@ const demoWorkspace: DataPoolWorkspace = {
   localRefreshing: false,
   localError: null,
   refreshLocalProject: async () => undefined,
+  reloadLocalProject: async () => undefined,
   saveDrillholesLocally: async () => undefined,
   saveTabularImportLocally: async () => undefined,
   publishLocalDrillholes: async () => ({ collars: 0, problems: [], stations: 0, surveys: 0, unknownHoles: [] }),
@@ -78,7 +92,7 @@ const demoWorkspace: DataPoolWorkspace = {
   signOut: () => undefined,
 }
 
-const DataPoolWorkspaceContext = createContext<DataPoolWorkspace>(demoWorkspace)
+const DataPoolWorkspaceContext = createContext<DataPoolWorkspace>(emptyWorkspace)
 
 /** Picks the stored project when it still exists, otherwise the one with the most drillholes. */
 export function resolveActiveProject(
@@ -92,6 +106,15 @@ export function resolveActiveProject(
     || right.drillholeCount - left.drillholeCount
     || left.name.localeCompare(right.name),
   )[0] ?? null
+}
+
+/** Keeps the last local project usable when the Database session is unavailable. */
+export function resolveWorkspaceProject(
+  onlineProjects: readonly ProjectSummary[],
+  preferredId: string | null,
+  cachedProject: ProjectSummary | null,
+): ProjectSummary | null {
+  return resolveActiveProject(onlineProjects, preferredId) ?? cachedProject
 }
 
 function isUnauthorized(error: unknown): boolean {
@@ -109,15 +132,27 @@ interface ProviderProps {
 }
 
 export function DataPoolWorkspaceProvider({ children, connectionSettings, connectionState, onSessionExpired, onSignOut }: ProviderProps) {
+  const desktopWorkspace = useDesktopWorkspace()
+  const license = useOfflineLicense()
   const live = connectionState === 'connected'
   const client = useMemo(
     () => live ? createDataPoolClient(connectionSettings) : null,
     [connectionSettings, live],
   )
-  // The last characters of the token separate one user's cached data from the next.
-  const scope = `${connectionSettings.endpoint}#${connectionSettings.token.slice(-12)}`
+  const accountId = connectionSettings.accountId ?? license?.accountId ?? 'local'
+  const offlineOnly = connectionSettings.accountId === undefined && license !== null
+  const storageEndpoint = offlineOnly ? 'local' : connectionSettings.endpoint
+  const scope = `${storageEndpoint}#${accountId}`
+  const scopedProjectStorageKey = `${projectStorageKey}.${scope}`
   const [preferredId, setPreferredId] = useState<string | null>(
-    () => window.localStorage.getItem(projectStorageKey),
+    () => {
+      const stored = appStorage.getItem(scopedProjectStorageKey)
+      if (stored !== null) return stored
+      if (!offlineOnly) return appStorage.getItem(projectStorageKey)
+      const id = crypto.randomUUID()
+      appStorage.setItem(scopedProjectStorageKey, id)
+      return id
+    },
   )
   const [localRecord, setLocalRecord] = useState<LocalProjectRecord | null>(null)
   const [loadedLocalKey, setLoadedLocalKey] = useState<string | null>(null)
@@ -143,13 +178,22 @@ export function DataPoolWorkspaceProvider({ children, connectionSettings, connec
   }, [expired, onSessionExpired])
 
   const selectProject = useCallback((projectId: string) => {
-    window.localStorage.setItem(projectStorageKey, projectId)
+    appStorage.setItem(scopedProjectStorageKey, projectId)
     setPreferredId(projectId)
-  }, [])
+  }, [scopedProjectStorageKey])
 
-  const projects = projectsQuery.data ?? []
-  const project = resolveActiveProject(projects, preferredId)
-  const activeLocalKey = project === null ? null : localProjectKey(connectionSettings.endpoint, project.id)
+  const onlineProjects = projectsQuery.data ?? []
+  const onlineProject = resolveActiveProject(onlineProjects, preferredId)
+  const activeProjectId = onlineProject?.id ?? preferredId
+  const activeLocalKey = activeProjectId === null ? null : localProjectKey(storageEndpoint, activeProjectId, accountId)
+  const legacyLocalKey = activeProjectId === null || offlineOnly ? null : `${connectionSettings.endpoint.replace(/\/$/, '').toLowerCase()}#${activeProjectId}`
+  const storageAddress = useMemo<ProjectStorageAddress | null>(() => activeProjectId === null ? null : ({
+    accountId,
+    endpoint: storageEndpoint,
+    projectId: activeProjectId,
+    ...(offlineOnly ? { tenantId: null } : {}),
+    ...(onlineProject === null || onlineProject === undefined ? {} : { tenantId: onlineProject.organizationId }),
+  }), [accountId, activeProjectId, storageEndpoint, offlineOnly, onlineProject?.organizationId])
 
   useEffect(() => {
     let cancelled = false
@@ -157,15 +201,24 @@ export function DataPoolWorkspaceProvider({ children, connectionSettings, connec
     setLoadedLocalKey(null)
     setLocalRecord(null)
     if (activeLocalKey === null) return () => { cancelled = true }
-    void readLocalProjectRecord(activeLocalKey).then(async (stored) => {
+    if (desktopWorkspace.isDesktop && !desktopWorkspace.configured) {
+      setLocalError('Choose a workspace folder before opening or refreshing project data.')
+      setLoadedLocalKey(activeLocalKey)
+      return () => { cancelled = true }
+    }
+    void readLocalProjectRecord(activeLocalKey, storageAddress ?? undefined, legacyLocalKey ?? undefined).then(async (stored) => {
       if (cancelled) return
       let next = stored
-      const legacyWasMigrated = window.localStorage.getItem(legacyImportMigrationKey) === 'true'
-      const legacy = (stored === null || stored.draft === null) && !legacyWasMigrated ? readDrillholeImport() : undefined
+      if (next === null && offlineOnly && activeProjectId !== null) {
+        next = { key: activeLocalKey, snapshot: emptyOfflineProject(activeProjectId), draft: null, tabularDrafts: {} }
+        await writeLocalProjectRecord(next, storageAddress ?? undefined)
+      }
+      const legacyWasMigrated = appStorage.getItem(legacyImportMigrationKey) === 'true'
+      const legacy = !offlineOnly && (stored === null || stored.draft === null) && !legacyWasMigrated ? readDrillholeImport() : undefined
       if (legacy !== undefined) {
         next = { draft: createLocalDrillholeDraft(legacy), key: activeLocalKey, snapshot: stored?.snapshot ?? null, tabularDrafts: stored?.tabularDrafts ?? {} }
-        await writeLocalProjectRecord(next)
-        window.localStorage.setItem(legacyImportMigrationKey, 'true')
+        await writeLocalProjectRecord(next, storageAddress ?? undefined)
+        appStorage.setItem(legacyImportMigrationKey, 'true')
       }
       if (cancelled) return
       setLocalRecord(next ?? { draft: null, key: activeLocalKey, snapshot: null, tabularDrafts: {} })
@@ -177,55 +230,100 @@ export function DataPoolWorkspaceProvider({ children, connectionSettings, connec
       setLoadedLocalKey(activeLocalKey)
     })
     return () => { cancelled = true }
-  }, [activeLocalKey])
+  }, [activeLocalKey, activeProjectId, offlineOnly, desktopWorkspace.configured, desktopWorkspace.isDesktop, desktopWorkspace.revision, legacyLocalKey, storageAddress])
+
+  const cachedProject = localRecord?.snapshot?.project ?? null
+  const project = resolveWorkspaceProject(onlineProjects, preferredId, cachedProject)
+  const projects = client === null
+    ? cachedProject === null ? [] : [cachedProject]
+    : onlineProjects
+  const localLoading = activeLocalKey !== null && loadedLocalKey !== activeLocalKey
+  const projectWorkspaceOpen = client !== null || (preferredId !== null && (localLoading || localRecord !== null))
+  const currentKey = useRef(activeLocalKey)
+  currentKey.current = activeLocalKey
+  const saveInProgress = useRef(false)
+  const reloadLocalProject = useCallback(async () => {
+    if (!activeLocalKey) return
+    const record = await readLocalProjectRecord(activeLocalKey, storageAddress ?? undefined)
+    if (currentKey.current === activeLocalKey) setLocalRecord(record)
+  }, [activeLocalKey, storageAddress])
 
   const refreshLocalProject = useCallback(async () => {
     if (client === null || project === null || activeLocalKey === null) return
+    if (desktopWorkspace.isDesktop && !desktopWorkspace.configured) {
+      setLocalError('Choose a workspace folder before refreshing project data.')
+      return
+    }
     setLocalRefreshing(true)
     setLocalError(null)
     try {
       const snapshot = await loadLocalProjectSnapshot(client, project)
-      const next = { draft: localRecord?.draft ?? null, key: activeLocalKey, snapshot, tabularDrafts: localRecord?.tabularDrafts ?? {} }
-      await writeLocalProjectRecord(next)
-      setLocalRecord(next)
-      setLoadedLocalKey(activeLocalKey)
+      const latest = await readLocalProjectRecord(activeLocalKey, storageAddress ?? undefined)
+      const next = { draft: latest?.draft ?? null, key: activeLocalKey, snapshot, tabularDrafts: latest?.tabularDrafts ?? {} }
+      await writeLocalProjectRecord(next, storageAddress ?? undefined)
+      if (currentKey.current === activeLocalKey) {
+        setLocalRecord(next)
+        setLoadedLocalKey(activeLocalKey)
+      }
     } catch {
       setLocalError('The Database could not refresh the local project copy. The previous local data is unchanged.')
     } finally {
       setLocalRefreshing(false)
     }
-  }, [activeLocalKey, client, localRecord, project])
+  }, [activeLocalKey, client, desktopWorkspace.configured, desktopWorkspace.isDesktop, localRecord, project, storageAddress])
 
-  const saveDrillholesLocally = useCallback(async (value: DrillholeImportResult) => {
-    if (activeLocalKey === null) return
+  const saveDrillholesLocally = useCallback(async (value: DrillholeImportResult, files: ImportSourceFile[] = []) => {
+    if (activeLocalKey === null || localLoading) throw new Error('Open a project and wait for its files before importing.')
+    if (saveInProgress.current) throw new Error('Another import is being saved. Please wait and try again.')
+    saveInProgress.current = true
+    try {
+    const latest = await readLocalProjectRecord(activeLocalKey, storageAddress ?? undefined)
     const next: LocalProjectRecord = {
       draft: createLocalDrillholeDraft(value),
       key: activeLocalKey,
-      snapshot: localRecord?.snapshot ?? null,
-      tabularDrafts: localRecord?.tabularDrafts ?? {},
+      snapshot: latest?.snapshot ?? null,
+      tabularDrafts: latest?.tabularDrafts ?? {},
     }
-    setLocalRecord(next)
-    setLoadedLocalKey(activeLocalKey)
-    setLocalError(null)
-    await writeLocalProjectRecord(next)
-  }, [activeLocalKey, localRecord])
+    await writeLocalProjectRecord(next, storageAddress ?? undefined)
+    if (files.length && storageAddress) await desktopBridge()?.archiveImportFiles({ address: storageAddress, files })
+    if (currentKey.current === activeLocalKey) {
+      setLocalRecord(next)
+      setLoadedLocalKey(activeLocalKey)
+      setLocalError(null)
+    }
+    } catch (error) {
+      if (currentKey.current === activeLocalKey) setLocalError('Import could not be fully saved. Keep the source files and retry.')
+      throw error
+    } finally { saveInProgress.current = false }
+  }, [activeLocalKey, localLoading, localRecord, storageAddress])
 
-  const saveTabularImportLocally = useCallback(async (value: TabularImportInput) => {
-    if (activeLocalKey === null) return
+  const saveTabularImportLocally = useCallback(async (value: TabularImportInput, files: ImportSourceFile[] = []) => {
+    if (activeLocalKey === null || localLoading) throw new Error('Open a project and wait for its files before importing.')
+    if (saveInProgress.current) throw new Error('Another import is being saved. Please wait and try again.')
+    saveInProgress.current = true
+    try {
+    const latest = await readLocalProjectRecord(activeLocalKey, storageAddress ?? undefined)
     const next: LocalProjectRecord = {
-      draft: localRecord?.draft ?? null,
+      draft: latest?.draft ?? null,
       key: activeLocalKey,
-      snapshot: localRecord?.snapshot ?? null,
+      snapshot: latest?.snapshot ?? null,
       tabularDrafts: {
-        ...(localRecord?.tabularDrafts ?? {}),
+        ...(latest?.tabularDrafts ?? {}),
         [value.section]: createLocalTabularDraft(value),
       },
     }
-    setLocalRecord(next)
-    setLoadedLocalKey(activeLocalKey)
-    setLocalError(null)
-    await writeLocalProjectRecord(next)
-  }, [activeLocalKey, localRecord])
+    await writeLocalProjectRecord(next, storageAddress ?? undefined)
+    if (files.length && storageAddress) await desktopBridge()?.archiveImportFiles({ address: storageAddress, files })
+    if (currentKey.current === activeLocalKey) {
+      setLocalRecord(next)
+      setLoadedLocalKey(activeLocalKey)
+      setLocalError(null)
+    }
+    } catch (error) {
+      if (currentKey.current === activeLocalKey) setLocalError('Import could not be fully saved. Keep the source file and retry.')
+      throw error
+    } finally { saveInProgress.current = false }
+  }, [activeLocalKey, localLoading, localRecord, storageAddress])
 
   const publishLocalDrillholes = useCallback(async (): Promise<DrillholePublishReport> => {
     const snapshot = localRecord?.snapshot ?? null
@@ -238,6 +336,15 @@ export function DataPoolWorkspaceProvider({ children, connectionSettings, connec
     }
 
     const plan = planDrillholePublish(draft, snapshot.drillholes)
+    const native = desktopBridge()
+    if (native && storageAddress) {
+      await native.enqueueSync({ address: storageAddress, entity: 'drillholes', version: draft.updatedAt, requests: drillholeSyncRequests(project.id, draft, snapshot) })
+      const rows = await native.runSync({ address: storageAddress })
+      await reloadLocalProject()
+      const operation = rows.find(row => row.entity === 'drillholes' && row.version === draft.updatedAt)
+      if (operation?.state !== 'sent') throw new Error(operation?.lastError ?? 'Transfer queued. Open Database → Sync pending imports to continue.')
+      return { collars: plan.collars.length, surveys: plan.surveys.length, stations: plan.surveys.reduce((total, survey) => total + survey.stations.length, 0), problems: [], unknownHoles: [] }
+    }
     const problems = [...plan.rejected]
     let collarCount = 0
     let surveyCount = 0
@@ -292,10 +399,10 @@ export function DataPoolWorkspaceProvider({ children, connectionSettings, connec
       snapshot: { ...snapshot, drillholes, refreshedAt: new Date().toISOString(), surveysByHoleId },
       tabularDrafts: localRecord?.tabularDrafts ?? {},
     }
-    await writeLocalProjectRecord(next)
+    await writeLocalProjectRecord(next, storageAddress ?? undefined)
     setLocalRecord(next)
     return { collars: collarCount, problems, stations: stationCount, surveys: surveyCount, unknownHoles: plan.unknownHoles }
-  }, [activeLocalKey, client, localRecord, project])
+  }, [activeLocalKey, client, localRecord, project, storageAddress, reloadLocalProject])
 
   const publishLocalTabularImport = useCallback(async (section: TabularImportSection): Promise<TabularImportResult> => {
     const draft = localRecord?.tabularDrafts?.[section]
@@ -303,6 +410,15 @@ export function DataPoolWorkspaceProvider({ children, connectionSettings, connec
       throw new Error('Import a CSV locally before saving it to the Database.')
     }
     if (!project.canWrite) throw new Error('Your role on this project is read-only.')
+    const native = desktopBridge()
+    if (native && storageAddress) {
+      await native.enqueueSync({ address: storageAddress, entity: section, version: draft.updatedAt, requests: [{ path: `/v1/projects/${encodeURIComponent(project.id)}/tabular-imports`, method: 'POST', body: JSON.stringify({ section, fileName: draft.fileName, columns: draft.columns, rows: draft.rows }) }] })
+      const rows = await native.runSync({ address: storageAddress })
+      await reloadLocalProject()
+      const operation = rows.find(row => row.entity === section && row.version === draft.updatedAt)
+      if (operation?.state !== 'sent') throw new Error(operation?.lastError ?? 'Transfer queued. Open Database → Sync pending imports to continue.')
+      return operation.result as TabularImportResult
+    }
     const result = await client.saveTabularImport(project.id, draft)
     const next: LocalProjectRecord = {
       draft: localRecord?.draft ?? null,
@@ -313,29 +429,31 @@ export function DataPoolWorkspaceProvider({ children, connectionSettings, connec
         [section]: { ...draft, dirty: false, updatedAt: new Date().toISOString() },
       },
     }
-    await writeLocalProjectRecord(next)
+    await writeLocalProjectRecord(next, storageAddress ?? undefined)
     setLocalRecord(next)
     return result
-  }, [activeLocalKey, client, localRecord, project])
+  }, [activeLocalKey, client, localRecord, project, storageAddress, reloadLocalProject])
 
   const value = useMemo<DataPoolWorkspace>(() => {
-    if (client === null) return demoWorkspace
     return {
-      live: true,
+      live: projectWorkspaceOpen,
+      connected: client !== null,
       client,
       scope,
+      storageAddress,
       session: sessionQuery.data ?? null,
       projects,
       project,
-      projectsLoading: projectsQuery.isPending,
-      projectsError: projectsQuery.error === null ? null : 'Projects could not be loaded from the Database',
+      projectsLoading: client === null ? false : projectsQuery.isPending,
+      projectsError: client === null || projectsQuery.error === null ? null : 'Projects could not be loaded from the Database',
       localSnapshot: localRecord?.snapshot ?? null,
       localDrillholeDraft: localRecord?.draft ?? null,
       localTabularDrafts: localRecord?.tabularDrafts ?? {},
-      localLoading: activeLocalKey !== null && loadedLocalKey !== activeLocalKey,
+      localLoading,
       localRefreshing,
       localError,
       refreshLocalProject,
+      reloadLocalProject,
       saveDrillholesLocally,
       saveTabularImportLocally,
       publishLocalDrillholes,
@@ -343,7 +461,7 @@ export function DataPoolWorkspaceProvider({ children, connectionSettings, connec
       selectProject,
       signOut: onSignOut,
     }
-  }, [activeLocalKey, client, loadedLocalKey, localError, localRecord, localRefreshing, onSignOut, project, projects, projectsQuery.error, projectsQuery.isPending, publishLocalDrillholes, publishLocalTabularImport, refreshLocalProject, saveDrillholesLocally, saveTabularImportLocally, scope, selectProject, sessionQuery.data])
+  }, [client, localError, localLoading, localRecord, localRefreshing, onSignOut, project, projectWorkspaceOpen, projects, projectsQuery.error, projectsQuery.isPending, publishLocalDrillholes, publishLocalTabularImport, refreshLocalProject, reloadLocalProject, saveDrillholesLocally, saveTabularImportLocally, scope, selectProject, sessionQuery.data, storageAddress])
 
   return <DataPoolWorkspaceContext.Provider value={value}>{children}</DataPoolWorkspaceContext.Provider>
 }

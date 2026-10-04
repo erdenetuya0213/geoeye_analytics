@@ -1,5 +1,5 @@
 import type { EdaObservation } from '../analysis/eda.js'
-import type { EdaDataset } from '../data/edaDemo.js'
+import type { EdaDataset } from '../data/edaTypes.js'
 
 export type SceneQueryValue = number | string | null
 

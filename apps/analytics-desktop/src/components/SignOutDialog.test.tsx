@@ -13,6 +13,6 @@ describe('SignOutDialog', () => {
     expect(markup).toContain('role="alertdialog"')
     expect(markup).toContain('>Cancel</button>')
     expect(markup).toContain('>Sign out</button>')
-    expect(markup).toContain('enter your email and password')
+    expect(markup).toContain('enter your email and activation key')
   })
 })

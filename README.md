@@ -53,26 +53,53 @@ pnpm install
 pnpm check
 ```
 
+### Windows local-first desktop
+
+GeoEye Analytics now has a native Windows host. Computation runs on the user's computer, and durable
+data is written to the filesystem rather than browser cache. Start the packaged-style desktop app with:
+
+```powershell
+pnpm --filter @geoeye/analytics-desktop desktop
+```
+
+On first use, sign in offline with your licensed email and activation key, then choose a workspace
+folder from the **Data Pool** screen. See [offline activation and key issuance](./docs/offline-activation.md).
+GeoEye keeps application-only settings, activation, and the Windows-encrypted database session below
+`%LOCALAPPDATA%\GeoEye\Analytics`. It keeps
+synced project data, offline edits, analysis runs, JSON results, and PNG graphs below the user-selected
+`GeoEye` folder. Each project has a normalized SQLite database whose tables follow the Data Pool domain
+schema; binary and document artifacts are regular files with checksums and relative paths recorded in
+that database. Web storage is only a compatibility fallback when the UI is opened in a browser.
+
+Build the Windows installer with:
+
+```powershell
+pnpm --filter @geoeye/analytics-desktop dist:windows
+```
+
+The complete storage layout, security boundary, and schema mapping are documented in the
+[Windows local-first storage design](./docs/windows-local-first-storage.md).
+
 ### First UI
 
-The Analytics shell runs with a complete demo workspace, so PostgreSQL is not required for the first
-visual test:
+Start the Analytics shell with:
 
 ```bash
 pnpm dev:ui
 ```
 
-Open [http://127.0.0.1:5173](http://127.0.0.1:5173). The Overview, Drillholes, EDA, Structure Lab, and
-Data Pool screens are interactive. The connection dialog uses `/api`, which Vite proxies to the local
-Data Pool service on port `8080`; if that service is unavailable, the UI stays usable in demo mode.
+Open [http://127.0.0.1:5173](http://127.0.0.1:5173) to preview the login screen. Offline activation and
+project access require the native Windows host (`pnpm --filter @geoeye/analytics-desktop desktop`).
+No server is needed for activation or local imports and analysis. An optional Database connection uses
+a complete `http://` or `https://` server address; synchronized data is stored in the selected workspace.
+In web development, `/api` is proxied to the local Data Pool service on port `8080`.
 
 The EDA workspace implements the architecture's first Explore registry: summary statistics, histogram,
 CDF, normal probability plot, scatter, correlation matrix, and spatial swath. Apache ECharts 6 renders
 2D charts through the shared Canvas-first `GeoEyeChart`, the global GeoEye SelectionContext links source
 observations across views, and TanStack Query owns snapshot loading/cache state.
-The included assay snapshot is a deterministic fixture used only by the opt-in demo workspace. A
-signed-in workspace loads normalized observations and dataset metadata for the active Data Pool
-project; saved demo selections are not reused as project-data selections.
+A signed-in workspace loads normalized observations and dataset metadata for the active Data Pool
+project. Empty and offline states never substitute sample project records.
 
 The default suite tests contracts, projection behavior, the client, and HTTP routes without external
 services. To exercise the full migration, projection, query, and publish workflow against PostgreSQL 16, run:

@@ -2,14 +2,16 @@ import type {
   DataPoolClient,
   Dataset,
   DrillholeSummary,
+  FieldLoggingDataset,
   ObservationValue,
   ProjectSummary,
   VariableDefinition,
 } from '@geoeye/datapool-client'
 import { useQuery } from '@tanstack/react-query'
+import { buildAnalyticalObservations } from '../analysis/analyticalDataset.js'
 import type { EdaObservation } from '../analysis/eda.js'
 import { useDataPoolWorkspace } from '../state/DataPoolWorkspaceContext.js'
-import { loadEdaDatasets, type EdaDataset, type EdaDimensionDefinition, type EdaVariableDefinition } from './edaDemo.js'
+import type { EdaDataset, EdaDimensionDefinition, EdaVariableDefinition } from './edaTypes.js'
 import {
   effectiveDrillholes,
   effectiveSurveysByHoleId,
@@ -22,10 +24,59 @@ const LIVE_OBSERVATION_LIMIT = 200_000
 
 const baseDimensions: readonly EdaDimensionDefinition[] = [
   { key: 'drillhole', label: 'Drillhole' },
+  { key: 'data_type', label: 'Data type' },
+  { key: 'data_source', label: 'Data source' },
   { key: 'dataset', label: 'Dataset' },
   { key: 'source_type', label: 'Source type' },
   { key: 'quality', label: 'Quality' },
 ]
+
+export type EdaDatasetKind = 'integrated' | 'drillholes' | 'logging' | 'laboratory' | 'strength' | 'xrf' | 'spectral' | 'other'
+
+export const EDA_DATASET_CATALOG: ReadonlyArray<{ id: EdaDatasetKind; label: string }> = [
+  { id: 'integrated', label: 'All data' },
+  { id: 'drillholes', label: 'Drillholes' },
+  { id: 'logging', label: 'Logging' },
+  { id: 'laboratory', label: 'Lab / Assay' },
+  { id: 'strength', label: 'Strength' },
+  { id: 'xrf', label: 'XRF' },
+  { id: 'spectral', label: 'Spectral' },
+  { id: 'other', label: 'Other' },
+]
+
+export function edaDatasetKind(dataset: Pick<EdaDataset, 'id' | 'name' | 'producer' | 'variables'>): EdaDatasetKind {
+  const identity = `${dataset.id} ${dataset.name} ${dataset.producer}`.toLocaleLowerCase()
+  const variables = dataset.variables.map((variable) => `${variable.key} ${variable.label}`).join(' ').toLocaleLowerCase()
+  if (/integrated|all local data/.test(identity)) return 'integrated'
+  if (/\bxrf\b|x-ray fluorescence/.test(identity)) return 'xrf'
+  if (/spectral|hyperspectral|mineral scanner/.test(identity)) return 'spectral'
+  if (/logging|core[_ -]?row|geolog|geotech|litholog/.test(identity)) return 'logging'
+  if (/strength|uniaxial|point[ -]?load|schmidt/.test(identity)) return 'strength'
+  if (/laborator|\blab\b|assay|geochem/.test(identity)) return 'laboratory'
+  if (/drillhole|collar|survey/.test(identity)) return 'drillholes'
+  if (/\bxrf\b|x-ray fluorescence/.test(variables)) return 'xrf'
+  if (/spectral|hyperspectral|mineral scanner/.test(variables)) return 'spectral'
+  if (/strength|\bucs\b|uniaxial|point[ -]?load|schmidt/.test(variables)) return 'strength'
+  if (/laborator|\blab\b|assay|geochem/.test(variables)) return 'laboratory'
+  if (/logging|geolog|geotech|litholog/.test(variables)) return 'logging'
+  return 'other'
+}
+
+function dataTypeLabel(kind: EdaDatasetKind): string {
+  return EDA_DATASET_CATALOG.find((item) => item.id === kind)?.label ?? 'Other'
+}
+
+function mergeDimensions(...groups: ReadonlyArray<readonly EdaDimensionDefinition[]>): EdaDimensionDefinition[] {
+  const dimensions = new Map<string, EdaDimensionDefinition>()
+  groups.flat().forEach((dimension) => dimensions.set(dimension.key, dimension))
+  return [...dimensions.values()]
+}
+
+function mergeVariables(...groups: ReadonlyArray<readonly EdaVariableDefinition[]>): EdaVariableDefinition[] {
+  const variables = new Map<string, EdaVariableDefinition>()
+  groups.flat().forEach((variable) => variables.set(variable.key, variable))
+  return [...variables.values()]
+}
 
 const localImportLabels = {
   laboratory: 'Laboratory CSV imports',
@@ -33,6 +84,13 @@ const localImportLabels = {
   strength: 'Strength CSV imports',
   xrf: 'XRF CSV imports',
 } as const
+
+const localImportKinds: Record<keyof typeof localImportLabels, EdaDatasetKind> = {
+  laboratory: 'laboratory',
+  spectral: 'spectral',
+  strength: 'strength',
+  xrf: 'xrf',
+}
 
 type LocalTabularDrafts = Partial<Record<keyof typeof localImportLabels, LocalTabularDraft>>
 
@@ -98,6 +156,7 @@ function localTabularDataset(
   })
   const holesByName = new Map(drillholes.map((hole) => [normalizedIdentifier(hole.name), hole]))
   const datasetLabel = localImportLabels[draft.section]
+  const dataType = dataTypeLabel(localImportKinds[draft.section])
   const observations = draft.rows.map((row, rowIndex): EdaObservation => {
     const rawHoleName = holeIndex < 0 ? '' : row[holeIndex]?.trim() ?? ''
     const hole = holesByName.get(normalizedIdentifier(rawHoleName))
@@ -106,6 +165,8 @@ function localTabularDataset(
     const depthTo = Math.max(depthFrom, (toIndex < 0 ? null : csvNumber(row[toIndex])) ?? pointDepth ?? depthFrom)
     const sourceId = `local:${draft.section}:${draft.updatedAt}:${rowIndex + 2}`
     const dimensions: Record<string, string> = {
+      data_source: datasetLabel,
+      data_type: dataType,
       dataset: datasetLabel,
       drillhole: hole?.name ?? (rawHoleName || 'Project'),
       quality: draft.dirty ? 'Local draft' : 'Local saved copy',
@@ -175,7 +236,7 @@ function localDrillholeDatasets(
     return [{
       depthFrom: 0,
       depthTo: 0,
-      dimensions: { dataset: 'Drillhole collars', drillhole: hole.name, quality: 'Local database', source_type: 'drillhole.collar' },
+      dimensions: { data_source: 'Drillhole collars', data_type: 'Drillholes', dataset: 'Drillhole collars', drillhole: hole.name, quality: 'Local database', source_type: 'drillhole.collar' },
       easting: hole.collar.easting,
       holeId: hole.name,
       id: sourceId,
@@ -218,7 +279,7 @@ function localDrillholeDatasets(
       return {
         depthFrom: station.measuredDepth,
         depthTo: station.measuredDepth,
-        dimensions: { dataset: 'Drillhole surveys', drillhole: hole?.name ?? holeId, quality: 'Local database', source_type: 'drillhole.survey' },
+        dimensions: { data_source: 'Drillhole surveys', data_type: 'Drillholes', dataset: 'Drillhole surveys', drillhole: hole?.name ?? holeId, quality: 'Local database', source_type: 'drillhole.survey' },
         easting: hole?.collar?.easting ?? 0,
         holeId: hole?.name ?? holeId,
         id: sourceId,
@@ -253,6 +314,153 @@ function localDrillholeDatasets(
     ],
   })
   return datasets
+}
+
+function fieldLoggingDataset(
+  dataset: FieldLoggingDataset,
+  project: ProjectSummary,
+  drillholes: readonly DrillholeSummary[],
+): EdaDataset | null {
+  if (dataset.records.length === 0 || dataset.columns.length === 0) return null
+  const holesById = new Map(drillholes.map((hole) => [hole.id, hole]))
+  const categoryColumns = dataset.columns.filter((column) => column.dataType !== 'numeric')
+  const observations = dataset.records.map((record): EdaObservation => {
+    const hole = record.holeId === null ? undefined : holesById.get(record.holeId)
+    const depthFrom = record.depthFrom ?? record.depthTo ?? 0
+    const depthTo = Math.max(depthFrom, record.depthTo ?? depthFrom)
+    const dimensions: Record<string, string> = {
+      data_source: dataset.name,
+      data_type: 'Logging',
+      dataset: dataset.name,
+      drillhole: hole?.name ?? record.holeId ?? 'Project',
+      logging_category: dataset.category ?? 'Uncategorised',
+      logging_template: dataset.name,
+      quality: 'Local database',
+      source_type: 'field.logging',
+    }
+    const values: Record<string, number | null> = {}
+    let lithology = 'Unassigned'
+    dataset.columns.forEach((column) => {
+      const value = record.values[column.key]
+      if (column.dataType === 'numeric') {
+        const numeric = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : Number.NaN
+        values[column.key] = Number.isFinite(numeric) ? numeric : null
+      } else if (value !== null && value !== undefined && String(value).length > 0) {
+        dimensions[column.key] = String(value)
+        if (/litholog|rock[ _-]?type/i.test(`${column.key} ${column.label}`)) lithology = String(value)
+      }
+    })
+    return {
+      depthFrom,
+      depthTo,
+      dimensions,
+      easting: hole?.collar?.easting ?? 0,
+      holeId: hole?.name ?? record.holeId ?? 'Project',
+      id: `local:logging:${dataset.id}:${record.id}`,
+      joinKey: `${record.holeId ?? 'project'}:${depthFrom}:${depthTo}`,
+      lithology,
+      northing: hole?.collar?.northing ?? 0,
+      sampleId: record.id,
+      sourceObservationId: record.id,
+      sourceObservationIds: [record.id],
+      values,
+    }
+  })
+  return {
+    dimensions: mergeDimensions(baseDimensions, [
+      { key: 'logging_template', label: 'Logging template' },
+      { key: 'logging_category', label: 'Logging category' },
+    ], categoryColumns.map((column) => ({ key: column.key, label: column.label }))),
+    id: `local-field-logging-${dataset.id}`,
+    name: `${dataset.name} · Logging v${dataset.version}`,
+    observations,
+    producer: 'GeoEye Field local database',
+    project: project.name,
+    snapshotAt: dataset.updatedAt,
+    source: 'live',
+    support: `logging intervals · ${observations.length.toLocaleString()} records`,
+    variables: dataset.columns.map((column): EdaVariableDefinition => ({
+      dataType: column.dataType === 'numeric' ? 'numeric' : 'category',
+      decimals: column.unit === '%' || column.unit === 'degree' ? 1 : 3,
+      key: column.key,
+      label: column.label,
+      origin: 'primary',
+      shortLabel: column.label,
+      unit: column.unit ?? '',
+    })),
+  }
+}
+
+function sourceGroupDimension(kind: EdaDatasetKind) {
+  if (kind === 'laboratory') return { key: 'assay_source', label: 'Lab / Assay source' }
+  if (kind === 'integrated') return { key: 'integrated_source', label: 'Integrated source' }
+  return { key: `${kind}_source`, label: `${dataTypeLabel(kind)} source` }
+}
+
+function datasetWithSourceGroup(dataset: EdaDataset): EdaDataset {
+  const dimension = sourceGroupDimension(edaDatasetKind(dataset))
+  return {
+    ...dataset,
+    dimensions: mergeDimensions(dataset.dimensions, [dimension]),
+    observations: dataset.observations.map((observation) => ({
+      ...observation,
+      dimensions: { ...observation.dimensions, [dimension.key]: dataset.name.replace(/ · (local|v\d+|Logging v\d+)$/, '') },
+    })),
+  }
+}
+
+function integratedLocalDataset(datasets: readonly EdaDataset[], project: ProjectSummary): EdaDataset | null {
+  const sourceDatasets = datasets.map(datasetWithSourceGroup)
+  if (sourceDatasets.length < 2 || !sourceDatasets.some((dataset) => edaDatasetKind(dataset) !== 'drillholes')) return null
+  const kindPriority: Record<EdaDatasetKind, number> = {
+    integrated: 0,
+    drillholes: 10,
+    laboratory: 50,
+    logging: 70,
+    other: 30,
+    spectral: 40,
+    strength: 45,
+    xrf: 40,
+  }
+  const base = [...sourceDatasets].sort((left, right) => {
+    const intervalScore = (dataset: EdaDataset) => dataset.observations.some((row) => row.depthTo > row.depthFrom) ? 100 : 0
+    return intervalScore(right) + kindPriority[edaDatasetKind(right)] + Math.min(20, right.observations.length / 100)
+      - intervalScore(left) - kindPriority[edaDatasetKind(left)] - Math.min(20, left.observations.length / 100)
+  })[0]
+  if (base === undefined) return null
+  const genericDimensions = new Set(['data_source', 'data_type', 'dataset', 'drillhole', 'quality', 'source_type'])
+  const analyticalObservations = buildAnalyticalObservations(base.id, base.observations, sourceDatasets
+    .filter((dataset) => dataset.id !== base.id)
+    .map((dataset) => ({
+      datasetId: dataset.id,
+      dimensions: dataset.dimensions.map((dimension) => dimension.key).filter((key) => !genericDimensions.has(key)),
+      match: 'point-or-interval' as const,
+      observations: dataset.observations,
+    })))
+  const kindsByDatasetId = new Map(sourceDatasets.map((dataset) => [dataset.id, edaDatasetKind(dataset)]))
+  const observations = analyticalObservations.map((observation) => {
+    const coverage = [...new Set(observation.analyticalLineage
+      .map((entry) => kindsByDatasetId.get(entry.datasetId))
+      .filter((kind): kind is EdaDatasetKind => kind !== undefined)
+      .map(dataTypeLabel))]
+    return {
+      ...observation,
+      dimensions: { ...observation.dimensions, data_coverage: coverage.join(' + ') },
+    }
+  })
+  const snapshotAt = sourceDatasets.map((dataset) => dataset.snapshotAt).sort().at(-1) ?? new Date(0).toISOString()
+  return {
+    dimensions: mergeDimensions(baseDimensions, [{ key: 'data_coverage', label: 'Available data types' }], ...sourceDatasets.map((dataset) => dataset.dimensions)),
+    id: 'local-all-data-integrated',
+    name: 'All local data · integrated',
+    observations,
+    producer: 'GeoEye Analytics local database',
+    project: project.name,
+    snapshotAt,
+    source: 'live',
+    support: `${base.name.split(' · ')[0]} support · drillhole/depth matched · ${observations.length.toLocaleString()} records`,
+    variables: mergeVariables(...sourceDatasets.map((dataset) => dataset.variables)),
+  }
 }
 
 function decimalsFor(definition: VariableDefinition): number {
@@ -300,6 +508,7 @@ function observationsForDataset(
   observations: readonly ObservationValue[],
   holes: ReadonlyMap<string, DrillholeSummary>,
   definitions: ReadonlyMap<string, VariableDefinition>,
+  dataType: string,
 ): EdaObservation[] {
   const rows = new Map<string, EdaObservation>()
 
@@ -312,6 +521,8 @@ function observationsForDataset(
       depthFrom: observation.depthFrom ?? 0,
       depthTo: observation.depthTo ?? observation.depthFrom ?? 0,
       dimensions: {
+        data_source: dataset.name,
+        data_type: dataType,
         dataset: dataset.name,
         drillhole: holeName,
         quality: observation.quality,
@@ -380,12 +591,14 @@ export function buildEdaDatasets(input: {
   const holes = new Map(drillholes.map((hole) => [hole.id, hole]))
 
   return datasets.flatMap((dataset): EdaDataset[] => {
-    const datasetObservations = observationsForDataset(dataset, observations, holes, definitions)
-    if (datasetObservations.length === 0) return []
     const observedKeys = new Set(observations
       .filter((observation) => observation.datasetId === dataset.id)
       .map((observation) => observation.variableKey))
     const datasetVariables = variables.filter((variable) => observedKeys.has(variable.key))
+    const variablesForDataset = datasetVariables.map(variableDefinition)
+    const kind = edaDatasetKind({ id: dataset.id, name: dataset.name, producer: dataset.producerName, variables: variablesForDataset })
+    const datasetObservations = observationsForDataset(dataset, observations, holes, definitions, dataTypeLabel(kind))
+    if (datasetObservations.length === 0) return []
     const categoryDimensions = datasetVariables
       .filter((variable) => variable.dataType !== 'numeric')
       .map((variable) => ({ key: variable.key, label: variable.displayName }))
@@ -399,7 +612,7 @@ export function buildEdaDatasets(input: {
       snapshotAt: dataset.updatedAt,
       source: 'live',
       support: `${dataset.spatialSupport} · ${datasetObservations.length.toLocaleString()} records`,
-      variables: datasetVariables.map(variableDefinition),
+      variables: variablesForDataset,
     }]
   })
 }
@@ -423,10 +636,17 @@ export function buildLocalEdaDatasets(
     project: snapshot.project,
     variables: snapshot.variables,
   }).filter((dataset) => ![...replacedDatasetNames].some((name) => dataset.name.startsWith(`${name} · v`)))
-  return [...localDraftDatasets, ...snapshotDatasets, ...localDrillholeDatasets(snapshot, drillholeDraft, project)]
+  const loggingDatasets = (snapshot?.fieldLogging.datasets ?? [])
+    .flatMap((dataset) => {
+      const converted = fieldLoggingDataset(dataset, project, drillholes)
+      return converted === null ? [] : [converted]
+    })
+  const sourceDatasets = [...localDraftDatasets, ...loggingDatasets, ...snapshotDatasets, ...localDrillholeDatasets(snapshot, drillholeDraft, project)]
+  const integrated = integratedLocalDataset(sourceDatasets, project)
+  return integrated === null ? sourceDatasets : [integrated, ...sourceDatasets]
 }
 
-/** Returns demo snapshots only in demo mode and project snapshots only in a signed-in workspace. */
+/** Returns only durable project datasets from the signed-in or offline local workspace. */
 export function useProjectEdaDatasets() {
   const workspace = useDataPoolWorkspace()
   const projectId = workspace.project?.id ?? 'no-project'
@@ -435,14 +655,9 @@ export function useProjectEdaDatasets() {
     .map((section) => `${section}:${workspace.localTabularDrafts[section]?.updatedAt ?? 'empty'}`)
     .join('|')
   return useQuery<EdaDataset[]>({
-    enabled: !workspace.live || (!workspace.projectsLoading && !workspace.localLoading),
-    queryFn: () => {
-      if (!workspace.live) return loadEdaDatasets()
-      return Promise.resolve(buildLocalEdaDatasets(workspace.localSnapshot, workspace.localDrillholeDraft, workspace.localTabularDrafts, workspace.project))
-    },
-    queryKey: workspace.live
-      ? ['eda-datasets', 'local', projectId, workspace.localSnapshot?.refreshedAt ?? 'empty', workspace.localDrillholeDraft?.updatedAt ?? 'no-draft', localDraftSignature]
-      : ['eda-datasets', 'demo'],
+    enabled: workspace.live && !workspace.projectsLoading && !workspace.localLoading,
+    queryFn: () => Promise.resolve(buildLocalEdaDatasets(workspace.localSnapshot, workspace.localDrillholeDraft, workspace.localTabularDrafts, workspace.project)),
+    queryKey: ['eda-datasets', 'local', projectId, workspace.localSnapshot?.refreshedAt ?? 'empty', workspace.localDrillholeDraft?.updatedAt ?? 'no-draft', localDraftSignature],
     staleTime: Number.POSITIVE_INFINITY,
   })
 }

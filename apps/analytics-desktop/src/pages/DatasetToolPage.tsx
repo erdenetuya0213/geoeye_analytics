@@ -5,6 +5,7 @@ import { useDataPoolWorkspace } from '../state/DataPoolWorkspaceContext.js'
 import { usePersistentState } from '../state/persistentState.js'
 import { effectiveDrillholes, type LocalDrillholeDraft, type LocalProjectSnapshot, type LocalTabularDraft } from '../data/localProjectDb.js'
 import { parseTabularCsv } from '../data/tabularCsvImport.js'
+import { readImportSource } from '../data/importSource.js'
 import type { SectionId } from '../types.js'
 
 export type DatasetSection = Extract<SectionId, 'laboratory' | 'xrf' | 'spectral'>
@@ -19,38 +20,36 @@ const configs: Record<DatasetSection, DatasetToolConfig> = {
   laboratory: {
     searchLabel: 'laboratory samples',
     columns: ['Sample ID', 'Hole ID', 'From', 'To', 'Au g/t'],
-    rows: [['ALS-24018-031', 'GOR-DD-018', '82.0 m', '83.0 m', '1.42'], ['ALS-24018-032', 'GOR-DD-018', '83.0 m', '84.0 m', '2.18'], ['ALS-24018-033', 'GOR-DD-018', '84.0 m', '85.0 m', '0.76'], ['ALS-24017-114', 'GOR-DD-017', '112.0 m', '113.0 m', '3.08']],
+    rows: [],
   },
   xrf: {
     searchLabel: 'XRF readings',
     columns: ['Reading', 'Hole ID', 'Depth', 'Cu ppm', 'Instrument'],
-    rows: [['XRF-0912-284', 'GOR-DD-018', '82.5 m', '1,842', 'PXRF-02'], ['XRF-0912-285', 'GOR-DD-018', '83.5 m', '2,194', 'PXRF-02'], ['XRF-0912-286', 'GOR-DD-018', '84.5 m', '1,016', 'PXRF-02'], ['XRF-0911-118', 'GOR-DD-017', '112.5 m', '2,807', 'PXRF-01']],
+    rows: [],
   },
   spectral: {
     searchLabel: 'spectral scans',
     columns: ['Scan ID', 'Hole ID', 'Depth', 'Mineral', 'Score'],
-    rows: [['SPC-018-0082', 'GOR-DD-018', '82.0 m', 'Chlorite', '0.96'], ['SPC-018-0083', 'GOR-DD-018', '83.0 m', 'Sericite', '0.91'], ['SPC-018-0084', 'GOR-DD-018', '84.0 m', 'Epidote', '0.88'], ['SPC-017-0112', 'GOR-DD-017', '112.0 m', 'Kaolinite', '0.93']],
+    rows: [],
   },
 }
 
 export function DatasetToolPage({ section }: { section: DatasetSection }) {
   const workspace = useDataPoolWorkspace()
-  if (workspace.live) {
-    if (workspace.projectsLoading || workspace.localLoading) return <div className="page dataset-tool-page"><div className="eda-state panel">Opening the local project copy…</div></div>
-    if (workspace.project === null) return <div className="page dataset-tool-page"><div className="eda-state panel">No project is available for this account.</div></div>
-    return <LiveDatasetToolPage
-      canWrite={workspace.project.canWrite}
-      drillholeDraft={workspace.localDrillholeDraft}
-      importDraft={workspace.localTabularDrafts[section]}
-      onPublish={() => workspace.publishLocalTabularImport(section)}
-      onRefresh={workspace.refreshLocalProject}
-      onSaveLocal={workspace.saveTabularImportLocally}
-      refreshing={workspace.localRefreshing}
-      section={section}
-      snapshot={workspace.localSnapshot}
-    />
-  }
-  return <DatasetToolWorkbench config={configs[section]} section={section} />
+  if (!workspace.live) return <div className="page dataset-tool-page"><div className="eda-state panel">No local project data is open.</div></div>
+  if (workspace.projectsLoading || workspace.localLoading) return <div className="page dataset-tool-page"><div className="eda-state panel">Opening the local project copy…</div></div>
+  if (workspace.project === null) return <div className="page dataset-tool-page"><div className="eda-state panel">No project is available for this account.</div></div>
+  return <LiveDatasetToolPage
+    canWrite={workspace.connected && workspace.project.canWrite}
+    drillholeDraft={workspace.localDrillholeDraft}
+    importDraft={workspace.localTabularDrafts[section]}
+    onPublish={() => workspace.publishLocalTabularImport(section)}
+    onRefresh={workspace.refreshLocalProject}
+    onSaveLocal={workspace.saveTabularImportLocally}
+    refreshing={workspace.localRefreshing}
+    section={section}
+    snapshot={workspace.localSnapshot}
+  />
 }
 
 function DatasetToolWorkbench({ canWrite = true, config, importDraft, notice, noticeIsError = false, onImport, onPublish, onRefresh, publishing = false, refreshing = false, section }: {
@@ -134,7 +133,7 @@ function LiveDatasetToolPage({ canWrite, drillholeDraft, importDraft, onPublish,
   importDraft?: LocalTabularDraft | undefined
   onPublish: () => Promise<TabularImportResult>
   onRefresh: () => Promise<void>
-  onSaveLocal: (value: TabularImportInput) => Promise<void>
+  onSaveLocal: (value: TabularImportInput, files?: import('../desktop/bridge.js').ImportSourceFile[]) => Promise<void>
   refreshing: boolean
   section: DatasetSection
   snapshot: LocalProjectSnapshot | null
@@ -182,8 +181,9 @@ function LiveDatasetToolPage({ canWrite, drillholeDraft, importDraft, onPublish,
 
   const importFile = async (file: File) => {
     try {
-      const parsed = parseTabularCsv(await file.text(), file.name, section)
-      await onSaveLocal(parsed)
+      const source = await readImportSource(file)
+      const parsed = parseTabularCsv(source.contents, file.name, section)
+      await onSaveLocal(parsed, [source])
       setNoticeIsError(false)
       setNotice(`${parsed.rows.length.toLocaleString()} rows imported locally; Database unchanged`)
     } catch (error) {

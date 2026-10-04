@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createPointLoadRecord, pointLoadDemoRecords, readPointLoadRecords, writePointLoadRecords } from './pointLoadStore.js'
+import { createPointLoadRecord, readPointLoadRecords, writePointLoadRecords } from './pointLoadStore.js'
 
 function memoryStorage(initial: string | null = null) {
   let value = initial
@@ -27,12 +27,23 @@ describe('point-load test records', () => {
 
   it('round-trips records and recalculates derived values', () => {
     const storage = memoryStorage()
-    const source = pointLoadDemoRecords.slice(0, 1)
+    const source = [createPointLoadRecord({
+      depthFromM: 10,
+      depthToM: 11,
+      equivalentDiameterMm: 50,
+      holeId: 'TEST-01',
+      labName: 'Test lab',
+      peakLoadKn: 10,
+      sampleId: 'PLT-1',
+      testedAt: '2026-10-01',
+      testType: 'diametral',
+      validBreak: true,
+    }, 'test-1')]
     expect(writePointLoadRecords(storage, source)).toBe(true)
     expect(readPointLoadRecords(storage)).toEqual(source)
   })
 
-  it('falls back to demo records when stored data is malformed', () => {
-    expect(readPointLoadRecords(memoryStorage('{bad json'))).toEqual(pointLoadDemoRecords)
+  it('returns an empty collection when stored data is malformed', () => {
+    expect(readPointLoadRecords(memoryStorage('{bad json'))).toEqual([])
   })
 })

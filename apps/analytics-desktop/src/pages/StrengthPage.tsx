@@ -10,8 +10,10 @@ import {
 } from '../data/pointLoadStore.js'
 import { readSchmidtRecords, writeSchmidtRecords, type SchmidtRecord } from '../data/schmidtStore.js'
 import { parseStrengthCsv } from '../data/strengthCsvImport.js'
+import { readImportSource } from '../data/importSource.js'
 import { usePersistentState } from '../state/persistentState.js'
 import { useDataPoolWorkspace } from '../state/DataPoolWorkspaceContext.js'
+import { useProjectStorage } from '../state/ProjectStorageContext.js'
 
 interface PointLoadDraft {
   depthFromM: string
@@ -91,8 +93,9 @@ function strengthDatabaseDraft(pointLoad: readonly PointLoadRecord[], schmidt: r
 
 export function StrengthPage() {
   const workspace = useDataPoolWorkspace()
-  const [records, setRecords] = useState(() => readPointLoadRecords(window.localStorage, !workspace.live))
-  const [schmidtRecords, setSchmidtRecords] = useState(() => readSchmidtRecords(window.localStorage))
+  const storage = useProjectStorage()
+  const [records, setRecords] = useState(() => readPointLoadRecords(storage))
+  const [schmidtRecords, setSchmidtRecords] = useState(() => readSchmidtRecords(storage))
   const [activeMethod, setActiveMethod] = usePersistentState<StrengthMethod>('strength.activeMethod', 'point-load')
   const [query, setQuery] = usePersistentState('strength.query', '')
   const [validOnly, setValidOnly] = usePersistentState('strength.validOnly', false)
@@ -107,8 +110,8 @@ export function StrengthPage() {
 
   useEffect(() => {
     if (!workspace.live || databaseDraft !== undefined || records.length + schmidtRecords.length === 0) return
-    void workspace.saveTabularImportLocally(strengthDatabaseDraft(records, schmidtRecords))
-  }, [databaseDraft, records, schmidtRecords, workspace])
+    void workspace.saveTabularImportLocally(strengthDatabaseDraft(records, schmidtRecords)).catch(error => { setNoticeIsError(true); setSaveNotice(String(error)) })
+  }, [databaseDraft, records, schmidtRecords, workspace.live, workspace.saveTabularImportLocally])
 
   const filteredRecords = useMemo(() => records.filter((record) => (
     (!validOnly || record.validBreak) && recordMatches(record, query)
@@ -145,7 +148,7 @@ export function StrengthPage() {
     setFormError(null)
   }
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     try {
       const record = createPointLoadRecord({
@@ -161,9 +164,10 @@ export function StrengthPage() {
         validBreak: draft.validBreak,
       }, crypto.randomUUID())
       const nextRecords = [record, ...records]
+      const persisted = writePointLoadRecords(storage, nextRecords)
+      await storage.flush?.()
+      if (workspace.live) await workspace.saveTabularImportLocally(strengthDatabaseDraft(nextRecords, schmidtRecords))
       setRecords(nextRecords)
-      const persisted = writePointLoadRecords(window.localStorage, nextRecords)
-      if (workspace.live) void workspace.saveTabularImportLocally(strengthDatabaseDraft(nextRecords, schmidtRecords))
       setNoticeIsError(false)
       setSaveNotice(persisted ? `${record.sampleId} added` : `${record.sampleId} added for this session; local storage is unavailable`)
       closeEntry()
@@ -178,16 +182,18 @@ export function StrengthPage() {
     if (file === undefined) return
 
     try {
-      const result = parseStrengthCsv(await file.text(), file.name)
+      const source = await readImportSource(file)
+      const result = parseStrengthCsv(source.contents, file.name)
       const importedIds = new Set(result.records.map((record) => record.id))
       const existingIds = new Set(schmidtRecords.map((record) => record.id))
       const newCount = result.records.filter((record) => !existingIds.has(record.id)).length
       const nextRecords = [...result.records, ...schmidtRecords.filter((record) => !importedIds.has(record.id))]
+      const persisted = writeSchmidtRecords(storage, nextRecords)
+      await storage.flush?.()
+      if (workspace.live) await workspace.saveTabularImportLocally(strengthDatabaseDraft(records, nextRecords), [source])
       setSchmidtRecords(nextRecords)
       setActiveMethod('schmidt')
       setQuery('')
-      const persisted = writeSchmidtRecords(window.localStorage, nextRecords)
-      if (workspace.live) await workspace.saveTabularImportLocally(strengthDatabaseDraft(records, nextRecords))
       const skipped = result.blankRows + result.invalidRows
       setNoticeIsError(false)
       setSaveNotice(`${result.records.length} Schmidt readings imported (${newCount} new, ${skipped} skipped)${persisted ? '' : '; local storage is unavailable'}`)
@@ -235,7 +241,7 @@ export function StrengthPage() {
         {saveNotice === null && databaseDraft?.dirty !== true ? null : <span className={`strength-save-notice ${noticeIsError ? 'is-error' : ''}`} role={noticeIsError ? 'alert' : 'status'}>{noticeIsError ? <AlertCircle size={14} /> : <CheckCircle2 size={14} />} {saveNotice ?? 'Local changes have not been saved to the Database.'}</span>}
         <input accept=".csv,text/csv" aria-label="Choose a Strength CSV file" className="sr-only" onChange={handleCsvImport} ref={fileInputRef} type="file" />
         <button className="button button-secondary" onClick={() => { setSaveNotice(null); fileInputRef.current?.click() }} type="button"><Upload size={16} /> Import CSV</button>
-        {workspace.live ? <button className="button button-primary" disabled={publishing || !workspace.project?.canWrite || databaseDraft?.dirty !== true} onClick={() => void publishToDatabase()} title={!workspace.project?.canWrite ? 'Your role on this project is read-only' : databaseDraft?.dirty === true ? 'Send the local Strength records to the Database' : 'Import or add Strength records before saving'} type="button"><Save size={16} /> {publishing ? 'Saving…' : 'Save to Database'}</button> : null}
+        {workspace.live ? <button className="button button-primary" disabled={publishing || !workspace.connected || !workspace.project?.canWrite || databaseDraft?.dirty !== true} onClick={() => void publishToDatabase()} title={!workspace.connected ? 'Sign in to save to the Database' : !workspace.project?.canWrite ? 'Your role on this project is read-only' : databaseDraft?.dirty === true ? 'Send the local Strength records to the Database' : 'Import or add Strength records before saving'} type="button"><Save size={16} /> {publishing ? 'Saving…' : 'Save to Database'}</button> : null}
         {activeMethod === 'point-load' ? <button className="button button-primary" onClick={() => { setSaveNotice(null); setNoticeIsError(false); setShowEntry(true) }} type="button"><Plus size={16} /> Add point-load test</button> : null}
       </div>
 
@@ -289,7 +295,7 @@ export function StrengthPage() {
 
             <div className="strength-form-grid">
               <label><span>Sample ID</span><input autoFocus onChange={(event) => updateDraft('sampleId', event.target.value)} placeholder="PLT-018-086" required value={draft.sampleId} /></label>
-              <label><span>Hole ID</span><input onChange={(event) => updateDraft('holeId', event.target.value)} placeholder="GOR-DD-018" required value={draft.holeId} /></label>
+              <label><span>Hole ID</span><input onChange={(event) => updateDraft('holeId', event.target.value)} placeholder="Drillhole ID" required value={draft.holeId} /></label>
               <label><span>From depth (m)</span><input min="0" onChange={(event) => updateDraft('depthFromM', event.target.value)} placeholder="86.0" required step="any" type="number" value={draft.depthFromM} /></label>
               <label><span>To depth (m)</span><input min="0" onChange={(event) => updateDraft('depthToM', event.target.value)} placeholder="86.2" required step="any" type="number" value={draft.depthToM} /></label>
               <label><span>Test type</span><select onChange={(event) => updateDraft('testType', event.target.value as PointLoadTestType)} value={draft.testType}>{Object.entries(testTypeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>

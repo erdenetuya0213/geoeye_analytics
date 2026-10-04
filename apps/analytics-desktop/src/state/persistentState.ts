@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react'
+import { appStorage } from '../desktop/runtime.js'
+import { useProjectStorage } from './ProjectStorageContext.js'
 
 export interface PersistentStorage {
+  flush?(): Promise<void>
   getItem(key: string): string | null
   removeItem(key: string): void
   setItem(key: string, value: string): void
@@ -18,8 +21,20 @@ interface StoredEntry {
   v: unknown
 }
 
-// Survives page navigation inside one session even when browser storage is unavailable or the value is too large.
-const memory = new Map<string, StoredEntry>()
+// Survives page navigation inside one session even when durable storage is unavailable or the value is too large.
+// Each project adapter gets its own map so two open projects cannot observe one another's transient state.
+let storageMemory = new WeakMap<PersistentStorage, Map<string, StoredEntry>>()
+const fallbackMemory = new Map<string, StoredEntry>()
+
+function memoryFor(storage: PersistentStorage | undefined) {
+  if (storage === undefined) return fallbackMemory
+  let values = storageMemory.get(storage)
+  if (values === undefined) {
+    values = new Map<string, StoredEntry>()
+    storageMemory.set(storage, values)
+  }
+  return values
+}
 
 function replacer(_key: string, value: unknown) {
   return value instanceof Set ? { [SET_TAG]: [...value] } : value
@@ -43,15 +58,12 @@ function sameShape(value: unknown, fallback: unknown) {
 }
 
 function browserStorage(): PersistentStorage | undefined {
-  try {
-    return typeof window === 'undefined' ? undefined : window.localStorage
-  } catch {
-    return undefined
-  }
+  return typeof window === 'undefined' ? undefined : appStorage
 }
 
 /** Returns the saved value, or `undefined` when nothing usable was saved for this key and scope. */
 export function readPersistedState<T>(storage: PersistentStorage | undefined, key: string, fallback: T, scope = ''): T | undefined {
+  const memory = memoryFor(storage)
   let entry = memory.get(key)
   if (entry === undefined && storage !== undefined) {
     try {
@@ -70,6 +82,7 @@ export function readPersistedState<T>(storage: PersistentStorage | undefined, ke
 }
 
 export function writePersistedState(storage: PersistentStorage | undefined, key: string, value: unknown, scope = '') {
+  const memory = memoryFor(storage)
   memory.set(key, { s: scope, v: value })
   if (storage === undefined) return
   try {
@@ -82,13 +95,15 @@ export function writePersistedState(storage: PersistentStorage | undefined, key:
 }
 
 export function clearPersistedState(storage: PersistentStorage | undefined, key: string) {
+  const memory = memoryFor(storage)
   memory.delete(key)
   try { storage?.removeItem(WORKSPACE_STATE_PREFIX + key) } catch { /* Nothing was stored. */ }
 }
 
 /** Test hook: forgets the in-memory copies so reads fall through to storage. */
 export function resetPersistedStateMemory() {
-  memory.clear()
+  fallbackMemory.clear()
+  storageMemory = new WeakMap<PersistentStorage, Map<string, StoredEntry>>()
 }
 
 export function loadWorkspaceState<T>(key: string, fallback: T, scope = '') {
@@ -120,11 +135,12 @@ export function usePersistentState<T>(
   initial: T | (() => T),
   options: PersistentStateOptions = {},
 ): [T, Dispatch<SetStateAction<T>>] {
+  const projectStorage = useProjectStorage()
   const scope = options.scope ?? ''
   const identity = `${scope}\u0000${key}`
   const load = () => {
     const fallback = typeof initial === 'function' ? (initial as () => T)() : initial
-    const saved = loadWorkspaceState(key, fallback, scope)
+    const saved = readPersistedState(projectStorage, key, fallback, scope)
     return { identity, value: saved === undefined ? fallback : saved }
   }
   const [state, setState] = useState(load)
@@ -143,8 +159,8 @@ export function usePersistentState<T>(
   useEffect(() => {
     if (stored.current.identity === current.identity && Object.is(stored.current.value, current.value)) return
     stored.current = current
-    saveWorkspaceState(key, current.value, scope)
-  }, [current, key, scope])
+    writePersistedState(projectStorage, key, current.value, scope)
+  }, [current, key, projectStorage, scope])
 
   const setValue = useCallback<Dispatch<SetStateAction<T>>>((action) => {
     setState((previous) => {

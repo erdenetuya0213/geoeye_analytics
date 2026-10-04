@@ -1,5 +1,6 @@
 import { DataPoolClient } from '@geoeye/datapool-client'
 import type { ConnectionSettings } from '../types.js'
+import { dataPoolFetch } from '../desktop/dataPoolFetch.js'
 
 export function createDataPoolClient(
   settings: ConnectionSettings,
@@ -8,9 +9,7 @@ export function createDataPoolClient(
   return new DataPoolClient({
     endpoint: settings.endpoint,
     accessToken: () => settings.token || undefined,
-    ...(signal === undefined ? {} : {
-      fetch: (input, init) => globalThis.fetch(input, { ...init, signal }),
-    }),
+    fetch: (input, init) => dataPoolFetch(input, signal === undefined ? init : { ...init, signal }),
   })
 }
 

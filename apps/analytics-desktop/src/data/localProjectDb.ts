@@ -13,6 +13,7 @@ import type {
   VariableDefinition,
 } from '@geoeye/datapool-client'
 import type { DrillholeImportResult, ImportedCollarRecord } from '../components/DrillholeImportDialog.js'
+import { desktopBridge, type ProjectStorageAddress } from '../desktop/bridge.js'
 
 const DATABASE_NAME = 'geoeye-analytics-local'
 const DATABASE_VERSION = 1
@@ -61,8 +62,8 @@ export interface DrillholePublishReport {
 
 const fallbackMemory = new Map<string, LocalProjectRecord>()
 
-export function localProjectKey(endpoint: string, projectId: string): string {
-  return `${endpoint.replace(/\/$/, '').toLowerCase()}#${projectId}`
+export function localProjectKey(endpoint: string, projectId: string, accountId = 'local'): string {
+  return `${endpoint.replace(/\/$/, '').toLowerCase()}#${accountId}#${projectId}`
 }
 
 function fallbackStorageKey(key: string): string {
@@ -111,7 +112,7 @@ function openDatabase(): Promise<IDBDatabase> {
   })
 }
 
-export async function readLocalProjectRecord(key: string): Promise<LocalProjectRecord | null> {
+async function readBrowserProjectRecord(key: string): Promise<LocalProjectRecord | null> {
   if (typeof window === 'undefined' || window.indexedDB === undefined) return readFallback(key)
   try {
     const database = await openDatabase()
@@ -128,7 +129,7 @@ export async function readLocalProjectRecord(key: string): Promise<LocalProjectR
   }
 }
 
-export async function writeLocalProjectRecord(record: LocalProjectRecord): Promise<void> {
+async function writeBrowserProjectRecord(record: LocalProjectRecord): Promise<void> {
   fallbackMemory.set(record.key, record)
   if (typeof window === 'undefined' || window.indexedDB === undefined) {
     writeFallback(record)
@@ -146,6 +147,42 @@ export async function writeLocalProjectRecord(record: LocalProjectRecord): Promi
   } catch {
     writeFallback(record)
   }
+}
+
+/** Reads the durable native project database, migrating the old browser record on first use. */
+export async function readLocalProjectRecord(
+  key: string,
+  address?: ProjectStorageAddress,
+  legacyKey?: string,
+): Promise<LocalProjectRecord | null> {
+  const bridge = desktopBridge()
+  if (bridge === undefined || address === undefined) return readBrowserProjectRecord(key)
+  const native = await bridge.readProjectRecord(address)
+  if (native !== null) return { ...native, key }
+  const legacy = await readBrowserProjectRecord(legacyKey ?? key)
+  if (legacy === null) return null
+  const migrated = { ...legacy, key }
+  await bridge.writeProjectRecord({ address: {
+    ...address,
+    tenantId: address.tenantId ?? migrated.snapshot?.project.organizationId ?? null,
+  }, record: migrated })
+  return migrated
+}
+
+/** Writes a schema-aligned SQLite project database in the configured native workspace. */
+export async function writeLocalProjectRecord(
+  record: LocalProjectRecord,
+  address?: ProjectStorageAddress,
+): Promise<void> {
+  const bridge = desktopBridge()
+  if (bridge === undefined || address === undefined) {
+    await writeBrowserProjectRecord(record)
+    return
+  }
+  await bridge.writeProjectRecord({ address: {
+    ...address,
+    tenantId: address.tenantId ?? record.snapshot?.project.organizationId ?? null,
+  }, record })
 }
 
 async function loadAllObservations(

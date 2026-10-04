@@ -1,57 +1,43 @@
-import { ArrowRight, Check, Clock3, RefreshCw } from 'lucide-react'
-import type { ComponentType } from 'react'
-import {
-  AssayIcon,
-  FieldLoggingIcon,
-  SpectralIcon,
-  XrfIcon,
-} from '../components/GeoEyeIcons.js'
+import { FolderOpen, HardDrive } from 'lucide-react'
 import { useDataPoolWorkspace } from '../state/DataPoolWorkspaceContext.js'
 import type { ConnectionSettings, ConnectionState } from '../types.js'
 import { LiveDataPoolPanel } from './LiveDataPoolPanel.js'
+import { useDesktopWorkspace } from '../desktop/DesktopWorkspaceContext.js'
+import { WorkspaceTransfers } from '../components/WorkspaceTransfers.js'
 
 interface DataPoolPageProps {
   connectionSettings: ConnectionSettings
   connectionState: ConnectionState
 }
 
-interface PoolSource {
-  datasets: string
-  freshness: string
-  icon: ComponentType<{ className?: string; size?: number }>
-  id: string
-  label: string
-  records: string
-  type: string
-}
-
-const sources: readonly PoolSource[] = [
-  { id: 'field', label: 'GeoEye Field', type: 'Logging sync', datasets: '5 templates', records: '90 submissions', freshness: '8 min ago', icon: FieldLoggingIcon },
-  { id: 'lab', label: 'Laboratory', type: 'Assay import', datasets: '1 dataset', records: '3,612 records', freshness: 'Yesterday', icon: AssayIcon },
-  { id: 'xrf', label: 'Portable XRF', type: 'Instrument import', datasets: '1 dataset', records: '1,946 records', freshness: 'Yesterday', icon: XrfIcon },
-  { id: 'spectral', label: 'Core scanner', type: 'Spectral import', datasets: '1 dataset', records: '8,420 records', freshness: '2 days ago', icon: SpectralIcon },
-]
-
-const activity = [
-  { source: 'GeoEye Field', event: 'Logging template set accepted', detail: 'GOR-DD-018 · 5 templates', time: '8 min' },
-  { source: 'GeoEye Field', event: 'Lithology submission revised', detail: 'GOR-DD-017 · v6.2', time: '2 hr' },
-  { source: 'Laboratory', event: 'Assay batch integrated', detail: 'ALS-24018 · 612 samples', time: '1 day' },
-  { source: 'Portable XRF', event: 'Instrument file validated', detail: 'XRF-0912 · 284 readings', time: '1 day' },
-] as const
-
 export function DataPoolPage({ connectionState }: DataPoolPageProps) {
-  const connected = connectionState === 'connected'
   const workspace = useDataPoolWorkspace()
+  const desktop = useDesktopWorkspace()
   const variableCount = workspace.localSnapshot?.variables.length ?? null
+  const filesystemPanel = desktop.isDesktop ? (
+    <section className={`panel local-workspace-panel ${desktop.configured ? 'is-configured' : 'needs-folder'}`}>
+      <div className="local-workspace-icon"><HardDrive size={22} /></div>
+      <div className="local-workspace-copy">
+        <p className="eyebrow">Windows local workspace</p>
+        <h2>{desktop.configured ? 'Project files are stored on this computer' : 'Choose where GeoEye project files are stored'}</h2>
+        <p>{desktop.rootPath ?? 'Database snapshots, imports, analysis results, and graph files will be written to a durable folder you control.'}</p>
+      </div>
+      <button className="button button-secondary" disabled={desktop.choosing} onClick={() => void desktop.chooseRoot()} type="button">
+        <FolderOpen size={14} /> {desktop.choosing ? 'Opening…' : desktop.configured ? 'Change folder' : 'Choose folder'}
+      </button>
+    </section>
+  ) : null
 
-  if (workspace.live && workspace.client !== null) {
+  if (workspace.live) {
     return (
       <div className="page data-pool-page data-pool-console">
         <h1 className="sr-only">Database</h1>
         <p className="pool-live-banner">
-          <span className="pool-connection-state is-connected"><i />Database connected{variableCount === null ? '' : ` · ${variableCount} variables`}</span>
+          <span className={`pool-connection-state ${workspace.connected ? 'is-connected' : ''}`}><i />{workspace.connected ? 'Database connected' : 'Local project'}{variableCount === null ? '' : ` · ${variableCount} variables`}</span>
           {workspace.projectsError !== null ? <span role="alert">{workspace.projectsError}</span> : null}
         </p>
+        {filesystemPanel}
+        <WorkspaceTransfers />
         {workspace.project === null ? (
           <section className="panel pool-sources-panel">
             <p className="pool-live-note">
@@ -62,6 +48,7 @@ export function DataPoolPage({ connectionState }: DataPoolPageProps) {
           </section>
         ) : (
           <LiveDataPoolPanel
+            connected={workspace.connected}
             draft={workspace.localDrillholeDraft}
             error={workspace.localError}
             onRefresh={workspace.refreshLocalProject}
@@ -77,48 +64,13 @@ export function DataPoolPage({ connectionState }: DataPoolPageProps) {
   return (
     <div className="page data-pool-page data-pool-console">
       <h1 className="sr-only">Database</h1>
-
+      {filesystemPanel}
       <section className="panel pool-sources-panel">
-        <div className="panel-heading pool-console-heading">
-          <div><p className="eyebrow">Sources</p><h2>Data connections</h2></div>
-          <div className="pool-console-actions">
-            <span className={`pool-connection-state ${connected ? 'is-connected' : ''}`}><i />{connected ? `Cloud connected${variableCount === null ? '' : ` · ${variableCount} variables`}` : 'Demo snapshot'}</span>
-            <button className="button button-secondary" disabled type="button"><RefreshCw size={14} /> Refresh</button>
-          </div>
-        </div>
-        <div className="pool-source-grid">
-          {sources.map((source) => {
-            const SourceIcon = source.icon
-            return (
-              <button className="pool-source-card" key={source.id} type="button">
-                <span className={`pool-source-icon source-${source.id}`}><SourceIcon className="geo-icon" size={24} /></span>
-                <span className="pool-source-name"><small>{source.type}</small><strong>{source.label}</strong></span>
-                <span className="pool-source-stat pool-source-scope"><small>Scope</small><strong>{source.datasets}</strong></span>
-                <span className="pool-source-stat pool-source-volume"><small>Volume</small><strong>{source.records}</strong></span>
-                <span className="pool-source-freshness"><Check size={14} /><span><small>Last accepted</small><strong>{source.freshness}</strong></span></span>
-                <ArrowRight size={16} />
-              </button>
-            )
-          })}
-        </div>
-      </section>
-
-      <section className="panel pool-activity-panel">
-        <div className="panel-heading pool-console-heading">
-          <div><p className="eyebrow">Activity</p><h2>Recent ingestion</h2></div>
-          <span className="record-pill">4 accepted</span>
-        </div>
-        <div className="pool-activity-table">
-          <div className="pool-activity-row pool-activity-header"><span>Source</span><span>Event</span><span>Payload</span><span>Received</span><span>Status</span></div>
-          {activity.map((item) => (
-            <button className="pool-activity-row" key={`${item.source}-${item.event}`} type="button">
-              <span><strong>{item.source}</strong></span>
-              <span>{item.event}</span>
-              <span className="mono-value">{item.detail}</span>
-              <span><Clock3 size={13} /> {item.time}</span>
-              <span className="pool-accepted"><Check size={13} /> Accepted</span>
-            </button>
-          ))}
+        <div className="eda-state">
+          <strong>No project data is open.</strong>
+          <span>{connectionState === 'checking'
+            ? 'Checking the Database connection…'
+            : 'Choose a workspace folder above to start importing and analyzing local data.'}</span>
         </div>
       </section>
     </div>

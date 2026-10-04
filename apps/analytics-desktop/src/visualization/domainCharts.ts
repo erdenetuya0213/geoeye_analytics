@@ -1,7 +1,7 @@
 import type { EChartsCoreOption } from 'echarts/core'
 import type { DomainAnalysisRunResult } from '../analysis/domainAnalysis.js'
 import { buildCdf, summarizeValues, type EdaObservation } from '../analysis/eda.js'
-import type { EdaDataset } from '../data/edaDemo.js'
+import type { EdaDataset } from '../data/edaTypes.js'
 import { geoEyeChartColors } from './geoEyeTheme.js'
 
 export type DomainSpatialView = 'plan' | 'section' | 'long-section' | 'downhole'

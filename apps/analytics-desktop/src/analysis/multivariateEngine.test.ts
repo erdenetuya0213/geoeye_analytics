@@ -3,14 +3,14 @@ import { buildMultivariateRunRequest, calculateMultivariateRun, type Multivariat
 import type { EdaDataset } from '../data/edaDemo.js'
 
 const dataset: EdaDataset = {
-  dimensions: [{ key: 'lithology', label: 'Lithology' }],
+  dimensions: [{ key: 'lithology', label: 'Lithology' }, { key: 'domain', label: 'Domain' }],
   id: 'dataset-1',
   name: 'Test',
   observations: [
-    { depthFrom: 0, depthTo: 1, dimensions: { lithology: 'A' }, easting: 0, holeId: 'H1', id: 'row-a', joinKey: 'a', lithology: 'A', northing: 0, sampleId: 'A', sourceObservationId: 'source-a', values: { x: 1, y: 2, z: 8 } },
-    { depthFrom: 1, depthTo: 2, dimensions: { lithology: 'A' }, easting: 0, holeId: 'H1', id: 'row-b', joinKey: 'b', lithology: 'A', northing: 0, sampleId: 'B', sourceObservationId: 'source-b', values: { x: 2, y: 4, z: 6 } },
-    { depthFrom: 2, depthTo: 3, dimensions: { lithology: 'B' }, easting: 0, holeId: 'H2', id: 'row-c', joinKey: 'c', lithology: 'B', northing: 0, sampleId: 'C', sourceObservationId: 'source-c', values: { x: 3, y: 6, z: null } },
-    { depthFrom: 3, depthTo: 4, dimensions: { lithology: 'B' }, easting: 0, holeId: 'H2', id: 'row-d', joinKey: 'd', lithology: 'B', northing: 0, sampleId: 'D', sourceObservationId: 'source-d', values: { x: 4, y: 8, z: 2 } },
+    { depthFrom: 0, depthTo: 1, dimensions: { domain: 'North', lithology: 'A' }, easting: 0, holeId: 'H1', id: 'row-a', joinKey: 'a', lithology: 'A', northing: 0, sampleId: 'A', sourceObservationId: 'source-a', values: { x: 1, y: 2, z: 8 } },
+    { depthFrom: 1, depthTo: 2, dimensions: { domain: 'South', lithology: 'A' }, easting: 0, holeId: 'H1', id: 'row-b', joinKey: 'b', lithology: 'A', northing: 0, sampleId: 'B', sourceObservationId: 'source-b', values: { x: 2, y: 4, z: 6 } },
+    { depthFrom: 2, depthTo: 3, dimensions: { domain: 'North', lithology: 'B' }, easting: 0, holeId: 'H2', id: 'row-c', joinKey: 'c', lithology: 'B', northing: 0, sampleId: 'C', sourceObservationId: 'source-c', values: { x: 3, y: 6, z: null } },
+    { depthFrom: 3, depthTo: 4, dimensions: { domain: 'South', lithology: 'B' }, easting: 0, holeId: 'H2', id: 'row-d', joinKey: 'd', lithology: 'B', northing: 0, sampleId: 'D', sourceObservationId: 'source-d', values: { x: 4, y: 8, z: 2 } },
   ],
   producer: 'Test', project: 'Test', snapshotAt: '2026-10-01T00:00:00.000Z', source: 'demo', support: 'Intervals',
   variables: [
@@ -50,5 +50,11 @@ describe('GeoEye MultivariateEngine browser adapter', () => {
     expect(first.missing.analysisCount).toBe(4)
     expect(first.rows.find((row) => row.observationId === 'row-c')?.imputed).toBe(true)
     expect(first.rows.map((row) => row.cluster)).toEqual(second.rows.map((row) => row.cluster))
+  })
+
+  it('combines a primary and second categorical group for population comparison', () => {
+    const request = buildMultivariateRunRequest({ ...configuration, secondGroup: 'domain' }, dataset, 3)
+
+    expect(request.rows.map((row) => row.group)).toEqual(['A · North', 'A · South', 'B · North', 'B · South'])
   })
 })

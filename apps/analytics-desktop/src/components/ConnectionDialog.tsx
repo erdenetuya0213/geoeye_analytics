@@ -1,145 +1,98 @@
-import { DataPoolClient, DataPoolError } from '@geoeye/datapool-client'
-import { LoaderCircle, LogIn, PlugZap, Server, X, XCircle } from 'lucide-react'
-import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { demoWorkspaceAllowed } from '../data/demoPolicy.js'
+import { DataPoolError } from '@geoeye/datapool-client'
+import { LoaderCircle, PlugZap, Server, X, XCircle } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { checkDataPoolConnection, createDataPoolClient } from '../data/dataPoolConnection.js'
+import { desktopBridge } from '../desktop/bridge.js'
 import type { ConnectionSettings, ConnectionState } from '../types.js'
 
 export type ConnectionDialogMode = 'connection' | 'sign-in'
-
 interface ConnectionDialogProps {
   initialSettings: ConnectionSettings
   mode?: ConnectionDialogMode
   onClose: () => void
   onSave: (settings: ConnectionSettings, state: ConnectionState) => void
-  /** Sign-in is the only way forward: no close button and no demo workspace. */
   required?: boolean
 }
 
-export function signInErrorMessage(error: unknown): string {
+export function connectionErrorMessage(error: unknown): string {
   if (error instanceof DataPoolError) {
-    if (error.status === 401) return 'The email or password is incorrect.'
-    if (error.status === 403) return 'Set a new password in GeoEye Field first, then sign in here.'
-    if (error.status === 429) return 'Too many attempts. Try again in 15 minutes.'
-    if (error.status === 404) return 'This server does not offer account sign-in.'
-    return 'The Database could not complete the sign-in. Try again.'
+    if (error.status === 401 || error.status === 403) return 'The configured Database access is no longer valid. Ask your administrator to renew it. Your offline activation is unchanged.'
+    if (error.status === 404) return 'The configured server does not expose the Analytics Database API. Ask your administrator to check the API address.'
   }
-  return 'The Database could not be reached. Check the server address and your connection.'
+  return 'The configured Database API is unavailable. Start the local staging API or check your network, then retry. You can continue working offline.'
 }
 
-/** Sign-in with a GeoEye account. The same accounts are used by GeoEye Field. */
-export function ConnectionDialog({ initialSettings, mode = 'sign-in', onClose, onSave, required = false }: ConnectionDialogProps) {
-  const [endpoint, setEndpoint] = useState(initialSettings.endpoint)
+/** Connection uses administrator-provisioned access, never another password prompt. */
+export function ConnectionDialog({ initialSettings, onClose, onSave, required = false }: ConnectionDialogProps) {
+  const [settings, setSettings] = useState(initialSettings)
   const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
+  const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const mounted = useRef(true)
-  const connectionMode = mode === 'connection'
+  const configured = settings.managed === true || settings.token !== ''
 
   useEffect(() => {
     mounted.current = true
+    const bridge = desktopBridge()
+    if (bridge === undefined) { setLoading(false); return }
+    void bridge.databaseConfiguration().then((configuration) => {
+      if (!mounted.current || configuration === null) return
+      setEmail(configuration.email)
+      setSettings({ version: 1, endpoint: configuration.endpoint, accountId: configuration.accountId, managed: true, token: '' })
+    }).catch((failure: unknown) => {
+      if (mounted.current) setError(failure instanceof Error ? failure.message : 'The saved Database configuration could not be opened.')
+    }).finally(() => { if (mounted.current) setLoading(false) })
     return () => { mounted.current = false }
   }, [])
 
   useEffect(() => {
-    if (required) return undefined
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [onClose, required])
+    if (required) return
+    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape' && !busy) onClose() }
+    window.addEventListener('keydown', escape)
+    return () => window.removeEventListener('keydown', escape)
+  }, [busy, onClose, required])
 
-  const signIn = async (event: FormEvent) => {
-    event.preventDefault()
-    if (busy) return
+  const connect = async () => {
+    if (busy || loading || !configured) return
     setBusy(true)
     setError('')
     try {
-      const result = await new DataPoolClient({ endpoint }).login({ email, password })
+      const [session] = await Promise.all([
+        createDataPoolClient(settings).session(),
+        checkDataPoolConnection(settings),
+      ])
+      if (session === null) throw new Error('The configured API must identify an authorized user.')
       if (!mounted.current) return
-      onSave({ version: 1, endpoint, token: result.accessToken }, 'connected')
+      onSave({ ...settings, accountId: session.user.id }, 'connected')
     } catch (failure) {
-      if (!mounted.current) return
-      setError(signInErrorMessage(failure))
-      setPassword('')
+      if (mounted.current) setError(connectionErrorMessage(failure))
     } finally {
       if (mounted.current) setBusy(false)
     }
   }
 
   return (
-    <div className={`dialog-backdrop ${required ? 'is-sign-in-gate' : ''}`} role="presentation" onMouseDown={required ? undefined : onClose}>
-      <form
-        aria-busy={busy}
-        aria-labelledby="connection-title"
-        aria-modal="true"
-        className="connection-dialog"
-        onMouseDown={(event) => event.stopPropagation()}
-        onSubmit={(event) => void signIn(event)}
-        role="dialog"
-      >
+    <div className="dialog-backdrop" role="presentation" onMouseDown={required || busy ? undefined : onClose}>
+      <section aria-busy={loading || busy} aria-labelledby="connection-title" aria-modal="true" className="connection-dialog" onMouseDown={(event) => event.stopPropagation()} role="dialog">
         <div className="dialog-header">
-          <div className="dialog-icon">{connectionMode ? <PlugZap size={21} /> : <LogIn size={21} />}</div>
-          <div>
-            <p className="eyebrow">{connectionMode ? 'Database' : 'GeoEye Analytics'}</p>
-            <h2 id="connection-title">{connectionMode ? 'Connection' : 'Sign in'}</h2>
-          </div>
-          {required ? null : (
-            <button aria-label={connectionMode ? 'Close connection' : 'Close sign-in'} className="icon-button" onClick={onClose} type="button">
-              <X size={19} />
-            </button>
-          )}
+          <div className="dialog-icon"><PlugZap size={21} /></div>
+          <div><p className="eyebrow">Database</p><h2 id="connection-title">Configured connection</h2></div>
+          {required ? null : <button aria-label="Close connection" className="icon-button" disabled={busy} onClick={onClose} type="button"><X size={19} /></button>}
         </div>
-
         <div className="dialog-body">
-          <div className="local-node-card">
-            <div className="node-icon"><Server size={19} /></div>
-            <div>
-              <strong>{connectionMode ? 'Connect to the Database' : 'Use your GeoEye account'}</strong>
-              <span>{connectionMode ? 'Use your GeoEye account to open live project data' : 'The same email and password as GeoEye Field'}</span>
-            </div>
-          </div>
-
-          <label className="form-field">
-            <span>Email</span>
-            <input autoComplete="username" autoFocus onChange={(event) => setEmail(event.target.value)} required type="email" value={email} />
-          </label>
-          <label className="form-field">
-            <span>Password</span>
-            <input autoComplete="current-password" onChange={(event) => setPassword(event.target.value)} required type="password" value={password} />
-          </label>
-          <label className="form-field">
-            <span>Server <em>change only if told to</em></span>
-            <input onChange={(event) => setEndpoint(event.target.value)} required value={endpoint} />
-          </label>
-
-          {error === '' ? null : (
-            <div className="connection-result result-unavailable" role="alert">
-              <XCircle size={17} />
-              <span>{error}</span>
-            </div>
-          )}
+          <div className="local-node-card"><div className="node-icon"><Server size={19} /></div><div><strong>No additional sign-in required</strong><span>Analytics uses the API access configured for this Windows user. GeoEye Field authentication stays unchanged.</span></div></div>
+          <div className="form-field"><span>API server</span><strong>{settings.endpoint || 'Not configured on this computer'}</strong></div>
+          {email ? <div className="form-field"><span>Authorized account</span><strong>{email}</strong></div> : null}
+          <p>Connect loads only the projects this account is permitted to access. Choose a local workspace folder to keep synchronized data and analysis results on this computer.</p>
+          {!loading && !configured ? <div className="connection-result result-unavailable" role="status">An administrator must provision this computer’s API connection once. Do not enter database passwords or an activation key here.</div> : null}
+          {error ? <div className="connection-result result-unavailable" role="alert"><XCircle size={17} /><span>{error}</span></div> : null}
         </div>
-
-        <div className="dialog-footer">
-          {demoWorkspaceAllowed && !required ? (
-            <button className="button button-ghost" onClick={() => onSave({ version: 1, endpoint, token: '' }, 'demo')} type="button">
-              Use demo workspace
-            </button>
-          ) : <span />}
-          <div className="dialog-footer-actions">
-            {required ? null : (
-              <button className="button button-ghost" onClick={onClose} type="button">
-                Cancel
-              </button>
-            )}
-            <button className="button button-primary" disabled={busy} type="submit">
-              {busy ? <LoaderCircle className="spin" size={15} /> : null} {connectionMode ? 'Connect' : 'Sign in'}
-            </button>
-          </div>
-        </div>
-      </form>
+        <div className="dialog-footer"><span>{loading ? 'Reading protected configuration…' : 'Credentials stay in Windows-protected storage'}</span><div className="dialog-footer-actions">
+          {required ? null : <button className="button button-ghost" disabled={busy} onClick={onClose} type="button">Close</button>}
+          <button className="button button-primary" disabled={busy || loading || !configured} onClick={() => void connect()} type="button">{busy ? <LoaderCircle className="spin" size={15} /> : <PlugZap size={15} />} {busy ? 'Connecting…' : 'Connect'}</button>
+        </div></div>
+      </section>
     </div>
   )
 }

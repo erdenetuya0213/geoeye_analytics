@@ -1,5 +1,6 @@
 import { ChevronDown, LogIn, LogOut } from 'lucide-react'
 import { useDataPoolWorkspace } from '../state/DataPoolWorkspaceContext.js'
+import { useOfflineLicense } from '../desktop/ActivationContext.js'
 import { ThemeSwitcher } from './ThemeSwitcher.js'
 import type { ThemeId } from './ThemeSwitcher.js'
 
@@ -16,8 +17,9 @@ function initials(name: string): string {
 
 export function Topbar({ onSignIn, onThemeChange, theme }: TopbarProps) {
   const workspace = useDataPoolWorkspace()
-  const userName = workspace.session?.user.displayName ?? null
-  const userEmail = workspace.session?.user.email ?? null
+  const license = useOfflineLicense()
+  const userName = license?.email ?? workspace.session?.user.displayName ?? null
+  const userEmail = license?.email ?? workspace.session?.user.email ?? null
   const userLabel = userName?.trim() || userEmail || 'Signed in'
   // Projects are grouped by the organization (tenant) that owns them.
   const organizations = [...new Set(workspace.projects.map((project) => project.organizationName ?? ''))]
@@ -55,15 +57,16 @@ export function Topbar({ onSignIn, onThemeChange, theme }: TopbarProps) {
           </span>
         </label>
       ) : (
-        <span className="project-selector" title="Demo workspace with sample data. Sign in to open a real project.">
-          <span className="project-selector-mark" aria-hidden="true">DE</span>
-          <span className="project-selector-item"><small>Demo workspace</small><strong>Sample data</strong></span>
+        <span className="project-selector" title="No local project has been opened for this account.">
+          <span className="project-selector-mark" aria-hidden="true">—</span>
+          <span className="project-selector-item"><small>Local workspace</small><strong>No project open</strong></span>
         </span>
       )}
 
       <div className="topbar-actions">
         <ThemeSwitcher onChange={onThemeChange} theme={theme} />
-        {workspace.live ? (
+        {license ? <span className="activation-expiry" title={`Activation expires ${new Date(license.expiresAt).toLocaleString()}`}>Valid until {new Date(license.expiresAt).toLocaleDateString()}</span> : null}
+        {license !== null || workspace.connected ? (
           <div aria-label="Account" className="profile-controls" role="group">
             <span className="profile-button" title={userEmail === null ? userLabel : `Signed in as ${userEmail}`}>
               <span aria-hidden="true" className="profile-avatar">{initials(userLabel)}</span>

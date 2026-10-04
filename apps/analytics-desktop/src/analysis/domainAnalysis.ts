@@ -1,6 +1,6 @@
 import type { EdaObservation, SummaryStatistics } from './eda.js'
 import { summarizeValues } from './eda.js'
-import type { EdaDataset } from '../data/edaDemo.js'
+import type { EdaDataset } from '../data/edaTypes.js'
 import type { MultivariateDomainEvidence } from '../data/multivariateEvidenceStore.js'
 
 export type DomainType = 'geological' | 'estimation' | 'structural' | 'geotechnical' | 'alteration-spectral'

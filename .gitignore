@@ -3,6 +3,8 @@ node_modules/
 dist/
 coverage/
 artifacts/
+apps/analytics-desktop/release/
+apps/analytics-desktop/release-*/
 .turbo/
 .vite/
 .env
@@ -18,6 +20,7 @@ artifacts/
 .DS_Store
 Thumbs.db
 .codex-temp/
+.local-activation-issuer/
 .pytest_cache/
 __pycache__/
 *.py[cod]

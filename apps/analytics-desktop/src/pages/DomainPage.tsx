@@ -14,15 +14,18 @@ import {
   readDomainMembershipDocument, saveDomainCandidateSet, type DomainMembershipDocument,
 } from '../data/domainMembershipStore.js'
 import { currentAnalysisTemplateVersion, recordAnalysisTemplateSave, resolveAnalysisTemplateVersion } from '../data/analysisSaveStore.js'
-import { type EdaDataset } from '../data/edaDemo.js'
+import { type EdaDataset } from '../data/edaTypes.js'
 import { useProjectEdaDatasets } from '../data/liveEda.js'
 import { readMultivariateDomainEvidence } from '../data/multivariateEvidenceStore.js'
 import { saveSpatialViewRequest } from '../data/spatialViewStore.js'
 import { barGraphImage } from '../data/analysisGraphImages.js'
 import { saveAnalysisResultPackage } from '../data/analysisResultStore.js'
+import { useDurableAction } from '../state/useDurableAction.js'
 import { useGeoEyeSelection } from '../state/SelectionContext.js'
+import { useDataPoolWorkspace } from '../state/DataPoolWorkspaceContext.js'
 import type { SectionId } from '../types.js'
 import { usePersistentState } from '../state/persistentState.js'
+import { useProjectStorage } from '../state/ProjectStorageContext.js'
 import {
   buildContactProfileOption, buildPopulationBoxOption, buildPopulationCdfOption, buildPopulationHistogramOption,
 } from '../visualization/domainCharts.js'
@@ -60,7 +63,7 @@ const evidenceCatalog = [
 
 const domainLabels = Object.fromEntries(domainTypes.map((type) => [type.id, type.label])) as Record<DomainType, string>
 
-function nextRunNumber(storage: Storage) {
+function nextRunNumber(storage: Pick<Storage, 'getItem' | 'setItem'>) {
   const key = 'geoeye.analytics.domain-run-number.v2'
   const current = Number.parseInt(storage.getItem(key) ?? '0', 10)
   const next = Number.isFinite(current) ? current + 1 : 1
@@ -145,12 +148,15 @@ function ChartCard({ children, detail, title }: { children: React.ReactNode; det
 }
 
 export function DomainPage({ onNavigate }: DomainPageProps) {
+  const storage = useProjectStorage()
+  const durable = useDurableAction()
+  const workspace = useDataPoolWorkspace()
   const datasetsQuery = useProjectEdaDatasets()
-  const multivariateEvidence = useMemo(() => readMultivariateDomainEvidence(typeof window === 'undefined' ? undefined : window.localStorage), [])
+  const multivariateEvidence = useMemo(() => readMultivariateDomainEvidence(storage), [storage])
   // New multivariate evidence starts a fresh configuration instead of restoring the previous one.
   const evidenceScope = multivariateEvidence?.runId ?? ''
   const [domainType, setDomainType] = usePersistentState<DomainType>('domain.domainType', multivariateEvidence === null ? 'geotechnical' : 'estimation', { scope: evidenceScope })
-  const [datasetId, setDatasetId] = usePersistentState('domain.datasetId', multivariateEvidence?.datasetId ?? 'demo-geotechnical-log-v4', { scope: evidenceScope })
+  const [datasetId, setDatasetId] = usePersistentState('domain.datasetId', multivariateEvidence?.datasetId ?? '', { scope: evidenceScope })
   const [primarySourceId, setPrimarySourceId] = usePersistentState('domain.primarySourceId', multivariateEvidence === null ? 'variable:geotech.rmr76' : `multivariate:${multivariateEvidence.runId}`, { scope: evidenceScope })
   const [evidenceKeys, setEvidenceKeys] = usePersistentState<string[]>('domain.evidenceKeys', ['geotech.rqd', 'geotech.ucs', 'lithology', 'alteration'], { scope: evidenceScope })
   const [ranges, setRanges] = usePersistentState<DomainCandidateRange[]>('domain.ranges', defaultNumericRanges('geotech.rmr76', 'GT'), { scope: evidenceScope })
@@ -166,7 +172,7 @@ export function DomainPage({ onNavigate }: DomainPageProps) {
   const [running, setRunning] = useState(false)
   const [savedDomainSetId, setSavedDomainSetId] = usePersistentState<string | null>('domain.savedDomainSetId', null, { scope: evidenceScope })
   const [savedTemplateVersion, setSavedTemplateVersion] = usePersistentState<number | null>('domain.savedTemplateVersion', null, { scope: evidenceScope })
-  const [history, setHistory] = useState<DomainMembershipDocument>(() => readDomainMembershipDocument(typeof window === 'undefined' ? undefined : window.localStorage))
+  const [history, setHistory] = useState<DomainMembershipDocument>(() => readDomainMembershipDocument(storage))
   const { clearSelection, replaceSelection, selectedIds } = useGeoEyeSelection()
 
   const datasets = datasetsQuery.data ?? []
@@ -246,7 +252,7 @@ export function DomainPage({ onNavigate }: DomainPageProps) {
     if (generateDisabled) return
     setRunning(true)
     window.setTimeout(() => {
-      const runNumber = nextRunNumber(window.localStorage)
+      const runNumber = nextRunNumber(storage)
       const source: DomainPrimarySource = selectedSource.kind === 'threshold' ? { ...selectedSource, threshold } : selectedSource
       const supportingEvidenceKeys = evidenceKeys.filter((key) => key !== source.variableKey)
       const scope = scopeId === 'dataset'
@@ -272,25 +278,25 @@ export function DomainPage({ onNavigate }: DomainPageProps) {
   const openCentralView = (mode: 'plan' | 'isometric') => {
     if (candidateRun === null || selectedGroup === undefined || selectedGroup.rowCount === 0) return
     replaceSelection(selectedGroup.sourceObservationIds)
-    saveSpatialViewRequest(window.localStorage, { colorBy: 'candidate', datasetId: candidateRun.datasetId, label: `${selectedGroup.code} · ${selectedGroup.label}`, sourceModule: 'domain', sourceObservationIds: selectedGroup.sourceObservationIds })
+    saveSpatialViewRequest(storage, { colorBy: 'candidate', datasetId: candidateRun.datasetId, label: `${selectedGroup.code} · ${selectedGroup.label}`, sourceModule: 'domain', sourceObservationIds: selectedGroup.sourceObservationIds })
     const url = new URL(window.location.href)
     url.searchParams.set('section', 'view-3d')
     url.searchParams.set('sceneView', mode)
     window.history.replaceState({}, '', url)
     onNavigate('view-3d')
   }
-  const saveDomainSet = (createVersion: boolean) => {
-    if (candidateRun === null || !candidateRun.groups.some((group) => group.rowCount > 0) || domainSetId.trim().length === 0) return
+  const saveDomainSet = (createVersion: boolean) => durable.perform(async () => {
+    if (candidateRun === null || workspace.project === null || !candidateRun.groups.some((group) => group.rowCount > 0) || domainSetId.trim().length === 0) return
     const templateId = candidateRun.datasetId
-    const templateVersion = resolveAnalysisTemplateVersion(window.localStorage, {
+    const templateVersion = resolveAnalysisTemplateVersion(storage, {
       fallbackVersion: 1,
       mode: createVersion ? 'new-version' : 'overwrite',
       templateId,
     })
     const savedAt = new Date().toISOString()
     const analysisFileId = `domain/${domainSetId.trim()}/v${templateVersion}.json`
-    const next = saveDomainCandidateSet(window.localStorage, candidateRun, domainSetId.trim(), savedAt, { templateId, templateVersion })
-    recordAnalysisTemplateSave(window.localStorage, {
+    const next = saveDomainCandidateSet(storage, candidateRun, domainSetId.trim(), savedAt, { templateId, templateVersion })
+    recordAnalysisTemplateSave(storage, {
       analysisFileId,
       derivedFieldKeys: [`domain.${candidateRun.domainType}_membership`],
       feature: 'domain',
@@ -300,7 +306,7 @@ export function DomainPage({ onNavigate }: DomainPageProps) {
       templateVersion,
     })
     const candidateObservationIds = new Set(candidateRun.groups.flatMap((group) => group.candidateObservationIds))
-    saveAnalysisResultPackage(window.localStorage, {
+    await saveAnalysisResultPackage(storage, {
       analysisFileId,
       analysisPayload: { domainSetId: domainSetId.trim(), run: candidateRun },
       boreholeIds: dataset.observations.filter((observation) => candidateObservationIds.has(observation.id)).map((observation) => observation.holeId),
@@ -312,23 +318,23 @@ export function DomainPage({ onNavigate }: DomainPageProps) {
         barGraphImage('domain-primary-means', `${candidateRun.primarySource.label} · class means`, candidateRun.groups.flatMap((group) => group.primaryStatistics?.mean == null ? [] : [{ label: group.code, value: group.primaryStatistics.mean }])),
       ],
       inputName: `${candidateRun.domainType}-${candidateRun.primarySource.label}`,
-      projectId: dataset.project,
+      projectId: workspace.project.id,
       runId: candidateRun.runId,
       sourceFileName: `${candidateRun.datasetName}.json`,
       sourceObservationIds: candidateRun.groups.flatMap((group) => group.sourceObservationIds),
       templateId,
       templateVersion,
-      tenantId: 'GeoEye Demo',
+      tenantId: workspace.project.organizationId ?? '_unassigned',
     })
     setHistory(next); setSavedDomainSetId(domainSetId.trim()); setSavedTemplateVersion(templateVersion)
-  }
+  })
 
   const activePopulationKeys = advancedResult?.population.map((item) => item.variableKey) ?? []
   const effectivePopulationVariable = activePopulationKeys.includes(populationVariable) ? populationVariable : activePopulationKeys[0] ?? ''
   const activePopulation = advancedResult?.population.find((item) => item.variableKey === effectivePopulationVariable)
   const currentTemplateVersion = typeof window === 'undefined'
     ? 1
-    : currentAnalysisTemplateVersion(window.localStorage, dataset.id, 1)
+    : currentAnalysisTemplateVersion(storage, dataset.id, 1)
   const tabs: Array<{ icon: React.ReactNode; id: DomainView; label: string }> = [
     { icon: <Layers3 size={15} />, id: 'candidates', label: 'Candidates' },
     { icon: <TableProperties size={15} />, id: 'review', label: 'Review' },
@@ -336,6 +342,7 @@ export function DomainPage({ onNavigate }: DomainPageProps) {
   ]
 
   return <div className="page domain-page domain-simple-page">
+    {durable.notice ? <p role="status">{durable.notice}</p> : null}
     <h1 className="sr-only">Domain candidate workflow</h1>
     <header className="domain-simple-header">
       <div><span><Layers3 size={18} /></span><div><p className="eyebrow">Evidence-driven interpretation</p><h2>Domain candidates</h2><small>Generate memberships, inspect selected classes centrally, then save the complete domain set.</small></div></div>

@@ -1,6 +1,6 @@
 import type { EChartsCoreOption } from 'echarts/core'
 import type { MultivariateCorrelationMethod, MultivariateRunResult } from '../analysis/multivariateEngine.js'
-import type { EdaVariableDefinition } from '../data/edaDemo.js'
+import type { EdaVariableDefinition } from '../data/edaTypes.js'
 import { GEOEYE_LINE_SMOOTHING, geoEyeChartColors } from './geoEyeTheme.js'
 
 const clusterColors = [geoEyeChartColors.primary, geoEyeChartColors.accent, geoEyeChartColors.violet, '#5488a5', '#70a58e', '#b06f7b', '#9d874d', '#537067']

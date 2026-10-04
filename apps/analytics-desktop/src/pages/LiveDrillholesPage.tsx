@@ -6,6 +6,7 @@ import { DrillholeImportDialog } from '../components/DrillholeImportDialog.js'
 import type { DrillholeImportResult } from '../components/DrillholeImportDialog.js'
 import { planDrillholePublish } from '../data/drillholePublish.js'
 import { usePersistentState } from '../state/persistentState.js'
+import { useProjectStorage } from '../state/ProjectStorageContext.js'
 
 interface LiveDrillholesPageProps {
   client: DataPoolClient
@@ -30,11 +31,12 @@ function coordinate(value: number) {
 
 /** Drillholes of the active Data Pool project. Collar and survey are edited here and shared with Field. */
 export function LiveDrillholesPage({ client, project, scope }: LiveDrillholesPageProps) {
+  const storage = useProjectStorage()
   const queryClient = useQueryClient()
   const holesKey = ['datapool', scope, project.id, 'drillholes'] as const
   const [query, setQuery] = usePersistentState('liveDrillholes.query', '', { scope: project.id })
   const [selectedId, setSelectedId] = usePersistentState<string | null>('liveDrillholes.selectedId', null, { scope: project.id })
-  const [epsg, setEpsg] = useState(() => window.localStorage.getItem(crsStorageKey) ?? '')
+  const [epsg, setEpsg] = useState(() => storage.getItem(crsStorageKey) ?? '')
   const [showImport, setShowImport] = useState(false)
   const [report, setReport] = useState<PublishReport | null>(null)
   const deferredQuery = useDeferredValue(query)
@@ -92,15 +94,15 @@ export function LiveDrillholesPage({ client, project, scope }: LiveDrillholesPag
     onSettled: () => queryClient.invalidateQueries({ queryKey: holesKey }),
   })
 
-  const applyImport = (result: DrillholeImportResult) => {
-    setShowImport(false)
+  const applyImport = async (result: DrillholeImportResult) => {
     setReport(null)
-    publish.mutate(result)
+    await publish.mutateAsync(result)
+    setShowImport(false)
   }
 
   const changeEpsg = (value: string) => {
     setEpsg(value)
-    window.localStorage.setItem(crsStorageKey, value.trim())
+    storage.setItem(crsStorageKey, value.trim())
   }
 
   const withCollar = holes.filter((hole) => hole.collar !== null).length
