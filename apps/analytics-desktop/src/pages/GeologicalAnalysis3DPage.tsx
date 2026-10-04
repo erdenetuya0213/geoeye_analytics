@@ -313,8 +313,9 @@ export function GeologicalAnalysis3DPage({ backgroundColor, onBackgroundColorCha
   const { replaceSelection, selectedIds, toggleSelection } = useGeoEyeSelection()
   const dataset = datasets.find((item) => item.id === datasetId) ?? datasets[0]
   const importedDrillholes = useMemo(
-    () => typeof window === 'undefined' ? undefined : readDrillholeImport(storage),
-    [storage],
+    () => workspace.localDrillholeDraft
+      ?? (typeof window === 'undefined' ? undefined : readDrillholeImport(storage)),
+    [storage, workspace.localDrillholeDraft],
   )
   const [savedAnalysisResults, setSavedAnalysisResults] = useState(
     () => readAnalysisResultDocument(storage).packages,
