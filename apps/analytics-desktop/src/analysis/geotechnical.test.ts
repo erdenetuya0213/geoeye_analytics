@@ -57,6 +57,21 @@ describe('RMR76', () => {
     })
   })
 
+  it('accepts explicitly mapped numeric component ratings without reinterpreting them', () => {
+    expect(calculateRmr76({
+      groundwater: 4,
+      jointCondition: 12,
+      jointSpacingM: 0.5,
+      orientation: -7,
+      rqdPercent: 85,
+      ucsMpa: 37,
+    })).toMatchObject({
+      basic: 57,
+      orientationAdjustment: -7,
+      total: 50,
+    })
+  })
+
   it.each([
     [20, 'Class V · very poor'],
     [21, 'Class IV · poor'],

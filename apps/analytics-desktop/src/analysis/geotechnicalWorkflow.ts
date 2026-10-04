@@ -146,8 +146,13 @@ function isValidValue(key: Rmr76CanonicalInputKey, value: unknown) {
   if (key === 'geotech.ucs') return isFiniteNumber(value) && value >= 0
   if (key === 'geotech.rqd') return isFiniteNumber(value) && value >= 0 && value <= 100
   if (key === 'structure.joint_spacing') return isFiniteNumber(value) && value >= 0
-  if (key === 'geotech.joint_condition') return typeof value === 'string' && jointConditions.has(value as Rmr76JointCondition)
-  if (key === 'geotech.groundwater') return typeof value === 'string' && groundwaterConditions.has(value as Rmr76Groundwater)
+  if (key === 'geotech.joint_condition') return isFiniteNumber(value)
+    ? value >= 0 && value <= 25
+    : typeof value === 'string' && jointConditions.has(value as Rmr76JointCondition)
+  if (key === 'geotech.groundwater') return isFiniteNumber(value)
+    ? value >= 0 && value <= 10
+    : typeof value === 'string' && groundwaterConditions.has(value as Rmr76Groundwater)
+  if (isFiniteNumber(value)) return value >= -60 && value <= 0
   if (typeof value !== 'object' || value === null) return false
   const orientation = value as { excavationType?: unknown; orientation?: unknown }
   return typeof orientation.excavationType === 'string'
@@ -202,10 +207,12 @@ export class DeterministicCalculator {
     }
     return calculateRmr76({
       excavationType: orientationValue.excavationType,
-      groundwater: input['geotech.groundwater'].value as Rmr76Groundwater,
-      jointCondition: input['geotech.joint_condition'].value as Rmr76JointCondition,
+      groundwater: input['geotech.groundwater'].value as Rmr76Groundwater | number,
+      jointCondition: input['geotech.joint_condition'].value as Rmr76JointCondition | number,
       jointSpacingM: input['structure.joint_spacing'].value as number,
-      orientation: orientationValue.orientation,
+      orientation: typeof input['structure.orientation_rating'].value === 'number'
+        ? input['structure.orientation_rating'].value
+        : orientationValue.orientation,
       rqdPercent: input['geotech.rqd'].value as number,
       ucsMpa: input['geotech.ucs'].value as number,
     })

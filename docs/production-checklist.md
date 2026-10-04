@@ -102,9 +102,9 @@ pnpm production:project
       enforces read-only roles. Set `DATAPOOL_SESSION_SECRET` in `.env.production`.
 - [x] **No sample data in production.** Production builds have no demo workspace; without a
       session only the sign-in form is shown.
-- [ ] **Analysis workspaces on live data.** Explore, Structure, Geotechnical, Multivariate, Domain
-      and 3D do not read the Data Pool yet and show a notice instead. Only Data Pool and
-      Drillholes are live.
+- [x] **Analysis workspaces on live data.** Explore, Structure, Geotechnical, Multivariate, Domain,
+      and 3D load the active project's normalized Data Pool observations. Missing feature-specific
+      inputs remain visible as local readiness/empty states instead of blocking the workspace.
 - [ ] **Analysis artifact upload.** The API catalogs analysis files and graph images, but nothing
       uploads them to the private storage bucket yet.
 - [ ] **Desktop packaging.** The architecture calls for a Tauri desktop app; today the UI ships as

@@ -21,9 +21,9 @@ export function signInErrorMessage(error: unknown): string {
     if (error.status === 403) return 'Set a new password in GeoEye Field first, then sign in here.'
     if (error.status === 429) return 'Too many attempts. Try again in 15 minutes.'
     if (error.status === 404) return 'This server does not offer account sign-in.'
-    return 'The Data Pool could not complete the sign-in. Try again.'
+    return 'The Database could not complete the sign-in. Try again.'
   }
-  return 'The Data Pool could not be reached. Check the server address and your connection.'
+  return 'The Database could not be reached. Check the server address and your connection.'
 }
 
 /** Sign-in with a GeoEye account. The same accounts are used by GeoEye Field. */
@@ -82,7 +82,7 @@ export function ConnectionDialog({ initialSettings, mode = 'sign-in', onClose, o
         <div className="dialog-header">
           <div className="dialog-icon">{connectionMode ? <PlugZap size={21} /> : <LogIn size={21} />}</div>
           <div>
-            <p className="eyebrow">{connectionMode ? 'Data Pool' : 'GeoEye Analytics'}</p>
+            <p className="eyebrow">{connectionMode ? 'Database' : 'GeoEye Analytics'}</p>
             <h2 id="connection-title">{connectionMode ? 'Connection' : 'Sign in'}</h2>
           </div>
           {required ? null : (
@@ -96,7 +96,7 @@ export function ConnectionDialog({ initialSettings, mode = 'sign-in', onClose, o
           <div className="local-node-card">
             <div className="node-icon"><Server size={19} /></div>
             <div>
-              <strong>{connectionMode ? 'Connect to the Data Pool' : 'Use your GeoEye account'}</strong>
+              <strong>{connectionMode ? 'Connect to the Database' : 'Use your GeoEye account'}</strong>
               <span>{connectionMode ? 'Use your GeoEye account to open live project data' : 'The same email and password as GeoEye Field'}</span>
             </div>
           </div>

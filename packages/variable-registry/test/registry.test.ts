@@ -10,6 +10,11 @@ describe('VariableRegistry', () => {
       canonicalUnit: 'deg',
       origin: 'primary',
     })
+    expect(registry.require('structure.type')).toMatchObject({
+      dataType: 'category',
+      canonicalUnit: null,
+      origin: 'primary',
+    })
   })
 
   it('rejects duplicate keys', () => {

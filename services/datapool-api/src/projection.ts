@@ -66,7 +66,9 @@ interface SourceDefinition {
 }
 
 const nullVersion = '00000000-0000-0000-0000-000000000000'
-const insertChunkSize = 2_000
+// Keep each remote Postgres statement comfortably below the production
+// statement timeout, even for wide Field structure templates.
+const insertChunkSize = 500
 
 function countIssue(summary: Record<string, number>, code: string): void {
   summary[code] = (summary[code] ?? 0) + 1
@@ -189,15 +191,33 @@ async function loadDictionaryLabels(client: PoolClient, projectId: string): Prom
   if (!await relationExists(client, 'dictionary_items') || !await relationExists(client, 'dictionary_categories')) {
     return new Map()
   }
-  const result = await client.query<{ id: string; label: string }>(`
+  const result = await client.query<{ class_id: string | null; code: string | null; id: string; label: string | null }>(`
     SELECT item.id::text AS id,
-           COALESCE(NULLIF(btrim(item.name), ''), NULLIF(btrim(item.code), '')) AS label
+           COALESCE(NULLIF(btrim(item.name), ''), NULLIF(btrim(item.code), '')) AS label,
+           btrim(item.code) AS code,
+           btrim(to_jsonb(category) ->> 'class_id') AS class_id
     FROM dictionary_items AS item
     JOIN dictionary_categories AS category ON category.id = item.category_id
     WHERE category.project_id = $1
     ORDER BY item.id
   `, [projectId])
-  return new Map(result.rows.flatMap((row) => row.label === null ? [] : [[row.id, row.label] as const]))
+  const labels = new Map<string, string>()
+  const labelsByCode = new Map<string, Set<string>>()
+  for (const row of result.rows) {
+    if (row.label === null) continue
+    labels.set(row.id, row.label)
+    if (row.code === null || row.code === '') continue
+    const codeLabels = labelsByCode.get(row.code) ?? new Set<string>()
+    codeLabels.add(row.label)
+    labelsByCode.set(row.code, codeLabels)
+    if (row.class_id !== null && row.class_id !== '') labels.set(`${row.class_id}:${row.code}`, row.label)
+  }
+  // Older Field rows may contain a dictionary code rather than the item UUID.
+  // Only resolve codes that have one unambiguous project label.
+  for (const [code, codeLabels] of labelsByCode) {
+    if (codeLabels.size === 1) labels.set(code, [...codeLabels][0]!)
+  }
+  return labels
 }
 
 const structureSource: SourceDefinition = {
@@ -233,7 +253,10 @@ const structureSource: SourceDefinition = {
       WHERE structure.project_id = $1
     `, [projectId])
     const { signature } = await loadStructureBindings(client, projectId)
+    // Derived code aliases do not change source meaning independently of their
+    // dictionary items, so only stable item ids participate in change detection.
     const dictionary = [...(await loadDictionaryLabels(client, projectId)).entries()]
+      .filter(([key]) => /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(key))
     return createHash('sha256')
       .update(JSON.stringify([
         rows.rows[0]?.row_count ?? '0',
@@ -469,8 +492,24 @@ async function reconcileObservations(
   sourceEntityType: string,
   observations: readonly DesiredObservation[],
 ): Promise<void> {
+  await client.query(`
+    CREATE TEMP TABLE geoeye_desired_observation_keys (
+      source_id TEXT NOT NULL,
+      variable_id UUID NOT NULL,
+      PRIMARY KEY (source_id, variable_id)
+    ) ON COMMIT DROP
+  `)
+
   for (let start = 0; start < observations.length; start += insertChunkSize) {
     const chunk = observations.slice(start, start + insertChunkSize)
+    const serialized = JSON.stringify(chunk)
+    await client.query(`
+      INSERT INTO geoeye_desired_observation_keys (source_id, variable_id)
+      SELECT desired."sourceId", variable.id
+      FROM jsonb_to_recordset($1::jsonb) AS desired("sourceId" text, "variableKey" text)
+      JOIN variable_definitions AS variable ON variable.key = desired."variableKey"
+      ON CONFLICT DO NOTHING
+    `, [serialized])
     await client.query(`
       INSERT INTO observation_values (
         project_id, dataset_id, dataset_version_id, source_type, source_id, hole_id,
@@ -522,10 +561,11 @@ async function reconcileObservations(
         EXCLUDED.datetime_value, EXCLUDED.unit,
         EXCLUDED.quality, EXCLUDED.observed_at
       )
-    `, [projectId, datasetId, sourceEntityType, JSON.stringify(chunk)])
+    `, [projectId, datasetId, sourceEntityType, serialized])
   }
 
-  // Remove live observations Field no longer exposes (deleted, unaccepted, or unbound).
+  // The indexed temporary key set avoids repeatedly parsing a large JSONB
+  // parameter for every existing observation during stale-row cleanup.
   await client.query(`
     DELETE FROM observation_values AS observation
     WHERE observation.dataset_id = $1
@@ -533,16 +573,11 @@ async function reconcileObservations(
       AND observation.source_type = $2
       AND NOT EXISTS (
         SELECT 1
-        FROM jsonb_to_recordset($3::jsonb) AS desired("sourceId" text, "variableKey" text)
-        JOIN variable_definitions AS variable ON variable.key = desired."variableKey"
-        WHERE desired."sourceId" = observation.source_id
-          AND variable.id = observation.variable_id
+        FROM geoeye_desired_observation_keys AS desired
+        WHERE desired.source_id = observation.source_id
+          AND desired.variable_id = observation.variable_id
       )
-  `, [
-    datasetId,
-    sourceEntityType,
-    JSON.stringify(observations.map(({ sourceId, variableKey }) => ({ sourceId, variableKey }))),
-  ])
+  `, [datasetId, sourceEntityType])
 
   await client.query(`
     INSERT INTO dataset_variables (dataset_id, variable_id)

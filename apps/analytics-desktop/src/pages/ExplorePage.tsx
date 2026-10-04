@@ -142,9 +142,26 @@ export function ExplorePage() {
 
   const datasets = datasetsQuery.data ?? []
   const dataset = datasets.find((candidate) => candidate.id === datasetId) ?? datasets[0]
-  const draftConfiguration = useMemo((): EdaRunConfiguration | null => dataset === undefined ? null : ({ activeFilterKeys, compareBy, datasetId: dataset.id, datasetName: dataset.name, filterValues, minimumPopulationSize: 20, secondGroup: compareBy === null ? null : secondGroup, snapshotAt: dataset.snapshotAt, supportLabel: dataset.support, variableKeys, weighting: { cellSize: declusteringCellSize, method: weightingMethod } }), [activeFilterKeys, compareBy, dataset, declusteringCellSize, filterValues, secondGroup, variableKeys, weightingMethod])
+  const effectiveVariableKeys = dataset === undefined ? [] : variableKeys.filter((key) => dataset.variables.some((variable) => variable.key === key && variable.dataType !== 'category'))
+  const draftConfiguration = useMemo((): EdaRunConfiguration | null => dataset === undefined ? null : ({ activeFilterKeys, compareBy, datasetId: dataset.id, datasetName: dataset.name, filterValues, minimumPopulationSize: 20, secondGroup: compareBy === null ? null : secondGroup, snapshotAt: dataset.snapshotAt, supportLabel: dataset.support, variableKeys: effectiveVariableKeys, weighting: { cellSize: declusteringCellSize, method: weightingMethod } }), [activeFilterKeys, compareBy, dataset, declusteringCellSize, effectiveVariableKeys, filterValues, secondGroup, weightingMethod])
   const draftSignature = draftConfiguration === null ? null : edaConfigurationSignature(draftConfiguration)
   const configurationChanged = activeRun !== null && activeRun.configurationSignature !== draftSignature
+
+  useEffect(() => {
+    if (dataset === undefined || dataset.source !== 'live') return
+    const numericKeys = dataset.variables.filter((variable) => variable.dataType !== 'category').map((variable) => variable.key)
+    const validKeys = variableKeys.filter((key) => numericKeys.includes(key))
+    const datasetChanged = datasetId !== dataset.id
+    if (datasetChanged) setDatasetId(dataset.id)
+    if (validKeys.length === 0 && numericKeys.length > 0) setVariableKeys(numericKeys.slice(0, 3))
+    else if (validKeys.length !== variableKeys.length) setVariableKeys(validKeys)
+    const availableRelationshipIds = relationshipDatasetIds.filter((id) => datasets.some((candidate) => candidate.id === id))
+    if (availableRelationshipIds.length === 0) setRelationshipDatasetIds(datasets.slice(0, 2).map((candidate) => candidate.id))
+    const firstVariable = dataset.variables.find((variable) => variable.dataType !== 'category')
+    if (firstVariable !== undefined && !datasets.some((candidate) => candidate.id === xDatasetId)) { setXDatasetId(dataset.id); setXVariableKey(firstVariable.key) }
+    if (firstVariable !== undefined && !datasets.some((candidate) => candidate.id === yDatasetId)) { setYDatasetId(dataset.id); setYVariableKey(firstVariable.key) }
+    if (datasetChanged) { autoRunRequestedRef.current = false; setSubmittedRequest(null); setActiveRun(null) }
+  }, [dataset, datasets, datasetId, relationshipDatasetIds, variableKeys, xDatasetId, yDatasetId])
 
   useEffect(() => {
     if (!declusteringSettingsOpen) return undefined
@@ -180,14 +197,15 @@ export function ExplorePage() {
   }, [clearSelection, runEngine.result])
 
   useEffect(() => {
-    if (autoRunRequestedRef.current || draftConfiguration === null || dataset === undefined || activeRun !== null || submittedRequest !== null) return
+    if (autoRunRequestedRef.current || draftConfiguration === null || draftConfiguration.variableKeys.length === 0 || dataset === undefined || activeRun !== null || submittedRequest !== null) return
     autoRunRequestedRef.current = true
     const runNumber = typeof window === 'undefined' ? 1 : nextEdaRunNumber(window.localStorage)
     setSubmittedRequest(buildEdaRunRequest(draftConfiguration, dataset, runNumber))
   }, [activeRun, dataset, draftConfiguration, submittedRequest])
 
-  if (datasetsQuery.isPending) return <div className="page explore-page"><div className="eda-state panel">Loading analytical snapshots…</div></div>
-  if (datasetsQuery.isError || dataset === undefined) return <div className="page explore-page"><div className="eda-state panel">The analytical snapshots are unavailable.</div></div>
+  if (datasetsQuery.isPending) return <div className="page explore-page"><div className="eda-state panel">Opening the local analytical database…</div></div>
+  if (datasetsQuery.isError) return <div className="page explore-page"><div className="eda-state panel">The local analytical database could not be opened.</div></div>
+  if (dataset === undefined) return <div className="page explore-page"><div className="eda-state panel">The local database is ready. Import a CSV or drillhole collar/survey to start an analysis.</div></div>
 
   const activeDataset = datasets.find((candidate) => candidate.id === activeRun?.configuration.datasetId)
   const activePopulation = activeRun?.populations.find((population) => population.populationId === activePopulationId) ?? activeRun?.populations[0]
@@ -254,7 +272,7 @@ export function ExplorePage() {
   const addFilter = (key: string) => { if (key === '' || activeFilterKeys.includes(key)) return; setActiveFilterKeys((current) => [...current, key]); setFilterValues((current) => ({ ...current, [key]: 'all' })) }
   const removeFilter = (key: string) => { setActiveFilterKeys((current) => current.filter((candidate) => candidate !== key)); setFilterValues((current) => Object.fromEntries(Object.entries(current).filter(([candidate]) => candidate !== key))); clearSelection() }
   const startRun = () => {
-    if (draftConfiguration === null || variableKeys.length === 0 || runEngine.pending) return
+    if (draftConfiguration === null || draftConfiguration.variableKeys.length === 0 || runEngine.pending) return
     const runNumber = typeof window === 'undefined' ? (activeRun?.runNumber ?? 0) + 1 : nextEdaRunNumber(window.localStorage)
     setSubmittedRequest(buildEdaRunRequest(draftConfiguration, dataset, runNumber))
   }

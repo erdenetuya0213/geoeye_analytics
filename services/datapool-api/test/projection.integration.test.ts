@@ -24,14 +24,17 @@ const acceptedRowId = '20000000-0000-4000-8000-000000000031'
 const pendingRowId = '20000000-0000-4000-8000-000000000032'
 const invalidRowId = '20000000-0000-4000-8000-000000000033'
 const roughItemId = '20000000-0000-4000-8000-000000000041'
+const structureTypeItemId = '20000000-0000-4000-8000-000000000042'
 const acceptedStructureId = '20000000-0000-4000-8000-000000000051'
 const draftStructureId = '20000000-0000-4000-8000-000000000052'
 const negativeDepthStructureId = '20000000-0000-4000-8000-000000000053'
 const invalidValueStructureId = '20000000-0000-4000-8000-000000000054'
+const structureTemplateId = '20000000-0000-4000-8000-000000000061'
 
 interface ObservationPayload {
   id: string
   sourceId: string
+  sourceTemplateId: string | null
   variableKey: string
   numericValue: number | null
   categoryValue: string | null
@@ -125,18 +128,31 @@ describeWithPostgres('Field projection and shared drillhole data', () => {
       SELECT $2, category.id, 'R', 'Rough' FROM category
     `, [projectId, roughItemId])
     await admin.query(`
+      WITH category AS (
+        INSERT INTO dictionary_categories (project_id, name) VALUES ($1, 'Structure types') RETURNING id
+      )
+      INSERT INTO dictionary_items (id, category_id, code, name)
+      SELECT $2, category.id, 'JN', 'Joint' FROM category
+    `, [projectId, structureTypeItemId])
+    await admin.query(
+      "INSERT INTO logging_templates (id, project_id, name) VALUES ($1, $2, 'Oriented core structures')",
+      [structureTemplateId, projectId],
+    )
+    await admin.query(`
       INSERT INTO logging_structures (
-        id, project_id, hole_id, row_id, class_id, depth_from, depth_to, angle_deg,
+        id, project_id, hole_id, row_id, template_id, class_id, structure_type, depth_from, depth_to, angle_deg,
         selections_json, review_status
       ) VALUES
-        ($1, $5, $6, $7, 'structure_type', 27.73, 27.73, 41.2, $8::jsonb, 'accepted'),
-        ($2, $5, $6, $7, 'structure_type', 27.9, 27.9, NULL, '{"alpha": 50}', 'draft'),
-        ($3, $5, $6, $7, 'structure_type', -1, 2, NULL, '{"alpha": 20}', 'accepted'),
-        ($4, $5, $6, $7, 'structure_type', 28.1, 28.1, NULL, '{"alpha": "steep"}', 'accepted')
+        ($1, $5, $6, $7, $9, 'structure_type', $10, 27.73, 27.73, 41.2, $8::jsonb, 'accepted'),
+        ($2, $5, $6, $7, $9, 'structure_type', NULL, 27.9, 27.9, NULL, jsonb_build_object('alpha', 50, 'discontinuity_type', $10::text), 'draft'),
+        ($3, $5, $6, $7, $9, 'structure_type', $10, -1, 2, NULL, '{"alpha": 20}', 'accepted'),
+        ($4, $5, $6, $7, $9, 'structure_type', NULL, 28.1, 28.1, NULL, '{"alpha": "steep"}', 'accepted')
     `, [
       acceptedStructureId, draftStructureId, negativeDepthStructureId, invalidValueStructureId,
       projectId, holeId, acceptedRowId,
       JSON.stringify({ alpha: '38', beta: 126, roughness: roughItemId }),
+      structureTemplateId,
+      structureTypeItemId,
     ])
 
     server = createDataPoolServer({ store: new PostgresDataPoolStore(runtime) })
@@ -155,6 +171,40 @@ describeWithPostgres('Field projection and shared drillhole data', () => {
   it('projects accepted Field structures and RQD without touching Field rows', async () => {
     const fieldBefore = await admin.query('SELECT * FROM logging_structures ORDER BY id')
 
+    const sourceStructures = await api<Array<{
+      alpha: number | null
+      beta: number | null
+      depthFrom: number | null
+      id: string
+      reviewStatus: string
+      structureType: string | null
+      templateId: string | null
+    }>>('GET', `/v1/projects/${projectId}/logging/structures`)
+    expect(sourceStructures.status).toBe(200)
+    expect(sourceStructures.payload).toHaveLength(4)
+    expect(sourceStructures.payload).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        alpha: 38,
+        beta: 126,
+        depthFrom: 27.73,
+        id: acceptedStructureId,
+        reviewStatus: 'accepted',
+        structureType: 'Joint',
+        templateId: structureTemplateId,
+      }),
+      expect.objectContaining({
+        alpha: 50,
+        beta: null,
+        depthFrom: 27.9,
+        id: draftStructureId,
+        reviewStatus: 'draft',
+        structureType: 'Joint',
+        templateId: structureTemplateId,
+      }),
+      expect.objectContaining({ depthFrom: null, id: negativeDepthStructureId }),
+      expect.objectContaining({ alpha: null, id: invalidValueStructureId }),
+    ]))
+
     const sources = await project()
     expect(sources).toEqual([
       {
@@ -162,7 +212,7 @@ describeWithPostgres('Field projection and shared drillhole data', () => {
         outcome: 'projected',
         datasetId: expect.any(String),
         sourceRowCount: 4,
-        observationCount: 4,
+        observationCount: 5,
         issueCount: 3,
         issueSummary: { unaccepted_source: 1, invalid_depth: 1, invalid_value: 1 },
         message: null,
@@ -180,7 +230,7 @@ describeWithPostgres('Field projection and shared drillhole data', () => {
     ])
 
     const structural = await observations([
-      'structure.alpha', 'structure.beta', 'structure.apparent_angle', 'joint.roughness',
+      'structure.alpha', 'structure.beta', 'structure.apparent_angle', 'structure.type', 'joint.roughness',
     ])
     expect(structural.map(({ variableKey, numericValue, categoryValue, sourceId }) => (
       { variableKey, numericValue, categoryValue, sourceId }
@@ -189,8 +239,10 @@ describeWithPostgres('Field projection and shared drillhole data', () => {
       { variableKey: 'structure.alpha', numericValue: 38, categoryValue: null, sourceId: acceptedStructureId },
       { variableKey: 'structure.apparent_angle', numericValue: 41.2, categoryValue: null, sourceId: acceptedStructureId },
       { variableKey: 'structure.beta', numericValue: 126, categoryValue: null, sourceId: acceptedStructureId },
+      { variableKey: 'structure.type', numericValue: null, categoryValue: 'Joint', sourceId: acceptedStructureId },
     ])
     expect(structural.every((value) => value.holeId === holeId && value.depthFrom === 27.73)).toBe(true)
+    expect(structural.every((value) => value.sourceTemplateId === structureTemplateId)).toBe(true)
 
     await expect(observations(['geotech.rqd'])).resolves.toMatchObject([
       { sourceId: acceptedRowId, numericValue: 78.5, quality: 'accepted', depthFrom: 27 },
@@ -208,7 +260,7 @@ describeWithPostgres('Field projection and shared drillhole data', () => {
     `)
     expect(versions.rows).toEqual([
       { name: 'GeoEye Field RQD', record_count: '1' },
-      { name: 'GeoEye Field structural logging', record_count: '4' },
+      { name: 'GeoEye Field structural logging', record_count: '5' },
     ])
 
     const fieldAfter = await admin.query('SELECT * FROM logging_structures ORDER BY id')
@@ -244,7 +296,7 @@ describeWithPostgres('Field projection and shared drillhole data', () => {
     )
     expect(status.payload).toMatchObject([
       { sourceEntityType: 'field.core_row', lastStatus: 'ok', observationCount: 1 },
-      { sourceEntityType: 'field.logging_structure', lastStatus: 'ok', observationCount: 5 },
+      { sourceEntityType: 'field.logging_structure', lastStatus: 'ok', observationCount: 7 },
     ])
   })
 

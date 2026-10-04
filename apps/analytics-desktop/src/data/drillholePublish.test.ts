@@ -31,6 +31,17 @@ describe('planDrillholePublish', () => {
     expect(plan.rejected).toEqual([])
   })
 
+  it('matches collar and survey identifiers despite underscores and hyphens', () => {
+    const plan = planDrillholePublish({
+      collar: [{ holeId: 'TT_2026_002GT', easting: 585_434.39, northing: 5_461_562.18, elevation: 991.66 }],
+      survey: [{ holeId: 'TT2026-002-GT', depth: 0, azimuth: 340, dip: 60 }],
+    }, [{ id: 'hole-gt-2', name: 'TT_2026_002GT' }])
+
+    expect(plan.collars[0]?.holeId).toBe('hole-gt-2')
+    expect(plan.surveys[0]).toMatchObject({ holeId: 'hole-gt-2', stations: [{ measuredDepth: 0 }] })
+    expect(plan.unknownHoles).toEqual([])
+  })
+
   it('reports holes that the Data Pool project does not contain', () => {
     const plan = planDrillholePublish({
       collar: [{ holeId: 'GOR-DD-018', easting: 1, northing: 2, elevation: 3 }],

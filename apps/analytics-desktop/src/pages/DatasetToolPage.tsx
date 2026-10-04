@@ -1,9 +1,10 @@
-import type { DataPoolClient, ObservationValue, ProjectSummary, VariableDefinition } from '@geoeye/datapool-client'
-import { useQuery } from '@tanstack/react-query'
-import { Filter, RefreshCw, Search, Upload } from 'lucide-react'
-import { useMemo } from 'react'
+import type { ObservationValue, TabularImportInput, TabularImportResult, VariableDefinition } from '@geoeye/datapool-client'
+import { AlertCircle, CheckCircle2, Filter, RefreshCw, Save, Search, Upload } from 'lucide-react'
+import { useMemo, useRef, useState, type ChangeEvent, type CSSProperties } from 'react'
 import { useDataPoolWorkspace } from '../state/DataPoolWorkspaceContext.js'
 import { usePersistentState } from '../state/persistentState.js'
+import { effectiveDrillholes, type LocalDrillholeDraft, type LocalProjectSnapshot, type LocalTabularDraft } from '../data/localProjectDb.js'
+import { parseTabularCsv } from '../data/tabularCsvImport.js'
 import type { SectionId } from '../types.js'
 
 export type DatasetSection = Extract<SectionId, 'laboratory' | 'xrf' | 'spectral'>
@@ -34,15 +35,49 @@ const configs: Record<DatasetSection, DatasetToolConfig> = {
 
 export function DatasetToolPage({ section }: { section: DatasetSection }) {
   const workspace = useDataPoolWorkspace()
-  if (workspace.live && workspace.client !== null && workspace.project !== null) {
-    return <LiveDatasetToolPage client={workspace.client} project={workspace.project} scope={workspace.scope} section={section} />
+  if (workspace.live) {
+    if (workspace.projectsLoading || workspace.localLoading) return <div className="page dataset-tool-page"><div className="eda-state panel">Opening the local project copy…</div></div>
+    if (workspace.project === null) return <div className="page dataset-tool-page"><div className="eda-state panel">No project is available for this account.</div></div>
+    return <LiveDatasetToolPage
+      canWrite={workspace.project.canWrite}
+      drillholeDraft={workspace.localDrillholeDraft}
+      importDraft={workspace.localTabularDrafts[section]}
+      onPublish={() => workspace.publishLocalTabularImport(section)}
+      onRefresh={workspace.refreshLocalProject}
+      onSaveLocal={workspace.saveTabularImportLocally}
+      refreshing={workspace.localRefreshing}
+      section={section}
+      snapshot={workspace.localSnapshot}
+    />
   }
   return <DatasetToolWorkbench config={configs[section]} section={section} />
 }
 
-function DatasetToolWorkbench({ config, section }: { config: DatasetToolConfig; section: DatasetSection }) {
+function DatasetToolWorkbench({ canWrite = true, config, importDraft, notice, noticeIsError = false, onImport, onPublish, onRefresh, publishing = false, refreshing = false, section }: {
+  canWrite?: boolean
+  config: DatasetToolConfig
+  importDraft?: LocalTabularDraft | undefined
+  notice?: string | null
+  noticeIsError?: boolean
+  onImport?: (file: File) => Promise<void>
+  onPublish?: () => Promise<void>
+  onRefresh?: () => void
+  publishing?: boolean
+  refreshing?: boolean
+  section: DatasetSection
+}) {
   const [query, setQuery] = usePersistentState(`datasetTool.${section}.query`, '')
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const filteredRows = useMemo(() => config.rows.filter((row) => row.some((cell) => cell.toLowerCase().includes(query.toLowerCase()))), [config.rows, query])
+  const rowStyle: CSSProperties = {
+    gridTemplateColumns: `repeat(${config.columns.length}, minmax(110px, 1fr))`,
+    minWidth: `${Math.max(600, config.columns.length * 122)}px`,
+  }
+  const handleFile = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (file !== undefined) void onImport?.(file)
+  }
 
   return (
     <div className="page dataset-tool-page">
@@ -52,17 +87,20 @@ function DatasetToolWorkbench({ config, section }: { config: DatasetToolConfig; 
         <label className="table-search"><Search size={16} /><input aria-label={`Search ${config.searchLabel}`} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${config.searchLabel}…`} value={query} /></label>
         <button className="filter-button" type="button"><Filter size={15} /> All records</button>
         <span className="result-count">{filteredRows.length} shown</span>
-        <button className="button button-secondary" type="button"><RefreshCw size={16} /> Refresh</button>
-        <button className="button button-primary" type="button"><Upload size={16} /> Import CSV</button>
+        {notice === undefined || notice === null ? null : <span className={`strength-save-notice ${noticeIsError ? 'is-error' : ''}`} role={noticeIsError ? 'alert' : 'status'}>{noticeIsError ? <AlertCircle size={14} /> : <CheckCircle2 size={14} />} {notice}</span>}
+        <button className="button button-secondary" disabled={refreshing} onClick={onRefresh} type="button"><RefreshCw className={refreshing ? 'spin' : ''} size={16} /> Refresh local copy</button>
+        <input accept=".csv,text/csv" aria-label={`Choose a ${section} CSV file`} className="sr-only" onChange={handleFile} ref={fileInputRef} type="file" />
+        <button className="button button-secondary" onClick={() => fileInputRef.current?.click()} type="button"><Upload size={16} /> Import CSV</button>
+        {onPublish === undefined ? null : <button className="button button-primary" disabled={publishing || !canWrite || importDraft?.dirty !== true} onClick={() => void onPublish()} title={!canWrite ? 'Your role on this project is read-only' : importDraft?.dirty === true ? 'Send this local CSV draft to the Database' : 'Import or change a CSV before saving'} type="button"><Save size={16} /> {publishing ? 'Saving…' : 'Save to Database'}</button>}
       </div>
 
       <section className="panel dataset-records-panel">
         <div className="dataset-record-table">
-          <div className="dataset-record-row dataset-record-header">
+          <div className="dataset-record-row dataset-record-header" style={rowStyle}>
             {config.columns.map((column) => <span key={column}>{column}</span>)}
           </div>
           {filteredRows.map((row) => (
-            <button className="dataset-record-row" key={row.join('-')} type="button">
+            <button className="dataset-record-row" key={row.join('-')} style={rowStyle} type="button">
               {row.map((cell, index) => <span className={index === 0 ? 'dataset-record-key' : ''} key={`${cell}-${index}`}>{cell}</span>)}
             </button>
           ))}
@@ -90,31 +128,32 @@ function displayObservationValue(observation: ObservationValue, definition: Vari
   return `${String(value)}${unit === null || unit === undefined || unit === '' ? '' : ` ${unit}`}`
 }
 
-function LiveDatasetToolPage({ client, project, scope, section }: {
-  client: DataPoolClient
-  project: ProjectSummary
-  scope: string
+function LiveDatasetToolPage({ canWrite, drillholeDraft, importDraft, onPublish, onRefresh, onSaveLocal, refreshing, section, snapshot }: {
+  canWrite: boolean
+  drillholeDraft: LocalDrillholeDraft | null
+  importDraft?: LocalTabularDraft | undefined
+  onPublish: () => Promise<TabularImportResult>
+  onRefresh: () => Promise<void>
+  onSaveLocal: (value: TabularImportInput) => Promise<void>
+  refreshing: boolean
   section: DatasetSection
+  snapshot: LocalProjectSnapshot | null
 }) {
-  const dataQuery = useQuery({
-    queryKey: ['datapool', scope, project.id, 'dataset-tool', section],
-    queryFn: async (): Promise<DatasetToolConfig> => {
-      const [variables, datasets, holes] = await Promise.all([
-        client.variables(),
-        client.datasets(project.id),
-        client.drillholes(project.id),
-      ])
+  const [notice, setNotice] = useState<string | null>(null)
+  const [noticeIsError, setNoticeIsError] = useState(false)
+  const [publishing, setPublishing] = useState(false)
+  const config = useMemo<DatasetToolConfig>(() => {
+      if (importDraft !== undefined) return { columns: importDraft.columns, rows: importDraft.rows, searchLabel: configs[section].searchLabel }
+      const variables = snapshot?.variables ?? []
+      const datasets = snapshot?.datasets ?? []
+      const holes = effectiveDrillholes(snapshot, drillholeDraft)
       const datasetById = new Map(datasets.map((dataset) => [dataset.id, dataset]))
       const selectedVariables = variables.filter((variable) => datasets.some((dataset) => (
         supportsSection(section, variable, `${dataset.name} ${dataset.producerName} ${dataset.producerType}`)
       )))
       if (selectedVariables.length === 0) return { ...configs[section], rows: [] }
-      const observations = await client.queryObservations({
-        acceptedOnly: true,
-        limit: 200_000,
-        projectId: project.id,
-        variableKeys: selectedVariables.map((variable) => variable.key),
-      })
+      const selectedKeys = new Set(selectedVariables.map((variable) => variable.key))
+      const observations = (snapshot?.observations ?? []).filter((observation) => selectedKeys.has(observation.variableKey))
       const definitions = new Map(variables.map((variable) => [variable.key, variable]))
       const holeNames = new Map(holes.map((hole) => [hole.id, hole.name]))
       const rows = observations.flatMap((observation): readonly string[][] => {
@@ -139,10 +178,34 @@ function LiveDatasetToolPage({ client, project, scope, section }: {
         rows,
         searchLabel: configs[section].searchLabel,
       }
-    },
-  })
+    }, [drillholeDraft, importDraft, section, snapshot])
 
-  if (dataQuery.isPending) return <div className="page dataset-tool-page"><div className="eda-state panel">Loading {configs[section].searchLabel} from {project.name}…</div></div>
-  if (dataQuery.isError) return <div className="page dataset-tool-page"><div className="eda-state panel" role="alert">The connected project data could not be loaded.</div></div>
-  return <DatasetToolWorkbench config={dataQuery.data} section={section} />
+  const importFile = async (file: File) => {
+    try {
+      const parsed = parseTabularCsv(await file.text(), file.name, section)
+      await onSaveLocal(parsed)
+      setNoticeIsError(false)
+      setNotice(`${parsed.rows.length.toLocaleString()} rows imported locally; Database unchanged`)
+    } catch (error) {
+      setNoticeIsError(true)
+      setNotice(error instanceof Error ? error.message : 'The CSV could not be imported.')
+    }
+  }
+
+  const publish = async () => {
+    setPublishing(true)
+    try {
+      const result = await onPublish()
+      setNoticeIsError(false)
+      const unmatched = result.unmatchedHoles.length === 0 ? '' : ` · ${result.unmatchedHoles.length} unmatched holes`
+      setNotice(`Saved ${result.importedRows.toLocaleString()} rows to Database · v${result.version}${unmatched}`)
+    } catch (error) {
+      setNoticeIsError(true)
+      setNotice(error instanceof Error ? error.message : 'The local import could not be saved to the Database.')
+    } finally {
+      setPublishing(false)
+    }
+  }
+
+  return <DatasetToolWorkbench canWrite={canWrite} config={config} importDraft={importDraft} notice={notice ?? (importDraft?.dirty === true ? 'Local CSV changes have not been saved to the Database.' : null)} noticeIsError={noticeIsError} onImport={importFile} onPublish={publish} onRefresh={() => { void onRefresh() }} publishing={publishing} refreshing={refreshing} section={section} />
 }

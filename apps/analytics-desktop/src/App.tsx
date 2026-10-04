@@ -8,8 +8,7 @@ import { themes } from './components/ThemeSwitcher.js'
 import type { ThemeId } from './components/ThemeSwitcher.js'
 import { DataPoolPage } from './pages/DataPoolPage.js'
 import { checkDataPoolConnection } from './data/dataPoolConnection.js'
-import { demoWorkspaceAllowed, sectionHasLiveData } from './data/demoPolicy.js'
-import { NotLivePage } from './pages/NotLivePage.js'
+import { demoWorkspaceAllowed } from './data/demoPolicy.js'
 import { DatasetToolPage } from './pages/DatasetToolPage.js'
 import type { DatasetSection } from './pages/DatasetToolPage.js'
 import { DomainPage } from './pages/DomainPage.js'
@@ -227,11 +226,7 @@ export function App() {
   }
 
   let page
-  if (signedIn && !sectionHasLiveData(section)) {
-    // Keep each feature's workbench visible while preventing demo fixtures from
-    // being mistaken for records from the open project.
-    page = <NotLivePage onNavigate={setSection} section={section} />
-  } else if (section === 'overview') {
+  if (section === 'overview') {
     page = <OverviewPage onNavigate={setSection} />
   } else if (section === 'data-pool') {
     page = <DataPoolPage connectionSettings={connectionSettings} connectionState={connectionState} />

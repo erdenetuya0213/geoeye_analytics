@@ -13,6 +13,7 @@ INSERT INTO variable_definitions (
 VALUES
   ('structure.alpha', 'Alpha', 'Acute angle between the feature trace and the core axis.', 'numeric', 'deg', 'primary', 'orientation', ARRAY['structure.alpha_beta_conversion', 'structure.stereonet']),
   ('structure.beta', 'Beta', 'Rotation angle around the oriented core reference line.', 'numeric', 'deg', 'primary', 'orientation', ARRAY['structure.alpha_beta_conversion', 'structure.stereonet']),
+  ('structure.type', 'Structure type', 'Dictionary-backed classification assigned to a structural observation.', 'category', NULL, 'primary', 'orientation', ARRAY['structure.stereonet', 'structure.summary', 'structure.domains']),
   ('structure.apparent_angle', 'Apparent angle', 'Feature angle measured on the row image by GeoEye Field.', 'numeric', 'deg', 'primary', 'orientation', ARRAY['structure.quality_control']),
   ('structure.true_dip', 'True dip', 'True dip derived from an oriented observation and drillhole orientation.', 'numeric', 'deg', 'derived', 'orientation', ARRAY['structure.stereonet', 'structure.joint_sets']),
   ('structure.true_dip_direction', 'True dip direction', 'Dip direction derived from an oriented observation and drillhole orientation.', 'numeric', 'deg', 'derived', 'orientation', ARRAY['structure.stereonet', 'structure.joint_sets']),
@@ -68,7 +69,9 @@ FROM (
     -- Field ids used by the GeoEye Field structure templates in production.
     ('selections.alpha_to_core_axis_deg', 'structure.alpha', '{"kind":"selection","key":"alpha_to_core_axis_deg"}'),
     ('selections.beta_reference_deg', 'structure.beta', '{"kind":"selection","key":"beta_reference_deg"}'),
+    ('selections.discontinuity_type', 'structure.type', '{"kind":"selection","key":"discontinuity_type"}'),
     ('selections.aperture_mm', 'joint.aperture', '{"kind":"selection","key":"aperture_mm"}'),
+    ('structure_type', 'structure.type', '{"kind":"column","column":"structureType"}'),
     ('angle_deg', 'structure.apparent_angle', '{"kind":"column","column":"angleDeg"}')
 ) AS binding(source_field, variable_key, extraction_json)
 JOIN variable_definitions AS variable ON variable.key = binding.variable_key

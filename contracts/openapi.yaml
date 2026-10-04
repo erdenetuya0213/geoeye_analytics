@@ -156,6 +156,23 @@ paths:
                 $ref: "#/components/schemas/FieldLoggingOverview"
         "404":
           description: Project not found
+  /v1/projects/{projectId}/logging/structures:
+    get:
+      operationId: listFieldLoggingStructures
+      description: Source structural-log rows, including drafts, normalized for the Structure Analysis review workspace. This endpoint is read-only.
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      responses:
+        "200":
+          description: Structural logging rows with normalized Alpha/Beta values
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/FieldLoggingStructure"
+        "404":
+          description: Project not found
   /v1/projects/{projectId}/drillholes/{holeId}/collar:
     put:
       operationId: saveCollar
@@ -340,6 +357,25 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/Dataset"
+  /v1/projects/{projectId}/tabular-imports:
+    post:
+      operationId: saveTabularImport
+      summary: Publish a user-confirmed local CSV draft as the current Database dataset version
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TabularImportInput"
+      responses:
+        "201":
+          description: Imported dataset version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TabularImportResult"
   /v1/observations/query:
     post:
       operationId: queryObservations
@@ -793,6 +829,38 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/FieldLoggingSubmission"
+    FieldLoggingStructure:
+      type: object
+      required: [id, projectId, holeId, templateId, depthFrom, depthTo, alpha, beta, structureType, orientationStatus, reviewStatus]
+      properties:
+        id:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        holeId:
+          type: [string, "null"]
+          format: uuid
+        templateId:
+          type: [string, "null"]
+          format: uuid
+        depthFrom:
+          type: [number, "null"]
+          minimum: 0
+        depthTo:
+          type: [number, "null"]
+          minimum: 0
+        alpha:
+          type: [number, "null"]
+        beta:
+          type: [number, "null"]
+        structureType:
+          type: [string, "null"]
+        orientationStatus:
+          type: [string, "null"]
+        reviewStatus:
+          enum: [draft, accepted, flagged]
     ProjectionExtraction:
       oneOf:
         - type: object
@@ -987,6 +1055,52 @@ components:
         updatedAt:
           type: string
           format: date-time
+    TabularImportInput:
+      type: object
+      required: [section, fileName, columns, rows]
+      properties:
+        section:
+          type: string
+          enum: [laboratory, strength, xrf, spectral]
+        fileName:
+          type: string
+          minLength: 1
+        columns:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: string
+            minLength: 1
+        rows:
+          type: array
+          minItems: 1
+          maxItems: 20000
+          items:
+            type: array
+            minItems: 1
+            maxItems: 100
+            items:
+              type: string
+    TabularImportResult:
+      type: object
+      required: [dataset, importedRows, observationCount, unmatchedHoles, version]
+      properties:
+        dataset:
+          $ref: "#/components/schemas/Dataset"
+        importedRows:
+          type: integer
+          minimum: 0
+        observationCount:
+          type: integer
+          minimum: 0
+        unmatchedHoles:
+          type: array
+          items:
+            type: string
+        version:
+          type: integer
+          minimum: 1
     ObservationQuery:
       type: object
       required: [projectId, variableKeys]

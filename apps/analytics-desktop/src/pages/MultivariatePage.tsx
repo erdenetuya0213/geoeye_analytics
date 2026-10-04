@@ -125,13 +125,31 @@ export function MultivariatePage({ onNavigate }: MultivariatePageProps) {
   const runEngine = useMultivariateEngine(submittedRequest)
   const datasets = datasetsQuery.data ?? []
   const dataset = datasets.find((candidate) => candidate.id === datasetId) ?? datasets[0]
+  const effectiveVariableKeys = dataset === undefined ? [] : variableKeys.filter((key) => dataset.variables.some((variable) => variable.key === key && variable.dataType !== 'category'))
 
   const draftConfiguration = useMemo((): MultivariateConfiguration | null => dataset === undefined ? null : ({
     activeFilterKeys, clusterCount, correlationMethod: 'pearson', datasetId: dataset.id, datasetName: dataset.name, filterValues,
-    groupBy, method: 'full', missingPolicy, scaling, snapshotAt: dataset.snapshotAt, supportLabel: dataset.support, variableKeys,
-  }), [activeFilterKeys, clusterCount, dataset, filterValues, groupBy, missingPolicy, scaling, variableKeys])
+    groupBy, method: 'full', missingPolicy, scaling, snapshotAt: dataset.snapshotAt, supportLabel: dataset.support, variableKeys: effectiveVariableKeys,
+  }), [activeFilterKeys, clusterCount, dataset, effectiveVariableKeys, filterValues, groupBy, missingPolicy, scaling])
   const draftSignature = draftConfiguration === null ? null : multivariateConfigurationSignature(draftConfiguration)
   const configurationChanged = activeRun !== null && activeRun.configurationSignature !== draftSignature
+
+  useEffect(() => {
+    if (dataset === undefined || dataset.source !== 'live') return
+    const numericKeys = dataset.variables.filter((variable) => variable.dataType !== 'category').map((variable) => variable.key)
+    const validKeys = variableKeys.filter((key) => numericKeys.includes(key))
+    const datasetChanged = datasetId !== dataset.id
+    if (datasetChanged) setDatasetId(dataset.id)
+    if (validKeys.length < Math.min(2, numericKeys.length)) setVariableKeys(numericKeys.slice(0, 6))
+    else if (validKeys.length !== variableKeys.length) setVariableKeys(validKeys)
+    if (datasetChanged) {
+      autoRunRequestedRef.current = false
+      setSubmittedRequest(null)
+      setActiveRun(null)
+      setHasRun(false)
+      setGroupBy(dataset.dimensions.find((dimension) => dimension.key === 'lithology')?.key ?? dataset.dimensions[0]?.key ?? null)
+    }
+  }, [dataset, datasetId, variableKeys])
 
   useEffect(() => {
     if (runEngine.result === null) return
@@ -155,15 +173,16 @@ export function MultivariatePage({ onNavigate }: MultivariatePageProps) {
   }, [clearSelection, runEngine.result])
 
   useEffect(() => {
-    if (autoRunRequestedRef.current || draftConfiguration === null || dataset === undefined || activeRun !== null || submittedRequest !== null || variableKeys.length < 2) return
+    if (autoRunRequestedRef.current || draftConfiguration === null || dataset === undefined || activeRun !== null || submittedRequest !== null || draftConfiguration.variableKeys.length < 2) return
     autoRunRequestedRef.current = true
     restoringRunRef.current = hasRun
     const runNumber = typeof window === 'undefined' ? 1 : nextRunNumber(window.localStorage)
     setSubmittedRequest(buildMultivariateRunRequest(draftConfiguration, dataset, runNumber))
-  }, [activeRun, dataset, draftConfiguration, submittedRequest, variableKeys.length])
+  }, [activeRun, dataset, draftConfiguration, submittedRequest])
 
-  if (datasetsQuery.isPending) return <div className="page multivariate-page"><div className="eda-state panel">Loading analytical snapshots…</div></div>
-  if (datasetsQuery.isError || dataset === undefined) return <div className="page multivariate-page"><div className="eda-state panel">The analytical snapshots are unavailable.</div></div>
+  if (datasetsQuery.isPending) return <div className="page multivariate-page"><div className="eda-state panel">Opening the local analytical database…</div></div>
+  if (datasetsQuery.isError) return <div className="page multivariate-page"><div className="eda-state panel">The local analytical database could not be opened.</div></div>
+  if (dataset === undefined) return <div className="page multivariate-page"><div className="eda-state panel">The local database is ready. Import a CSV or drillhole collar/survey to start an analysis.</div></div>
 
   const draftVariables = selectedVariables(dataset, variableKeys)
   const runDataset = datasets.find((candidate) => candidate.id === activeRun?.configuration.datasetId)
@@ -208,7 +227,7 @@ export function MultivariatePage({ onNavigate }: MultivariatePageProps) {
     clearSelection()
   }
   const runAnalysis = () => {
-    if (draftConfiguration === null || variableKeys.length < 2 || runEngine.pending) return
+    if (draftConfiguration === null || draftConfiguration.variableKeys.length < 2 || runEngine.pending) return
     restoringRunRef.current = false
     const runNumber = typeof window === 'undefined' ? (activeRun?.runNumber ?? 0) + 1 : nextRunNumber(window.localStorage)
     setSubmittedRequest(buildMultivariateRunRequest(draftConfiguration, dataset, runNumber))

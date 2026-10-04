@@ -17,7 +17,7 @@ export const datasets = [
   },
   {
     name: 'Drillhole surveys',
-    source: 'Data Pool',
+    source: 'Database',
     kind: 'Point',
     records: '246',
     freshness: '2 hours ago',

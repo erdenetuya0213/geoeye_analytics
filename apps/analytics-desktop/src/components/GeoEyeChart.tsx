@@ -209,6 +209,12 @@ export function GeoEyeChart({
     [designId, fallbackSurface, option, surfaceColors],
   )
   const effectiveOption = useMemo(() => selectedOption(designedOption, selectedIds), [designedOption, selectedIds])
+  const stableOption = useMemo(() => ({
+    ...(effectiveOption as Record<string, unknown>),
+    animation: false,
+    animationDuration: 0,
+    animationDurationUpdate: 0,
+  }) as EChartsCoreOption, [effectiveOption])
 
   useLayoutEffect(() => {
     const container = containerRef.current
@@ -236,8 +242,8 @@ export function GeoEyeChart({
   useEffect(() => {
     const chart = chartRef.current
     if (chart === null) return
-    chart.setOption(effectiveOption, { lazyUpdate: true, notMerge: true })
-    const optionRecord = effectiveOption as Record<string, unknown>
+    chart.setOption(stableOption, { lazyUpdate: true, notMerge: false, replaceMerge: ['series'] })
+    const optionRecord = stableOption as Record<string, unknown>
     if (typeof optionRecord.brush === 'object' && optionRecord.brush !== null) {
       chart.dispatchAction({
         brushOption: { brushMode: 'single', brushType: 'rect' },
@@ -245,7 +251,7 @@ export function GeoEyeChart({
         type: 'takeGlobalCursor',
       })
     }
-  }, [effectiveOption])
+  }, [stableOption])
 
   useEffect(() => {
     const chart = chartRef.current
@@ -271,7 +277,7 @@ export function GeoEyeChart({
       onObservationClick?.(ids)
     }
     const handleBrush = (event: unknown) => {
-      const ids = idsFromBrush(event as BrushSelectedEvent, effectiveOption)
+      const ids = idsFromBrush(event as BrushSelectedEvent, stableOption)
       select(ids, brushSelection)
       onObservationSelection?.(ids)
     }
@@ -281,7 +287,7 @@ export function GeoEyeChart({
       chart.off('click', handleClick)
       chart.off('brushselected', handleBrush)
     }
-  }, [addSelection, brushSelection, clickSelection, effectiveOption, onDatumClick, onObservationClick, onObservationSelection, replaceSelection, toggleSelection])
+  }, [addSelection, brushSelection, clickSelection, onDatumClick, onObservationClick, onObservationSelection, replaceSelection, stableOption, toggleSelection])
 
   return <div aria-label={ariaLabel} className={`geoeye-chart geoeye-chart-${designId} ${className}`.trim()} ref={containerRef} role="img" />
 }

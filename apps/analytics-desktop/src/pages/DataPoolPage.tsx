@@ -1,12 +1,11 @@
 import { ArrowRight, Check, Clock3, RefreshCw } from 'lucide-react'
-import { useCallback, useEffect, useState, type ComponentType } from 'react'
+import type { ComponentType } from 'react'
 import {
   AssayIcon,
   FieldLoggingIcon,
   SpectralIcon,
   XrfIcon,
 } from '../components/GeoEyeIcons.js'
-import { checkDataPoolConnection } from '../data/dataPoolConnection.js'
 import { useDataPoolWorkspace } from '../state/DataPoolWorkspaceContext.js'
 import type { ConnectionSettings, ConnectionState } from '../types.js'
 import { LiveDataPoolPanel } from './LiveDataPoolPanel.js'
@@ -40,44 +39,36 @@ const activity = [
   { source: 'Portable XRF', event: 'Instrument file validated', detail: 'XRF-0912 · 284 readings', time: '1 day' },
 ] as const
 
-export function DataPoolPage({ connectionSettings, connectionState }: DataPoolPageProps) {
+export function DataPoolPage({ connectionState }: DataPoolPageProps) {
   const connected = connectionState === 'connected'
   const workspace = useDataPoolWorkspace()
-  const [variableCount, setVariableCount] = useState<number | null>(null)
-  const [refreshing, setRefreshing] = useState(false)
-
-  const refreshRegistry = useCallback(async () => {
-    if (!connected) return
-    setRefreshing(true)
-    try {
-      setVariableCount(await checkDataPoolConnection(connectionSettings))
-    } catch {
-      setVariableCount(null)
-    } finally {
-      setRefreshing(false)
-    }
-  }, [connected, connectionSettings])
-
-  useEffect(() => { void refreshRegistry() }, [refreshRegistry])
+  const variableCount = workspace.localSnapshot?.variables.length ?? null
 
   if (workspace.live && workspace.client !== null) {
     return (
       <div className="page data-pool-page data-pool-console">
-        <h1 className="sr-only">Data Pool</h1>
+        <h1 className="sr-only">Database</h1>
         <p className="pool-live-banner">
-          <span className="pool-connection-state is-connected"><i />Data Pool connected{variableCount === null ? '' : ` · ${variableCount} variables`}</span>
+          <span className="pool-connection-state is-connected"><i />Database connected{variableCount === null ? '' : ` · ${variableCount} variables`}</span>
           {workspace.projectsError !== null ? <span role="alert">{workspace.projectsError}</span> : null}
         </p>
         {workspace.project === null ? (
           <section className="panel pool-sources-panel">
             <p className="pool-live-note">
               {workspace.projectsLoading
-                ? 'Loading projects from the Data Pool…'
-                : 'This Data Pool has no projects yet. Projects appear here once GeoEye Field creates them.'}
+                ? 'Loading projects from the Database…'
+                : 'This Database has no projects yet. Projects appear here once GeoEye Field creates them.'}
             </p>
           </section>
         ) : (
-          <LiveDataPoolPanel client={workspace.client} project={workspace.project} scope={workspace.scope} />
+          <LiveDataPoolPanel
+            draft={workspace.localDrillholeDraft}
+            error={workspace.localError}
+            onRefresh={workspace.refreshLocalProject}
+            project={workspace.project}
+            refreshing={workspace.localRefreshing}
+            snapshot={workspace.localSnapshot}
+          />
         )}
       </div>
     )
@@ -85,14 +76,14 @@ export function DataPoolPage({ connectionSettings, connectionState }: DataPoolPa
 
   return (
     <div className="page data-pool-page data-pool-console">
-      <h1 className="sr-only">Data Pool</h1>
+      <h1 className="sr-only">Database</h1>
 
       <section className="panel pool-sources-panel">
         <div className="panel-heading pool-console-heading">
           <div><p className="eyebrow">Sources</p><h2>Data connections</h2></div>
           <div className="pool-console-actions">
             <span className={`pool-connection-state ${connected ? 'is-connected' : ''}`}><i />{connected ? `Cloud connected${variableCount === null ? '' : ` · ${variableCount} variables`}` : 'Demo snapshot'}</span>
-            <button className="button button-secondary" disabled={!connected || refreshing} onClick={() => void refreshRegistry()} type="button"><RefreshCw className={refreshing ? 'spin' : ''} size={14} /> Refresh</button>
+            <button className="button button-secondary" disabled type="button"><RefreshCw size={14} /> Refresh</button>
           </div>
         </div>
         <div className="pool-source-grid">

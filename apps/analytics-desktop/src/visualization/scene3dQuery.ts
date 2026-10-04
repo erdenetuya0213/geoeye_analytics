@@ -59,7 +59,7 @@ export function compileSceneQuery(dataset: EdaDataset, expression: string): Comp
   const [, field = '', operator = '=', rawRight = ''] = parsed
   const fieldExists = dataset.observations.some((observation) => observationField(dataset, observation, field) !== undefined)
   if (!fieldExists) {
-    return { error: `${field.trim()} is not available in this Data Pool view.`, matches: () => true }
+    return { error: `${field.trim()} is not available in this Database view.`, matches: () => true }
   }
 
   return {

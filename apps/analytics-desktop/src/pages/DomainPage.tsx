@@ -172,7 +172,7 @@ export function DomainPage({ onNavigate }: DomainPageProps) {
   const datasets = datasetsQuery.data ?? []
   const dataset = datasets.find((item) => item.id === datasetId) ?? datasets[0]
   const sourceOptions = dataset === undefined ? [] : primarySourceOptions(dataset, multivariateEvidence, domainType)
-  const selectedSource = sourceOptions.find((option) => option.id === primarySourceId)
+  const selectedSource = sourceOptions.find((option) => option.id === primarySourceId) ?? preferredSource(sourceOptions, domainType)
   const rqdSource = sourceOptions.find((option) => option.variableKey === 'geotech.rqd' && option.available)
   const selectedGroup = candidateRun?.groups.find((group) => group.id === selectedGroupId) ?? candidateRun?.groups.find((group) => group.rowCount > 0) ?? candidateRun?.groups[0]
   const rmrUnavailable = selectedSource?.variableKey === 'geotech.rmr76' && !selectedSource.available
@@ -190,7 +190,7 @@ export function DomainPage({ onNavigate }: DomainPageProps) {
     ))
   }, [candidateRun, dataset, selectedGroup])
 
-  if (datasetsQuery.isPending) return <div className="page domain-page domain-simple-page"><div className="eda-state panel">Loading domain candidate sources from the Data Pool…</div></div>
+  if (datasetsQuery.isPending) return <div className="page domain-page domain-simple-page"><div className="eda-state panel">Loading domain candidate sources from the Database…</div></div>
   if (datasetsQuery.isError || dataset === undefined || selectedSource === undefined) return <div className="page domain-page domain-simple-page"><div className="eda-state panel">Domain candidate sources are unavailable.</div></div>
 
   const changeDomainType = (nextType: DomainType) => {

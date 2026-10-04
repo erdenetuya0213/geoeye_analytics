@@ -45,8 +45,10 @@ const templateViews: readonly TemplateView[] = [
 
 export function LoggingPage() {
   const workspace = useDataPoolWorkspace()
-  if (workspace.live && workspace.client !== null && workspace.project !== null) {
-    return <LiveLoggingPage client={workspace.client} project={workspace.project} scope={workspace.scope} />
+  if (workspace.live) {
+    if (workspace.projectsLoading || workspace.localLoading) return <div className="page logging-page"><div className="eda-state panel">Opening local core logging…</div></div>
+    if (workspace.project === null) return <div className="page logging-page"><div className="eda-state panel">No project is available for this account.</div></div>
+    return <LiveLoggingPage onRefresh={workspace.refreshLocalProject} overview={workspace.localSnapshot?.fieldLogging ?? null} project={workspace.project} refreshing={workspace.localRefreshing} />
   }
   return <DemoLoggingPage />
 }

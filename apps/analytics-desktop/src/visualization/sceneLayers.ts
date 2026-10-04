@@ -36,8 +36,8 @@ export function buildSceneLayers(input: SceneLayerInput): SceneLayer[] {
   const countValues = (key: string) => rows.filter((row) => typeof row.values[key] === 'number').length
   const countDimension = (key: string) => rows.filter((row) => row.dimensions[key] !== undefined).length
   return [
-    { count: input.holeCount, geometry: 'collars', group: 'Drilling', id: 'collars', label: 'Collars', source: 'Data Pool · collar' },
-    { count: input.holeCount, geometry: 'trajectories', group: 'Drilling', id: 'trajectories', label: 'Trajectories', source: 'Data Pool · survey' },
+    { count: input.holeCount, geometry: 'collars', group: 'Drilling', id: 'collars', label: 'Collars', source: 'Database · collar' },
+    { count: input.holeCount, geometry: 'trajectories', group: 'Drilling', id: 'trajectories', label: 'Trajectories', source: 'Database · survey' },
     { count: rows.length, geometry: 'tubes', group: 'Drilling', id: 'intervals', label: 'Intervals', source: input.datasetName },
     { colorBy: 'lithology', count: rows.length, geometry: 'attribute', group: 'Geology', id: 'lithology', label: 'Lithology', source: 'Logging · lithology' },
     { colorBy: 'alteration', count: countDimension('alteration'), geometry: 'attribute', group: 'Geology', id: 'alteration', label: 'Alteration', source: 'Logging · alteration' },

@@ -30,9 +30,13 @@
 
 * { box-sizing: border-box; }
 html, body, #root { min-height: 100%; }
-body { margin: 0; min-width: 1024px; background: var(--canvas); }
+/* Keep browser caret browsing from painting a blinking insertion cursor over
+   non-editable cards and native selects. Editable fields opt back in below. */
+body { margin: 0; min-width: 1024px; background: var(--canvas); caret-color: transparent; }
 button, input { font: inherit; }
 button { color: inherit; caret-color: transparent; user-select: none; }
+select { caret-color: transparent; }
+input, textarea, [contenteditable]:not([contenteditable="false"]) { caret-color: auto; }
 button:focus-visible, input:focus-visible { outline: 2px solid #62a99e; outline-offset: 2px; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .tabular { font-variant-numeric: tabular-nums; }
@@ -2881,7 +2885,7 @@ button.pool-activity-row:hover { background: #20252a; }
 
 /* Individual data tools. */
 .dataset-tool-page { width: 100%; max-width: none !important; padding: 14px 16px 20px !important; }
-.dataset-records-panel { overflow: hidden; }
+.dataset-records-panel { overflow-x: auto; overflow-y: hidden; }
 .dataset-tool-heading { min-height: 64px; display: flex; align-items: center; gap: 11px; padding: 10px 12px; background: #1d2125; border-bottom: 1px solid #3b4248; }
 .dataset-tool-heading > span { width: 40px; height: 40px; display: grid; place-items: center; color: #c4ccd1; background: #24292d; border: 1px solid #465057; }
 .dataset-tool-heading > span .geo-icon-accent { stroke: var(--primary); }
@@ -3686,6 +3690,22 @@ button.dataset-record-row:hover { background: #20252a; }
 .geotech-readiness-total { min-width: 105px; }
 .geotech-readiness-total strong { color: var(--foreground); font-family: var(--font-code); font-size: 10.5px; }
 .geotech-primary-action { min-width: 112px; height: 30px !important; justify-content: center; }
+.geotech-column-mapper { border-top: 1px solid var(--border); background: var(--card); }
+.geotech-column-mapper > header { min-height: 42px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 10px; background: var(--workspace-chrome); }
+.geotech-column-mapper > header > span { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.geotech-column-mapper > header strong { color: var(--foreground); font-size: 9px; }
+.geotech-column-mapper > header small { color: var(--muted-foreground); font-size: 7.5px; }
+.geotech-column-mapper > header > label { position: relative; display: flex; align-items: center; gap: 7px; color: var(--muted-foreground); font-size: 8px; font-weight: 700; text-transform: uppercase; }
+.geotech-column-mapper > header select { height: 29px; min-width: 112px; padding: 0 25px 0 8px; color: var(--foreground); background: var(--input); border: 1px solid var(--border); border-radius: 3px; font-size: 8.5px; text-transform: none; }
+.geotech-column-mapper > header svg { position: absolute; right: 7px; color: var(--muted-foreground); pointer-events: none; }
+.geotech-column-mapper > div { display: grid; grid-template-columns: repeat(6, minmax(150px, 1fr)); gap: 6px; padding: 7px; overflow-x: auto; scrollbar-width: thin; }
+.geotech-column-mapper > div > label { position: relative; min-width: 150px; display: grid; grid-template-columns: 1fr; gap: 4px; padding: 7px; background: var(--workspace); border: 1px solid var(--border); border-radius: 4px; }
+.geotech-column-mapper > div > label.is-mapped { border-color: color-mix(in srgb, #58a17d 48%, var(--border)); }
+.geotech-column-mapper > div > label.is-unmapped { border-color: color-mix(in srgb, var(--destructive) 42%, var(--border)); }
+.geotech-column-mapper > div > label > span { color: var(--foreground); font-size: 8px; font-weight: 700; }
+.geotech-column-mapper > div > label > select { width: 100%; height: 28px; padding: 0 24px 0 7px; color: var(--foreground); background: var(--input); border: 1px solid var(--border); border-radius: 3px; font-size: 8px; }
+.geotech-column-mapper > div > label > svg { position: absolute; right: 13px; top: 31px; color: var(--muted-foreground); pointer-events: none; }
+.geotech-column-mapper > div > label > small { overflow: hidden; color: var(--muted-foreground); font-family: var(--font-code); font-size: 6.5px; text-overflow: ellipsis; white-space: nowrap; }
 .geotech-readiness-list { min-height: 32px; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); border-top: 1px solid var(--border); }
 .geotech-readiness-list > button { min-width: 0; display: flex; align-items: center; gap: 5px; padding: 0 9px; color: var(--foreground); background: transparent; border: 0; border-right: 1px solid var(--border); cursor: pointer; font-size: 8.5px; text-align: left; }
 .geotech-readiness-list > button:hover, .geotech-readiness-list > button.is-active { background: var(--focus-tint); box-shadow: inset 0 -2px var(--primary); }
@@ -5897,6 +5917,17 @@ textarea,
 .geotech-calculator .geotech-readiness-total { min-width: 128px; }
 .geotech-calculator .geotech-readiness-total strong { font-family: var(--font-ui); font-size: 13px; font-weight: 700; }
 .geotech-calculator .geotech-primary-action { min-width: 126px; box-shadow: 0 5px 14px color-mix(in srgb, var(--primary) 24%, transparent); }
+.geotech-calculator .geotech-column-mapper > header { min-height: 50px; padding-inline: 13px; }
+.geotech-calculator .geotech-column-mapper > header strong { font-size: 12.5px; }
+.geotech-calculator .geotech-column-mapper > header small { font-size: 10.5px; }
+.geotech-calculator .geotech-column-mapper > header > label { font-size: 10px; }
+.geotech-calculator .geotech-column-mapper > header select { height: 34px; border-radius: 5px; font-size: 11px; }
+.geotech-calculator .geotech-column-mapper > div { gap: 7px; padding: 8px; }
+.geotech-calculator .geotech-column-mapper > div > label { min-height: 72px; gap: 5px; padding: 8px; border-radius: 6px; }
+.geotech-calculator .geotech-column-mapper > div > label > span { font-size: 10.5px; }
+.geotech-calculator .geotech-column-mapper > div > label > select { height: 31px; border-radius: 4px; font-size: 10.5px; }
+.geotech-calculator .geotech-column-mapper > div > label > svg { top: 34px; }
+.geotech-calculator .geotech-column-mapper > div > label > small { font-size: 8.5px; }
 .geotech-calculator .geotech-readiness-list {
   min-height: 58px;
   grid-template-columns: repeat(6, minmax(125px, 1fr));
@@ -6208,196 +6239,10 @@ textarea,
 .survey-station-list { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px 10px; margin: 0; padding: 0; list-style: none; font-family: var(--font-code); font-size: 9.5px; color: var(--muted-foreground); }
 .survey-station-list li:nth-child(-n+3) { color: var(--foreground); font-family: inherit; font-weight: 700; }
 
-/* Sign-in gate and live-data notice */
+/* Sign-in gate */
 .app-shell.sign-in-gate { min-height: 100vh; display: block; }
 .dialog-backdrop.is-sign-in-gate { backdrop-filter: none; }
 .connection-dialog .form-field input:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
 span.project-selector { cursor: default; }
 span.profile-button { cursor: default; }
 .project-selector, .profile-button { caret-color: transparent; user-select: none; }
-.not-live-page { display: grid; place-items: center; min-height: 60vh; }
-.not-live-panel { max-width: 520px; display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 34px 30px; color: var(--muted-foreground); text-align: center; }
-.not-live-panel > svg { color: var(--primary); }
-.not-live-panel h1 { margin: 0; color: var(--foreground); font-size: 16px; }
-.not-live-panel p { margin: 0; font-size: 11px; line-height: 1.55; }
-.not-live-actions { display: flex; gap: 8px; margin-top: 6px; }
-
-/* Project-backed feature shells -------------------------------------------
-   Keep the selected tool recognizable before its first compatible dataset is
-   available. The empty shells deliberately contain no demo observations. */
-.feature-empty-page { min-height: calc(100dvh - 64px); }
-.feature-empty-toolbar :disabled { cursor: default; }
-.feature-empty-workspace {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 290px;
-  gap: 12px;
-  align-items: stretch;
-  min-height: min(650px, calc(100dvh - 164px));
-}
-.feature-empty-stage { min-width: 0; overflow: hidden; }
-.feature-empty-stage > .panel-heading { min-height: 58px; border-bottom: 1px solid var(--border, var(--line)); }
-.feature-empty-count {
-  padding: 3px 7px;
-  color: var(--muted-foreground);
-  font-size: 9px;
-  font-weight: 650;
-  background: var(--secondary, #f4f6f4);
-  border: 1px solid var(--border, var(--line));
-  border-radius: 4px;
-}
-.feature-empty-surface {
-  position: relative;
-  min-height: 490px;
-  display: grid;
-  place-items: center;
-  overflow: hidden;
-  background: var(--card, var(--panel));
-}
-.feature-empty-surface.is-records { align-content: start; }
-.feature-empty-table-header {
-  position: absolute;
-  inset: 0 0 auto;
-  min-height: 34px;
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  align-items: center;
-  gap: 8px;
-  padding: 0 14px;
-  color: var(--muted-foreground);
-  background: var(--muted, #f7f8f7);
-  border-bottom: 1px solid var(--border, var(--line));
-  font-size: 8px;
-  font-weight: 700;
-  letter-spacing: .05em;
-  text-transform: uppercase;
-}
-.feature-empty-plot-frame {
-  position: absolute;
-  inset: 42px 38px 34px 48px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border, #d7ddd9) 88%, transparent);
-  border-left: 1px solid color-mix(in srgb, var(--border, #d7ddd9) 88%, transparent);
-  opacity: .65;
-}
-.feature-empty-plot-frame::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: repeating-linear-gradient(to bottom, transparent 0, transparent calc(20% - 1px), color-mix(in srgb, var(--border, #d7ddd9) 60%, transparent) 20%);
-}
-.feature-empty-plot-frame span {
-  position: absolute;
-  bottom: 0;
-  width: 8%;
-  height: 10%;
-  background: color-mix(in srgb, var(--primary, #287c70) 14%, transparent);
-  border-radius: 2px 2px 0 0;
-}
-.feature-empty-plot-frame span:nth-child(1) { left: 8%; height: 11%; }
-.feature-empty-plot-frame span:nth-child(2) { left: 27%; height: 8%; }
-.feature-empty-plot-frame span:nth-child(3) { left: 46%; height: 13%; }
-.feature-empty-plot-frame span:nth-child(4) { left: 65%; height: 9%; }
-.feature-empty-plot-frame span:nth-child(5) { left: 84%; height: 12%; }
-.feature-empty-message {
-  position: relative;
-  z-index: 2;
-  width: min(440px, calc(100% - 44px));
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 12px 13px;
-  align-items: start;
-  padding: 18px;
-  color: var(--muted-foreground);
-  background: color-mix(in srgb, var(--card, #fff) 94%, transparent);
-  border: 1px solid var(--border, var(--line));
-  border-radius: 7px;
-  box-shadow: 0 10px 28px rgb(20 38 32 / 8%);
-  backdrop-filter: blur(5px);
-}
-.feature-empty-icon {
-  width: 36px;
-  height: 36px;
-  display: grid;
-  place-items: center;
-  color: var(--primary);
-  background: var(--primary-soft, #edf6f3);
-  border-radius: 6px;
-}
-.feature-empty-message strong { color: var(--foreground); font-size: 12px; }
-.feature-empty-message p { margin: 5px 0 0; font-size: 10px; line-height: 1.5; }
-.feature-empty-actions { grid-column: 2; display: flex; gap: 7px; }
-.feature-empty-inspector > .panel { overflow: hidden; }
-.feature-empty-inspector-fields { padding: 0 14px 12px; }
-.feature-empty-inspector-fields > div {
-  min-height: 37px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  color: var(--muted-foreground);
-  border-top: 1px solid var(--border, var(--line));
-  font-size: 9px;
-}
-.feature-empty-inspector-fields strong { color: var(--foreground); font-size: 9px; font-weight: 600; }
-.feature-empty-secondary-panel > div:last-child {
-  min-height: 112px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  color: var(--muted-foreground);
-  border-top: 1px solid var(--border, var(--line));
-  font-size: 9px;
-}
-
-.feature-empty-scene .feature-empty-scene-workspace { grid-template-columns: 256px minmax(460px, 1fr); }
-.feature-empty-scene .map2d-layer.is-empty { opacity: .62; }
-.feature-empty-scene .map2d-layer.is-empty > button,
-.feature-empty-scene .scene3d-layer-group > header > button:disabled { opacity: 1; }
-.feature-empty-scene .scene3d-layer-label { min-width: 0; display: flex; flex: 1; flex-direction: column; }
-.feature-empty-scene .map2d-layer-menu { padding-inline: 8px; color: var(--muted-foreground); }
-.feature-empty-scene-canvas {
-  position: relative;
-  min-width: 0;
-  min-height: 0;
-  display: grid;
-  place-items: center;
-  overflow: hidden;
-  background: var(--background);
-}
-.feature-empty-scene-grid {
-  position: absolute;
-  inset: 0;
-  opacity: .34;
-  background-image:
-    linear-gradient(color-mix(in srgb, var(--border, #cbd5d0) 52%, transparent) 1px, transparent 1px),
-    linear-gradient(90deg, color-mix(in srgb, var(--border, #cbd5d0) 52%, transparent) 1px, transparent 1px);
-  background-size: 42px 42px;
-  transform: perspective(620px) rotateX(54deg) scale(1.5);
-  transform-origin: 50% 75%;
-}
-.feature-empty-scene-tools {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  z-index: 3;
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-.feature-empty-scene-tools button {
-  width: 34px;
-  height: 34px;
-  display: grid;
-  place-items: center;
-  color: var(--muted-foreground);
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 5px;
-}
-.feature-empty-statusbar { right: 0; left: 256px; }
-
-@media (max-width: 980px) {
-  .feature-empty-workspace { grid-template-columns: minmax(0, 1fr); }
-  .feature-empty-inspector { display: none; }
-}

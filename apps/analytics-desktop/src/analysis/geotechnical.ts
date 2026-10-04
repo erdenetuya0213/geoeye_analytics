@@ -11,10 +11,13 @@ export type ExcavationType = 'tunnel' | 'foundation' | 'slope'
 
 export interface Rmr76Inputs {
   excavationType?: ExcavationType
-  groundwater?: Rmr76Groundwater
-  jointCondition?: Rmr76JointCondition
+  /** Qualitative condition, or a user-mapped RMR76 component rating from 0 to 10. */
+  groundwater?: Rmr76Groundwater | number
+  /** Qualitative condition, or a user-mapped RMR76 component rating from 0 to 25. */
+  jointCondition?: Rmr76JointCondition | number
   jointSpacingM?: number
-  orientation?: Rmr76Orientation
+  /** Qualitative orientation, or an already-rated RMR76 adjustment from -60 to 0. */
+  orientation?: Rmr76Orientation | number
   rqdPercent?: number
   ucsMpa?: number
 }
@@ -172,6 +175,11 @@ function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value))
 }
 
+function directRating(value: number, min: number, max: number, label: string) {
+  if (!Number.isFinite(value) || value < min || value > max) throw new RangeError(`${label} rating must be between ${min} and ${max}.`)
+  return value
+}
+
 export function estimateRqdFromFractureFrequency(fracturesPerM: number) {
   if (!Number.isFinite(fracturesPerM) || fracturesPerM < 0) throw new RangeError('Fracture frequency must be a finite value at or above zero.')
   return clamp(100 * Math.exp(-0.1 * fracturesPerM) * (0.1 * fracturesPerM + 1), 0, 100)
@@ -218,12 +226,24 @@ export function calculateRmr76(inputs: Rmr76Inputs): Rmr76Result {
   const strength = inputs.ucsMpa === undefined ? null : scoreRmr76Strength(inputs.ucsMpa)
   const rqd = inputs.rqdPercent === undefined ? null : scoreRmr76Rqd(inputs.rqdPercent)
   const jointSpacing = inputs.jointSpacingM === undefined ? null : scoreRmr76Spacing(inputs.jointSpacingM)
-  const jointCondition = inputs.jointCondition === undefined ? null : rmr76ConditionScores[inputs.jointCondition]
-  const groundwater = inputs.groundwater === undefined ? null : rmr76GroundwaterScores[inputs.groundwater]
-  const excavationType = inputs.excavationType
-  const orientationAdjustment = excavationType === undefined || inputs.orientation === undefined
+  const jointCondition = inputs.jointCondition === undefined
     ? null
-    : rmr76OrientationScores[excavationType][inputs.orientation]
+    : typeof inputs.jointCondition === 'number'
+      ? directRating(inputs.jointCondition, 0, 25, 'Joint condition')
+      : rmr76ConditionScores[inputs.jointCondition]
+  const groundwater = inputs.groundwater === undefined
+    ? null
+    : typeof inputs.groundwater === 'number'
+      ? directRating(inputs.groundwater, 0, 10, 'Groundwater')
+      : rmr76GroundwaterScores[inputs.groundwater]
+  const excavationType = inputs.excavationType
+  const orientationAdjustment = inputs.orientation === undefined
+    ? null
+    : typeof inputs.orientation === 'number'
+      ? directRating(inputs.orientation, -60, 0, 'Orientation adjustment')
+      : excavationType === undefined
+        ? null
+        : rmr76OrientationScores[excavationType][inputs.orientation]
   const components = { strength, rqd, jointSpacing, jointCondition, groundwater }
   const missing = Object.entries(components).flatMap(([key, value]) => value === null ? [key] : [])
   const basic = missing.length === 0 ? Object.values(components).reduce<number>((sum, value) => sum + (value ?? 0), 0) : null

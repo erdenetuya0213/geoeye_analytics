@@ -1,10 +1,13 @@
+import type { DataPoolClient, ProjectSummary } from '@geoeye/datapool-client'
+import { useQuery } from '@tanstack/react-query'
 import { Check, ChevronDown, CopyPlus, Download, Eye, EyeOff, MousePointer2, Pencil, Pentagon, Plus, Save, Trash2, X } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
-import { analyzeStructure } from '../analysis/structureAnalysis.js'
-import type { StructurePoint, StructureTypeId } from '../analysis/structureAnalysis.js'
+import { analyzeStructure, normalizeStructureHoleId } from '../analysis/structureAnalysis.js'
+import type { CollarRecord, StructureObservation, StructurePoint, StructureTypeId, SurveyStation } from '../analysis/structureAnalysis.js'
 import { isBoundaryComplete, pointInPolygon, projectStructurePoint, Stereonet } from '../components/Stereonet.js'
 import type { BoundaryDrawingMode, DensityDistribution, DensityPalettePreset, DensitySurfaceMode, PlotCoordinate, StereonetPlotMode, StereonetProjection } from '../components/Stereonet.js'
 import { readDrillholeImport } from '../data/drillholeImportStore.js'
+import { effectiveDrillholes, effectiveSurveysByHoleId } from '../data/localProjectDb.js'
 import { recordAnalysisTemplateSave } from '../data/analysisSaveStore.js'
 import { barGraphImage, svgElementPngGraphImage } from '../data/analysisGraphImages.js'
 import { saveAnalysisResultPackage } from '../data/analysisResultStore.js'
@@ -86,38 +89,73 @@ function mergeImportedDrillholes() {
     importedHoleIds: new Set<string>(),
     surveys: fallbackStructureSurveys,
   }
-  const importedHoleIds = new Set([...imported.collar, ...imported.survey].map((record) => record.holeId))
+  const importedHoleIds = new Set([...imported.collar, ...imported.survey].map((record) => normalizeStructureHoleId(record.holeId)))
   return {
-    collars: [...fallbackStructureCollars.filter((record) => !importedHoleIds.has(record.holeId)), ...imported.collar],
+    collars: [...fallbackStructureCollars.filter((record) => !importedHoleIds.has(normalizeStructureHoleId(record.holeId))), ...imported.collar],
     importedHoleIds,
-    surveys: [...fallbackStructureSurveys.filter((record) => !importedHoleIds.has(record.holeId)), ...imported.survey],
+    surveys: [...fallbackStructureSurveys.filter((record) => !importedHoleIds.has(normalizeStructureHoleId(record.holeId))), ...imported.survey],
   }
 }
 
 export function StructurePage() {
   const workspace = useDataPoolWorkspace()
+  const localSource = useMemo<StructureDataSource | null>(() => {
+    const snapshot = workspace.localSnapshot
+    if (snapshot === null) return null
+    const holes = effectiveDrillholes(snapshot, workspace.localDrillholeDraft)
+    const surveys = effectiveSurveysByHoleId(snapshot, workspace.localDrillholeDraft)
+    return {
+      datasets: async () => snapshot.datasets,
+      drillholes: async () => holes,
+      fieldLogging: async () => snapshot.fieldLogging,
+      fieldLoggingStructures: async () => snapshot.fieldStructures,
+      queryObservations: async (input) => {
+        const keys = new Set(input.variableKeys)
+        return snapshot.observations.filter((observation) => keys.has(observation.variableKey))
+      },
+      surveys: async (_projectId, holeId) => surveys[holeId] ?? [],
+      variables: async () => snapshot.variables,
+    }
+  }, [workspace.localDrillholeDraft, workspace.localSnapshot])
   const liveData = useQuery({
-    enabled: workspace.live && workspace.client !== null && workspace.project !== null,
-    queryKey: ['datapool', workspace.scope, workspace.project?.id ?? 'no-project', 'structure-workspace'],
-    queryFn: () => loadLiveStructureData(workspace.client!, workspace.project!),
+    enabled: workspace.live && localSource !== null && workspace.project !== null,
+    queryKey: ['local-project', workspace.project?.id ?? 'no-project', workspace.localSnapshot?.refreshedAt ?? 'empty', workspace.localDrillholeDraft?.updatedAt ?? 'no-draft', 'structure-workspace'],
+    queryFn: () => loadLiveStructureData(localSource!, workspace.project!),
+    staleTime: Number.POSITIVE_INFINITY,
   })
-  if (workspace.live && (workspace.projectsLoading || liveData.isPending)) return <div className="page structure-page"><div className="eda-state panel">Loading structural observations from the Data Pool…</div></div>
-  if (workspace.live && (workspace.client === null || workspace.project === null || liveData.isError)) return <div className="page structure-page"><div className="eda-state panel" role="alert">The connected project's structural data could not be loaded.</div></div>
+  if (workspace.live && (workspace.projectsLoading || workspace.localLoading || (localSource !== null && liveData.isPending))) return <div className="page structure-page"><div className="eda-state panel">Opening local structural observations…</div></div>
+  if (workspace.live && workspace.project === null) return <div className="page structure-page"><div className="eda-state panel" role="alert">No project is available for this account.</div></div>
+  if (workspace.live && workspace.localSnapshot === null) return <div className="page structure-page"><div className="eda-state panel">No local project snapshot yet. Refresh the local copy in Database or Core Logging first.</div></div>
+  if (workspace.live && liveData.isError) return <div className="page structure-page"><div className="eda-state panel" role="alert">The local structural data could not be opened.</div></div>
   if (workspace.live && liveData.data !== undefined) return <StructureWorkbench data={liveData.data} />
   return <StructureWorkbench />
 }
 
+type StructureDataSource = Pick<DataPoolClient,
+  'datasets' | 'drillholes' | 'fieldLogging' | 'fieldLoggingStructures' | 'queryObservations' | 'surveys' | 'variables'
+>
+
 interface StructureWorkspaceData {
   collars: CollarRecord[]
+  drillholesByTemplate: Record<string, string[]>
   observations: StructureObservation[]
+  observationsByTemplate: Record<string, StructureObservation[]>
+  projectId: string
   surveys: SurveyStation[]
-  templates: Array<{ id: string; label: string; observationCount: number }>
+  templates: Array<{ datasetId: string | null; id: string; label: string; observationCount: number }>
+  tenantId: string
 }
 
-async function loadLiveStructureData(client: DataPoolClient, project: ProjectSummary): Promise<StructureWorkspaceData> {
-  const [variables, holes] = await Promise.all([client.variables(), client.drillholes(project.id)])
+export async function loadLiveStructureData(client: StructureDataSource, project: ProjectSummary): Promise<StructureWorkspaceData> {
+  const [variables, datasets, holes, fieldLogging, sourceStructures] = await Promise.all([
+    client.variables(),
+    client.datasets(project.id),
+    client.drillholes(project.id),
+    client.fieldLogging(project.id),
+    client.fieldLoggingStructures(project.id),
+  ])
   const availableKeys = new Set(variables.map((variable) => variable.key))
-  const variableKeys = ['structure.alpha', 'structure.beta'].filter((key) => availableKeys.has(key))
+  const variableKeys = ['structure.alpha', 'structure.beta', 'structure.type'].filter((key) => availableKeys.has(key))
   const observations = variableKeys.length === 0 ? [] : await client.queryObservations({
     acceptedOnly: true,
     limit: 200_000,
@@ -125,31 +163,140 @@ async function loadLiveStructureData(client: DataPoolClient, project: ProjectSum
     variableKeys,
   })
   const holeNames = new Map(holes.map((hole) => [hole.id, hole.name]))
-  const grouped = new Map<string, { alpha?: number; beta?: number; depth: number; holeId: string; ids: string[] }>()
+  const collarNamesById = new Map(holes.flatMap((hole) => hole.collar === null ? [] : [[hole.id, hole.name] as const]))
+  const collarNamesByNormalizedId = new Map(holes.flatMap((hole) => hole.collar === null
+    ? []
+    : [[normalizeStructureHoleId(hole.name), hole.name] as const]))
+  const matchedCollarName = (holeId: string, fallbackName?: string): string | null => {
+    const direct = collarNamesById.get(holeId)
+    if (direct !== undefined) return direct
+    if (fallbackName === undefined) return null
+    return collarNamesByNormalizedId.get(normalizeStructureHoleId(fallbackName)) ?? null
+  }
+  const templateIdsByHole = new Map<string, Set<string>>()
+  const drillholesByTemplate = new Map<string, Set<string>>()
+  fieldLogging.submissions.forEach((submission) => {
+    if (submission.structureCount === 0) return
+    const collarName = matchedCollarName(submission.holeId, submission.holeName)
+    if (collarName === null) return
+    const templateIds = templateIdsByHole.get(submission.holeId) ?? new Set<string>()
+    templateIds.add(submission.templateId)
+    templateIdsByHole.set(submission.holeId, templateIds)
+    const templateHoles = drillholesByTemplate.get(submission.templateId) ?? new Set<string>()
+    templateHoles.add(collarName)
+    drillholesByTemplate.set(submission.templateId, templateHoles)
+  })
+  const grouped = new Map<string, { alpha?: number; beta?: number; datasetId: string; depth: number; holeId: string; ids: string[]; structureType?: string; templateId: string }>()
+  const datasetIdsByTemplate = new Map<string, Set<string>>()
   observations.forEach((observation) => {
-    if (observation.holeId === null || observation.numericValue === null) return
+    if (observation.holeId === null) return
+    const collarName = matchedCollarName(observation.holeId, holeNames.get(observation.holeId))
+    if (collarName === null) return
+    if ((observation.variableKey === 'structure.alpha' || observation.variableKey === 'structure.beta') && observation.numericValue === null) return
+    const holeTemplateIds = [...(templateIdsByHole.get(observation.holeId) ?? [])]
+    const templateId = observation.sourceTemplateId
+      ?? (holeTemplateIds.length === 1 ? holeTemplateIds[0] : undefined)
+      ?? observation.datasetId
     const key = `${observation.datasetId}|${observation.sourceId}|${observation.holeId}|${observation.depthFrom ?? 0}`
-    const current = grouped.get(key) ?? {
+    const current: { alpha?: number; beta?: number; datasetId: string; depth: number; holeId: string; ids: string[]; structureType?: string; templateId: string } = grouped.get(key) ?? {
+      datasetId: observation.datasetId,
       depth: observation.depthFrom ?? 0,
-      holeId: holeNames.get(observation.holeId) ?? observation.holeId,
+      holeId: collarName,
       ids: [],
+      templateId,
     }
-    if (observation.variableKey === 'structure.alpha') current.alpha = observation.numericValue
-    if (observation.variableKey === 'structure.beta') current.beta = observation.numericValue
+    const templateDatasetIds = datasetIdsByTemplate.get(templateId) ?? new Set<string>()
+    templateDatasetIds.add(observation.datasetId)
+    datasetIdsByTemplate.set(templateId, templateDatasetIds)
+    if (observation.variableKey === 'structure.alpha' && observation.numericValue !== null) current.alpha = observation.numericValue
+    if (observation.variableKey === 'structure.beta' && observation.numericValue !== null) current.beta = observation.numericValue
+    if (observation.variableKey === 'structure.type') {
+      current.structureType = observation.categoryValue ?? observation.textValue ?? 'unclassified'
+    }
     current.ids.push(observation.id)
     grouped.set(key, current)
   })
-  const structureObservations = [...grouped.entries()].flatMap(([key, row]): StructureObservation[] => (
-    row.alpha === undefined || row.beta === undefined ? [] : [{
+  const observationsByTemplate = new Map<string, StructureObservation[]>()
+  Array.from(grouped.entries()).forEach(([key, row]) => {
+    if (row.alpha === undefined || row.beta === undefined) return
+    const structureObservation: StructureObservation = {
       alpha: row.alpha,
       beta: row.beta,
       depth: row.depth,
       holeId: row.holeId,
       id: row.ids[0] ?? key,
-      structureType: 'unclassified',
-    }]
+      structureType: row.structureType ?? 'unclassified',
+    }
+    observationsByTemplate.set(row.templateId, [...(observationsByTemplate.get(row.templateId) ?? []), structureObservation])
+    const templateHoles = drillholesByTemplate.get(row.templateId) ?? new Set<string>()
+    templateHoles.add(row.holeId)
+    drillholesByTemplate.set(row.templateId, templateHoles)
+  })
+  const completeSourceStructures = sourceStructures.filter((row) => (
+    row.alpha !== null
+    && row.beta !== null
+    && row.depthFrom !== null
+    && row.holeId !== null
+    && row.templateId !== null
+    && matchedCollarName(row.holeId) !== null
   ))
-  const usedHoleNames = new Set(structureObservations.map((observation) => observation.holeId))
+  const sourceTemplateIds = new Set(completeSourceStructures.map((row) => row.templateId as string))
+  sourceTemplateIds.forEach((sourceTemplateId) => observationsByTemplate.set(sourceTemplateId, []))
+  completeSourceStructures.forEach((row) => {
+    const structureObservation: StructureObservation = {
+      alpha: row.alpha as number,
+      beta: row.beta as number,
+      depth: row.depthFrom as number,
+      holeId: matchedCollarName(row.holeId as string) as string,
+      id: row.id,
+      structureType: row.structureType ?? 'unclassified',
+    }
+    const sourceTemplateId = row.templateId as string
+    observationsByTemplate.set(sourceTemplateId, [
+      ...(observationsByTemplate.get(sourceTemplateId) ?? []).filter((item) => item.id !== row.id),
+      structureObservation,
+    ])
+    const templateHoles = drillholesByTemplate.get(sourceTemplateId) ?? new Set<string>()
+    templateHoles.add(structureObservation.holeId)
+    drillholesByTemplate.set(sourceTemplateId, templateHoles)
+  })
+  const structureObservations = [...observationsByTemplate.values()].flat()
+  const observedDatasetIds = new Set(observations.map((observation) => observation.datasetId))
+  const defaultStructureDataset = datasets.find((dataset) => observedDatasetIds.has(dataset.id))
+    ?? datasets.find((dataset) => dataset.sourceSystem === 'field.logging_structure')
+    ?? null
+  const loggingTemplateIds = new Set(fieldLogging.templates.map((template) => template.id))
+  const fieldTemplateOptions = fieldLogging.templates.flatMap((template) => {
+    const observationCount = observationsByTemplate.get(template.id)?.length ?? 0
+    const matchingHoleCount = drillholesByTemplate.get(template.id)?.size ?? 0
+    if (observationCount === 0 && matchingHoleCount === 0 && !datasetIdsByTemplate.has(template.id)) return []
+    return [{
+      datasetId: [...(datasetIdsByTemplate.get(template.id) ?? [])][0] ?? defaultStructureDataset?.id ?? null,
+      id: template.id,
+      label: `${template.name} · v${template.version}`,
+      observationCount,
+    }]
+  })
+  const unassignedDatasetOptions = datasets.flatMap((dataset) => (
+    observationsByTemplate.has(dataset.id) && !loggingTemplateIds.has(dataset.id) ? [{
+      datasetId: dataset.id,
+      id: dataset.id,
+      label: `${dataset.name} · v${dataset.currentVersion}`,
+      observationCount: observationsByTemplate.get(dataset.id)?.length ?? 0,
+    }] : []
+  ))
+  const templates = fieldTemplateOptions.length > 0
+    ? [...fieldTemplateOptions, ...unassignedDatasetOptions]
+    : datasets.map((dataset) => ({
+        datasetId: dataset.id,
+        id: dataset.id,
+        label: `${dataset.name} · v${dataset.currentVersion}`,
+        observationCount: observationsByTemplate.get(dataset.id)?.length ?? 0,
+      }))
+  const usedHoleNames = new Set([
+    ...structureObservations.map((observation) => observation.holeId),
+    ...[...drillholesByTemplate.values()].flatMap((templateHoles) => [...templateHoles]),
+  ])
   const collars = holes.flatMap((hole): CollarRecord[] => hole.collar === null || !usedHoleNames.has(hole.name) ? [] : [{
     easting: hole.collar.easting,
     elevation: hole.collar.elevation,
@@ -167,16 +314,30 @@ async function loadLiveStructureData(client: DataPoolClient, project: ProjectSum
     .flat()
   return {
     collars,
+    drillholesByTemplate: Object.fromEntries(templates.map((template) => [
+      template.id,
+      [...(drillholesByTemplate.get(template.id) ?? [])].sort((left, right) => left.localeCompare(right)),
+    ])),
     observations: structureObservations,
+    observationsByTemplate: Object.fromEntries(templates.map((template) => [template.id, observationsByTemplate.get(template.id) ?? []])),
+    projectId: project.id,
     surveys,
-    templates: [{ id: `live-${project.id}`, label: `${project.name} · accepted structures`, observationCount: structureObservations.length }],
+    templates,
+    tenantId: project.organizationId ?? 'Database',
   }
 }
 
 function StructureWorkbench({ data }: { data?: StructureWorkspaceData }) {
   const stereonetTheme = useStereonetTheme()
   const demoDrillholes = useMemo(mergeImportedDrillholes, [])
-  const drillholeData = data === undefined ? demoDrillholes : { collars: data.collars, importedHoleIds: new Set<string>(), surveys: data.surveys }
+  const drillholeData = useMemo(() => {
+    if (data === undefined) return demoDrillholes
+    return {
+      collars: data.collars,
+      importedHoleIds: new Set<string>(),
+      surveys: data.surveys,
+    }
+  }, [data, demoDrillholes])
   const templates = data?.templates ?? structureTemplates
   const sourceObservations = data?.observations ?? fieldStructureObservations
   const [templateId, setTemplateId] = usePersistentState('structure.templateId', templates[0]?.id ?? 'structure-empty')
@@ -209,16 +370,63 @@ function StructureWorkbench({ data }: { data?: StructureWorkspaceData }) {
   const [categoryNameDraft, setCategoryNameDraft] = usePersistentState('structure.categoryNameDraft', '')
   const [saveAsOpen, setSaveAsOpen] = useState(false)
 
+  const selectedTemplate = templates.find((template) => template.id === templateId) ?? templates[0] ?? { id: 'structure-empty', label: 'No structural datasets', observationCount: 0 }
+  const selectedTemplateId = selectedTemplate.id
+  const selectedDatasetId = data === undefined
+    ? 'dataset.structural-logging'
+    : 'datasetId' in selectedTemplate ? selectedTemplate.datasetId : null
+  const selectedTemplateLabel = data === undefined ? labelWithVersion(selectedTemplate.label, documentVersion) : selectedTemplate.label
+  const collarNamesByNormalizedId = new Map(drillholeData.collars.map((collar) => [
+    normalizeStructureHoleId(collar.holeId),
+    collar.holeId,
+  ]))
+  const rawTemplateObservations = data === undefined
+    ? sourceObservations.slice(0, selectedTemplate.observationCount)
+    : data.observationsByTemplate[selectedTemplateId] ?? []
+  const templateObservations = rawTemplateObservations.map((observation) => ({
+    ...observation,
+    holeId: collarNamesByNormalizedId.get(normalizeStructureHoleId(observation.holeId)) ?? observation.holeId,
+  }))
+  const rawAvailableHoles = data?.drillholesByTemplate[selectedTemplateId]
+    ?? templateObservations.map((observation) => observation.holeId)
+  const availableHoles = Array.from(new Set(rawAvailableHoles.flatMap((holeId) => {
+    const collarName = collarNamesByNormalizedId.get(normalizeStructureHoleId(holeId))
+    return collarName === undefined ? [] : [collarName]
+  }))).sort((left, right) => left.localeCompare(right))
+  const canonicalHoleFilter = holeFilter === 'all'
+    ? 'all'
+    : collarNamesByNormalizedId.get(normalizeStructureHoleId(holeFilter)) ?? holeFilter
+  const selectedHoleFilter = canonicalHoleFilter === 'all' || availableHoles.includes(canonicalHoleFilter) ? canonicalHoleFilter : 'all'
+  const effectiveStructureTypeCategories = data === undefined
+    ? structureTypeCategories
+    : Array.from(new Set(templateObservations.map((observation) => observation.structureType)))
+        .sort((left, right) => left.localeCompare(right))
+        .map((structureType, index) => ({
+          color: extraColors[index % extraColors.length] ?? '#9aa4ad',
+          id: structureType,
+          label: structureType === 'unclassified' ? 'Unclassified' : structureType,
+        }))
+  const selectedStructureTypeFilter = structureTypeFilter === 'all'
+    || effectiveStructureTypeCategories.some((category) => category.id === structureTypeFilter)
+    ? structureTypeFilter
+    : 'all'
+
+  useEffect(() => {
+    if (templateId !== selectedTemplateId) setTemplateId(selectedTemplateId)
+    if (holeFilter !== selectedHoleFilter) setHoleFilter(selectedHoleFilter)
+    if (structureTypeFilter !== selectedStructureTypeFilter) setStructureTypeFilter(selectedStructureTypeFilter)
+  }, [holeFilter, selectedHoleFilter, selectedStructureTypeFilter, selectedTemplateId, structureTypeFilter, templateId])
+
   // The saved log is only reloaded when another template or hole is opened, so restored edits survive a remount.
-  const documentKey = `${templateId}|${holeFilter}`
+  const documentKey = `${selectedTemplateId}|${selectedHoleFilter}`
   const [loadedDocumentKey, setLoadedDocumentKey] = usePersistentState('structure.loadedDocumentKey', '')
 
   useEffect(() => {
     if (loadedDocumentKey === documentKey) return
     setLoadedDocumentKey(documentKey)
-    const persisted = readLatestStructureLogVersion(templateId, holeFilter)
+    const persisted = readLatestStructureLogVersion(selectedTemplateId, selectedHoleFilter)
     if (persisted === undefined) {
-      setDocumentVersion(versionFromTemplate(templateId))
+      setDocumentVersion(versionFromTemplate(selectedTemplateId))
       setCategories(initialCategories)
       setCustomCategoryColors((current) => Object.fromEntries(Object.entries(current).filter(([key]) => !key.startsWith('jointSet:'))))
       setManualAssignments({})
@@ -256,28 +464,25 @@ function StructureWorkbench({ data }: { data?: StructureWorkspaceData }) {
     setSelectionMode(null)
     setPolygonVertices([])
     setVisibleBoundaryIds(new Set())
-  }, [holeFilter, templateId])
+  }, [documentKey, selectedHoleFilter, selectedTemplateId])
 
-  const selectedTemplate = templates.find((template) => template.id === templateId) ?? templates[0] ?? { id: 'structure-empty', label: 'No structural observations', observationCount: 0 }
-  const templateObservations = sourceObservations.slice(0, selectedTemplate.observationCount)
-  const availableHoles = Array.from(new Set(templateObservations.map((observation) => observation.holeId)))
-  const filteredObservations = holeFilter === 'all'
+  const filteredObservations = selectedHoleFilter === 'all'
     ? templateObservations
-    : templateObservations.filter((observation) => observation.holeId === holeFilter)
+    : templateObservations.filter((observation) => observation.holeId === selectedHoleFilter)
   const analysis = useMemo(
     () => analyzeStructure(filteredObservations, drillholeData.collars, drillholeData.surveys),
     [drillholeData.collars, drillholeData.surveys, filteredObservations],
   )
   const allPoints = analysis.points.map((point) => ({ ...point, setId: manualAssignments[point.id] ?? point.setId }))
-  const points = structureTypeFilter === 'all'
+  const points = selectedStructureTypeFilter === 'all'
     ? allPoints
-    : allPoints.filter((point) => point.structureType === structureTypeFilter)
+    : allPoints.filter((point) => point.structureType === selectedStructureTypeFilter)
   const themedCategories = (source: readonly JointCategory[], namespace: 'jointSet' | 'structureType') => source.map((category, index) => ({
     ...category,
     color: customCategoryColors[`${namespace}:${category.id}`] ?? stereonetTheme.pointPalette[index % stereonetTheme.pointPalette.length] ?? category.color,
   }))
   const jointSetPlotCategories = themedCategories(categories, 'jointSet')
-  const structureTypePlotCategories = themedCategories(structureTypeCategories, 'structureType')
+  const structureTypePlotCategories = themedCategories(effectiveStructureTypeCategories, 'structureType')
   const plotCategories = colorBy === 'jointSet' ? jointSetPlotCategories : structureTypePlotCategories
   const hiddenGroups = colorBy === 'jointSet' ? hiddenSets : hiddenStructureTypes
   const groupForPoint = (point: StructurePoint) => colorBy === 'jointSet' ? point.setId : point.structureType
@@ -286,7 +491,7 @@ function StructureWorkbench({ data }: { data?: StructureWorkspaceData }) {
     ? visiblePoints.filter((point) => selectedPointIds.has(point.id))
     : activeSet === 'all' ? visiblePoints : visiblePoints.filter((point) => groupForPoint(point) === activeSet)
   const focusedSummary = summarize(focusedPoints)
-  const typeCounts = new Map(initialStructureTypeCategories.map((category) => [
+  const typeCounts = new Map(effectiveStructureTypeCategories.map((category) => [
     category.id,
     allPoints.filter((point) => point.structureType === category.id).length,
   ]))
@@ -480,14 +685,15 @@ function StructureWorkbench({ data }: { data?: StructureWorkspaceData }) {
   }
 
   const saveSession = async (createVersion: boolean) => {
+    if (selectedDatasetId === null) return
     const nextVersion = createVersion
-      ? nextStructureLogVersionNumber(readStructureLogVersions(), templateId, holeFilter, documentVersion)
+      ? nextStructureLogVersionNumber(readStructureLogVersions(), selectedTemplateId, selectedHoleFilter, documentVersion)
       : documentVersion
     const savedAt = new Date().toISOString()
-    const runId = `structure-${templateId}-v${nextVersion}-${Date.parse(savedAt)}`
-    const analysisFileId = `structure/${templateId}/v${nextVersion}.json`
+    const runId = `structure-${selectedTemplateId}-v${nextVersion}-${Date.parse(savedAt)}`
+    const analysisFileId = `structure/${selectedTemplateId}/v${nextVersion}.json`
     writeStructureLogVersion({
-      holeFilter,
+      holeFilter: selectedHoleFilter,
       rows: allPoints.map((point) => ({ observationId: point.id, jointSet: point.setId })),
       sets: categories.map((category) => ({
         ...(category.boundary === undefined ? {} : { boundary: category.boundary }),
@@ -495,16 +701,16 @@ function StructureWorkbench({ data }: { data?: StructureWorkspaceData }) {
         id: category.id,
         label: category.label,
       })),
-      templateId,
+      templateId: selectedTemplateId,
       updatedAt: savedAt,
       version: nextVersion,
     })
     if (typeof window !== 'undefined') {
       saveStructureDerivedValues(window.localStorage, {
-        datasetId: 'dataset.structural-logging',
-        holeFilter,
+        datasetId: selectedDatasetId,
+        holeFilter: selectedHoleFilter,
         rows: allPoints.map((point) => ({ observationId: point.id, jointSet: point.setId })),
-        templateId,
+        templateId: selectedTemplateId,
         templateVersion: nextVersion,
       }, savedAt)
       recordAnalysisTemplateSave(window.localStorage, {
@@ -513,7 +719,7 @@ function StructureWorkbench({ data }: { data?: StructureWorkspaceData }) {
         feature: 'structure',
         runId,
         savedAt,
-        templateId,
+        templateId: selectedTemplateId,
         templateVersion: nextVersion,
       })
       const stereonetGraph = await svgElementPngGraphImage(
@@ -530,7 +736,7 @@ function StructureWorkbench({ data }: { data?: StructureWorkspaceData }) {
         analysisFileId,
         analysisPayload: {
           assignments: allPoints.map((point) => ({ observationId: point.id, jointSet: point.setId })),
-          configuration: { holeFilter, plotMode, projection, structureTypeFilter },
+          configuration: { holeFilter: selectedHoleFilter, plotMode, projection, structureTypeFilter: selectedStructureTypeFilter },
           sets: categories.map((category) => ({
             ...(category.boundary === undefined ? {} : { boundary: category.boundary }),
             color: category.color,
@@ -543,14 +749,14 @@ function StructureWorkbench({ data }: { data?: StructureWorkspaceData }) {
         derivedFieldKeys: ['structure.joint_set'],
         feature: 'structure',
         graphs,
-        inputName: `${holeFilter}-${structureTypeFilter}-${plotMode}-${projection}`,
-        projectId: 'Oyu Ridge',
+        inputName: `${selectedHoleFilter}-${selectedStructureTypeFilter}-${plotMode}-${projection}`,
+        projectId: data?.projectId ?? 'Oyu Ridge',
         runId,
         sourceFileName: `${selectedTemplate.label}.json`,
         sourceObservationIds: allPoints.map((point) => point.id),
-        templateId,
+        templateId: selectedTemplateId,
         templateVersion: nextVersion,
-        tenantId: 'GeoEye Demo',
+        tenantId: data?.tenantId ?? 'GeoEye Demo',
       })
     }
     if (createVersion) setDocumentVersion(nextVersion)
@@ -564,30 +770,33 @@ function StructureWorkbench({ data }: { data?: StructureWorkspaceData }) {
 
       <div className="analysis-toolbar structure-analysis-toolbar">
         <label className="tool-select tool-select-field">
-          <span>Template</span>
-          <select aria-label="Structure template" onChange={(event) => {
+          <span>{data === undefined ? 'Template' : 'Dataset'}</span>
+          <select aria-label={data === undefined ? 'Structure template' : 'Structure dataset'} disabled={templates.length === 0} onChange={(event) => {
             const nextId = event.target.value as typeof templateId
             setTemplateId(nextId)
+            setHoleFilter('all')
             setDocumentVersion(versionFromTemplate(nextId))
             setSavedStatus(null)
-          }} value={templateId}>
-            {structureTemplates.map((template) => <option key={template.id} value={template.id}>{template.id === templateId ? labelWithVersion(template.label, documentVersion) : template.label}</option>)}
+          }} value={selectedTemplateId}>
+            {templates.length === 0 ? <option value="structure-empty">No structural datasets</option> : templates.map((template) => (
+              <option key={template.id} value={template.id}>{data === undefined && template.id === selectedTemplateId ? selectedTemplateLabel : template.label}</option>
+            ))}
           </select>
           <ChevronDown size={14} />
         </label>
         <label className="tool-select tool-select-field">
           <span>Drillholes</span>
-          <select aria-label="Structure drillholes" onChange={(event) => { setHoleFilter(event.target.value); setSavedStatus(null) }} value={holeFilter}>
-            <option value="all">All validated · {availableHoles.length}</option>
+          <select aria-label="Structure drillholes" onChange={(event) => { setHoleFilter(event.target.value); setSavedStatus(null) }} value={selectedHoleFilter}>
+            <option value="all">All drillholes · {availableHoles.length}</option>
             {availableHoles.map((holeId) => <option key={holeId} value={holeId}>{holeId}</option>)}
           </select>
           <ChevronDown size={14} />
         </label>
         <label className="tool-select tool-select-field structure-type-filter">
           <span>Structure type</span>
-          <select aria-label="Filter structure type" onChange={(event) => { setStructureTypeFilter(event.target.value as 'all' | StructureTypeId); setActiveSet('all'); setSelectedPointIds(new Set()); setSavedStatus(null) }} value={structureTypeFilter}>
+          <select aria-label="Filter structure type" onChange={(event) => { setStructureTypeFilter(event.target.value as 'all' | StructureTypeId); setActiveSet('all'); setSelectedPointIds(new Set()); setSavedStatus(null) }} value={selectedStructureTypeFilter}>
             <option value="all">All types · {allPoints.length}</option>
-            {initialStructureTypeCategories.map((category) => (
+            {effectiveStructureTypeCategories.map((category) => (
               <option key={category.id} value={category.id}>{category.label} · {typeCounts.get(category.id) ?? 0}</option>
             ))}
           </select>
@@ -669,7 +878,7 @@ function StructureWorkbench({ data }: { data?: StructureWorkspaceData }) {
         <aside className="analysis-inspector joint-session-panel">
           <section className="panel joint-session">
             <div className="panel-heading compact-heading joint-session-heading">
-              <div><h2>{colorBy === 'jointSet' ? 'Joint sets' : 'Structure types'}</h2><span>{labelWithVersion(selectedTemplate.label, documentVersion)}</span></div>
+              <div><h2>{colorBy === 'jointSet' ? 'Joint sets' : 'Structure types'}</h2><span>{selectedTemplateLabel}</span></div>
               {colorBy === 'jointSet'
                 ? <button className="button button-small button-ghost" onClick={() => addCategory()} type="button"><Plus size={14} /> New set</button>
                 : null}
@@ -798,7 +1007,7 @@ function StructureWorkbench({ data }: { data?: StructureWorkspaceData }) {
               <button aria-label="Close Save As" className="icon-button" onClick={() => setSaveAsOpen(false)} type="button"><X size={17} /></button>
             </header>
             <div>
-              <p className="structure-save-as-summary"><strong>{labelWithVersion(selectedTemplate.label, documentVersion)}</strong> remains unchanged. A new version will keep the current set names, boundaries, colours, and assignments.</p>
+              <p className="structure-save-as-summary"><strong>{selectedTemplateLabel}</strong> remains unchanged. A new version will keep the current set names, boundaries, colours, and assignments.</p>
               <p>The new version saves <code>structure.joint_set</code> as GeoEye-owned derived data and writes its structure-analysis file and graph image in the same action. Source observations remain unchanged.</p>
             </div>
             <footer>
@@ -811,5 +1020,3 @@ function StructureWorkbench({ data }: { data?: StructureWorkspaceData }) {
     </div>
   )
 }
-import type { DataPoolClient, ProjectSummary } from '@geoeye/datapool-client'
-import { useQuery } from '@tanstack/react-query'

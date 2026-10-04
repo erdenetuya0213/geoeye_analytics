@@ -1,5 +1,6 @@
-import { AlertCircle, CheckCircle2, Filter, Plus, Search, Upload, X } from 'lucide-react'
-import { useMemo, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
+import type { TabularImportInput } from '@geoeye/datapool-client'
+import { AlertCircle, CheckCircle2, Filter, Plus, Save, Search, Upload, X } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
 import { calculatePointLoadIndex, type PointLoadTestType } from '../analysis/pointLoad.js'
 import {
   createPointLoadRecord,
@@ -10,6 +11,7 @@ import {
 import { readSchmidtRecords, writeSchmidtRecords, type SchmidtRecord } from '../data/schmidtStore.js'
 import { parseStrengthCsv } from '../data/strengthCsvImport.js'
 import { usePersistentState } from '../state/persistentState.js'
+import { useDataPoolWorkspace } from '../state/DataPoolWorkspaceContext.js'
 
 interface PointLoadDraft {
   depthFromM: string
@@ -73,8 +75,23 @@ function schmidtRecordMatches(record: SchmidtRecord, query: string): boolean {
 
 type StrengthMethod = 'point-load' | 'schmidt'
 
+function strengthDatabaseDraft(pointLoad: readonly PointLoadRecord[], schmidt: readonly SchmidtRecord[]): TabularImportInput {
+  const columns = ['Method', 'Sample ID', 'Hole ID', 'From', 'To', 'Peak Load kN', 'Equivalent Diameter mm', 'Is50 MPa', 'Schmidt Rebound', 'Laboratory', 'Tested At', 'Valid']
+  const pointLoadRows = pointLoad.map((record) => [
+    'Point load', record.sampleId, record.holeId, String(record.depthFromM), String(record.depthToM),
+    String(record.peakLoadKn), String(record.equivalentDiameterMm), String(record.is50Mpa), '',
+    record.labName, record.testedAt, String(record.validBreak),
+  ])
+  const schmidtRows = schmidt.map((record) => [
+    'Schmidt rebound', record.sampleId, record.holeId, String(record.depthFromM), String(record.depthToM),
+    '', '', '', String(record.reboundValue), '', '', 'true',
+  ])
+  return { columns, fileName: 'strength-local-records.csv', rows: [...pointLoadRows, ...schmidtRows], section: 'strength' }
+}
+
 export function StrengthPage() {
-  const [records, setRecords] = useState(() => readPointLoadRecords(window.localStorage))
+  const workspace = useDataPoolWorkspace()
+  const [records, setRecords] = useState(() => readPointLoadRecords(window.localStorage, !workspace.live))
   const [schmidtRecords, setSchmidtRecords] = useState(() => readSchmidtRecords(window.localStorage))
   const [activeMethod, setActiveMethod] = usePersistentState<StrengthMethod>('strength.activeMethod', 'point-load')
   const [query, setQuery] = usePersistentState('strength.query', '')
@@ -84,7 +101,14 @@ export function StrengthPage() {
   const [formError, setFormError] = useState<string | null>(null)
   const [saveNotice, setSaveNotice] = useState<string | null>(null)
   const [noticeIsError, setNoticeIsError] = useState(false)
+  const [publishing, setPublishing] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const databaseDraft = workspace.localTabularDrafts.strength
+
+  useEffect(() => {
+    if (!workspace.live || databaseDraft !== undefined || records.length + schmidtRecords.length === 0) return
+    void workspace.saveTabularImportLocally(strengthDatabaseDraft(records, schmidtRecords))
+  }, [databaseDraft, records, schmidtRecords, workspace])
 
   const filteredRecords = useMemo(() => records.filter((record) => (
     (!validOnly || record.validBreak) && recordMatches(record, query)
@@ -139,6 +163,7 @@ export function StrengthPage() {
       const nextRecords = [record, ...records]
       setRecords(nextRecords)
       const persisted = writePointLoadRecords(window.localStorage, nextRecords)
+      if (workspace.live) void workspace.saveTabularImportLocally(strengthDatabaseDraft(nextRecords, schmidtRecords))
       setNoticeIsError(false)
       setSaveNotice(persisted ? `${record.sampleId} added` : `${record.sampleId} added for this session; local storage is unavailable`)
       closeEntry()
@@ -162,12 +187,28 @@ export function StrengthPage() {
       setActiveMethod('schmidt')
       setQuery('')
       const persisted = writeSchmidtRecords(window.localStorage, nextRecords)
+      if (workspace.live) await workspace.saveTabularImportLocally(strengthDatabaseDraft(records, nextRecords))
       const skipped = result.blankRows + result.invalidRows
       setNoticeIsError(false)
       setSaveNotice(`${result.records.length} Schmidt readings imported (${newCount} new, ${skipped} skipped)${persisted ? '' : '; local storage is unavailable'}`)
     } catch (error) {
       setNoticeIsError(true)
       setSaveNotice(error instanceof Error ? error.message : 'The CSV could not be imported.')
+    }
+  }
+
+  const publishToDatabase = async () => {
+    setPublishing(true)
+    try {
+      const result = await workspace.publishLocalTabularImport('strength')
+      setNoticeIsError(false)
+      const unmatched = result.unmatchedHoles.length === 0 ? '' : ` · ${result.unmatchedHoles.length} unmatched holes`
+      setSaveNotice(`Saved ${result.importedRows.toLocaleString()} rows to Database · v${result.version}${unmatched}`)
+    } catch (error) {
+      setNoticeIsError(true)
+      setSaveNotice(error instanceof Error ? error.message : 'The local Strength records could not be saved to the Database.')
+    } finally {
+      setPublishing(false)
     }
   }
 
@@ -191,9 +232,10 @@ export function StrengthPage() {
         <label className="table-search"><Search size={16} /><input aria-label={`Search ${activeMethod === 'point-load' ? 'point-load tests' : 'Schmidt readings'}`} onChange={(event) => setQuery(event.target.value)} placeholder={activeMethod === 'point-load' ? 'Search sample, hole, lab…' : 'Search hole, sample, source…'} value={query} /></label>
         {activeMethod === 'point-load' ? <button aria-pressed={validOnly} className={`filter-button ${validOnly ? 'is-active' : ''}`} onClick={() => setValidOnly((current) => !current)} type="button"><Filter size={15} /> {validOnly ? 'Valid only' : 'All results'}</button> : null}
         <span className="result-count">{activeMethod === 'point-load' ? filteredRecords.length : filteredSchmidtRecords.length} shown</span>
-        {saveNotice === null ? null : <span className={`strength-save-notice ${noticeIsError ? 'is-error' : ''}`} role={noticeIsError ? 'alert' : 'status'}>{noticeIsError ? <AlertCircle size={14} /> : <CheckCircle2 size={14} />} {saveNotice}</span>}
+        {saveNotice === null && databaseDraft?.dirty !== true ? null : <span className={`strength-save-notice ${noticeIsError ? 'is-error' : ''}`} role={noticeIsError ? 'alert' : 'status'}>{noticeIsError ? <AlertCircle size={14} /> : <CheckCircle2 size={14} />} {saveNotice ?? 'Local changes have not been saved to the Database.'}</span>}
         <input accept=".csv,text/csv" aria-label="Choose a Strength CSV file" className="sr-only" onChange={handleCsvImport} ref={fileInputRef} type="file" />
         <button className="button button-secondary" onClick={() => { setSaveNotice(null); fileInputRef.current?.click() }} type="button"><Upload size={16} /> Import CSV</button>
+        {workspace.live ? <button className="button button-primary" disabled={publishing || !workspace.project?.canWrite || databaseDraft?.dirty !== true} onClick={() => void publishToDatabase()} title={!workspace.project?.canWrite ? 'Your role on this project is read-only' : databaseDraft?.dirty === true ? 'Send the local Strength records to the Database' : 'Import or add Strength records before saving'} type="button"><Save size={16} /> {publishing ? 'Saving…' : 'Save to Database'}</button> : null}
         {activeMethod === 'point-load' ? <button className="button button-primary" onClick={() => { setSaveNotice(null); setNoticeIsError(false); setShowEntry(true) }} type="button"><Plus size={16} /> Add point-load test</button> : null}
       </div>
 

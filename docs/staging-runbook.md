@@ -171,9 +171,11 @@ account. These are the same accounts GeoEye Field uses; nothing new is created. 
   displays those imported records instead of the Data Pool borehole list, and restores the last
   import when the workspace is reopened.
 
-The analysis workspaces (Explore, Structure, Geotechnical, ...) do not read the Data Pool yet.
-While a real project is open they show a notice instead of sample data. There is no demo
-workspace, in development or production, unless the build sets `VITE_ENABLE_DEMO=true`.
+The connected Overview, dataset tools, Explore, Structure, Geotechnical, Domain, Multivariate,
+and 3D workspaces read the active project's Data Pool datasets and normalized observations.
+They show an in-workspace empty or unavailable state when a required source is absent; they no
+longer replace the whole feature with a static "No project data" shell. Demo fixtures remain
+isolated to the opt-in demo workspace (`VITE_ENABLE_DEMO=true`).
 
 ## Acceptance checklist
 

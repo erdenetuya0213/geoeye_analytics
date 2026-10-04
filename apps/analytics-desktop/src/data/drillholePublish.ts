@@ -49,7 +49,7 @@ export interface DrillholePublishPlan {
 }
 
 function holeKey(name: string): string {
-  return name.trim().toLowerCase()
+  return name.trim().toLowerCase().replace(/[^a-z0-9]/g, '')
 }
 
 /** Azimuth 360 is the same bearing as 0; anything else out of range is an error. */

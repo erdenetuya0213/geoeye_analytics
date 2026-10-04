@@ -9,7 +9,18 @@ vi.mock('../state/DataPoolWorkspaceContext.js', () => ({
   useDataPoolWorkspace: () => ({
     live: true,
     client: { drillholes: vi.fn() },
-    project: { id: 'project-1', name: 'Database project' },
+    localDrillholeDraft: {
+      collar: [{ holeId: 'CSV-HOLE-001', easting: 500100, northing: 5300100, elevation: 1420 }],
+      dirty: true,
+      survey: [{ holeId: 'CSV-HOLE-001', depth: 125, azimuth: 42, dip: -60 }],
+      updatedAt: '2026-10-04T00:00:00.000Z',
+    },
+    localLoading: false,
+    localSnapshot: null,
+    projectsLoading: false,
+    project: { canWrite: true, id: 'project-1', name: 'Database project' },
+    publishLocalDrillholes: vi.fn(),
+    saveDrillholesLocally: vi.fn(),
     scope: 'test-user',
   }),
 }))

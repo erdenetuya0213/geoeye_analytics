@@ -13,6 +13,7 @@ const bindings: FieldProjectionBinding[] = [
   { variableKey: 'joint.aperture', source: { kind: 'selection', key: 'aperture' } },
   { variableKey: 'joint.roughness', source: { kind: 'selection', key: 'roughness' } },
   { variableKey: 'structure.apparent_angle', source: { kind: 'column', column: 'angleDeg' } },
+  { variableKey: 'structure.type', source: { kind: 'column', column: 'structureType' } },
 ]
 
 const source: FieldLoggingStructure = {
@@ -42,7 +43,7 @@ describe('projectFieldLoggingStructure', () => {
     })
 
     expect(result.issues).toEqual([])
-    expect(result.observations).toHaveLength(5)
+    expect(result.observations).toHaveLength(6)
     expect(result.observations.find((item) => item.variableKey === 'structure.alpha')).toMatchObject({
       numericValue: 38,
       unit: 'deg',
@@ -51,6 +52,10 @@ describe('projectFieldLoggingStructure', () => {
     })
     expect(result.observations.find((item) => item.variableKey === 'joint.roughness')).toMatchObject({
       categoryValue: 'Rough',
+      numericValue: null,
+    })
+    expect(result.observations.find((item) => item.variableKey === 'structure.type')).toMatchObject({
+      categoryValue: 'joint',
       numericValue: null,
     })
   })
@@ -85,4 +90,3 @@ describe('projectFieldLoggingStructure', () => {
     expect(result.issues[0]?.code).toBe('invalid_value')
   })
 })
-

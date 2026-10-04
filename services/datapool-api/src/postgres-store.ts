@@ -10,7 +10,9 @@ import {
   type Dataset,
   type DerivedValueInput,
   type DrillholeSummary,
+  type FieldLoggingDataset,
   type FieldLoggingOverview,
+  type FieldLoggingStructure,
   type FieldLoggingSubmission,
   type ObservationQuery,
   type ObservationValue,
@@ -21,6 +23,8 @@ import {
   type ProjectionStatus,
   type ReplaceSurveysInput,
   type SurveyStation,
+  type TabularImportInput,
+  type TabularImportResult,
   type VariableDefinition,
 } from '@geoeye/types'
 import { Pool, type PoolClient, type PoolConfig } from 'pg'
@@ -42,6 +46,56 @@ function nullableIso(value: Date | string | null): string | null {
 
 function nullableNumber(value: number | string | null): number | null {
   return value === null ? null : Number(value)
+}
+
+function finiteNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null
+  const number = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(number) ? number : null
+}
+
+function objectValue(value: unknown): Record<string, unknown> {
+  if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>
+  }
+  if (typeof value !== 'string') return {}
+  try {
+    const parsed: unknown = JSON.parse(value)
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {}
+  } catch {
+    return {}
+  }
+}
+
+const tabularImportLabels = {
+  laboratory: { name: 'Laboratory CSV imports', producerName: 'Laboratory', producerType: 'laboratory' as const, spatialSupport: 'interval' as const },
+  spectral: { name: 'Spectral CSV imports', producerName: 'Core scanner', producerType: 'instrument' as const, spatialSupport: 'point' as const },
+  strength: { name: 'Strength CSV imports', producerName: 'Strength laboratory', producerType: 'laboratory' as const, spatialSupport: 'interval' as const },
+  xrf: { name: 'XRF CSV imports', producerName: 'Portable XRF', producerType: 'instrument' as const, spatialSupport: 'point' as const },
+} satisfies Record<TabularImportInput['section'], { name: string; producerName: string; producerType: Dataset['producerType']; spatialSupport: Dataset['spatialSupport'] }>
+
+function normalizedImportHeader(value: string): string {
+  return value.trim().toLocaleLowerCase().replace(/[^a-z0-9]/g, '')
+}
+
+function importHeaderIndex(columns: readonly string[], aliases: readonly string[]): number {
+  return columns.findIndex((column) => aliases.includes(normalizedImportHeader(column)))
+}
+
+function importVariableSlug(value: string, index: number): string {
+  const slug = value.trim().toLocaleLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+  const safe = /^[a-z]/.test(slug) ? slug : `column_${slug || index + 1}`
+  return safe.slice(0, 48)
+}
+
+function firstFinite(record: Record<string, unknown>, keys: readonly string[]): number | null {
+  for (const key of keys) {
+    const value = finiteNumber(record[key])
+    if (value !== null) return value
+  }
+  return null
 }
 
 interface AnalysisRunRow {
@@ -210,6 +264,16 @@ export class PostgresDataPoolStore implements DataPoolStore {
   }
 
   async queryObservations(query: ObservationQuery): Promise<ObservationValue[]> {
+    const structuresReadable = await this.#tableReadable('logging_structures')
+    const sourceTemplateSelect = structuresReadable
+      ? `to_jsonb(structure_source) ->> 'template_id' AS source_template_id`
+      : 'NULL::text AS source_template_id'
+    const sourceTemplateJoin = structuresReadable
+      ? `LEFT JOIN logging_structures AS structure_source
+           ON observation.source_type = 'field.logging_structure'
+          AND structure_source.id::text = observation.source_id
+          AND structure_source.project_id = observation.project_id`
+      : ''
     const values: SqlValue[] = [query.projectId, query.variableKeys]
     const predicates = [
       'observation.project_id = $1',
@@ -243,6 +307,7 @@ export class PostgresDataPoolStore implements DataPoolStore {
       dataset_version_id: string | null
       source_type: string
       source_id: string
+      source_template_id: string | null
       hole_id: string | null
       depth_from: string | number | null
       depth_to: string | number | null
@@ -258,12 +323,14 @@ export class PostgresDataPoolStore implements DataPoolStore {
     }>(`
       SELECT observation.id, observation.project_id, observation.dataset_id,
              observation.dataset_version_id, observation.source_type, observation.source_id,
+             ${sourceTemplateSelect},
              observation.hole_id, observation.depth_from, observation.depth_to,
              variable.key AS variable_key, observation.numeric_value, observation.text_value,
              observation.category_value, observation.boolean_value, observation.datetime_value,
              observation.unit, observation.quality, observation.observed_at
       FROM observation_values AS observation
       JOIN variable_definitions AS variable ON variable.id = observation.variable_id
+      ${sourceTemplateJoin}
       WHERE ${predicates.join('\n        AND ')}
       ORDER BY observation.hole_id NULLS LAST, observation.depth_from NULLS LAST,
                variable.key, observation.id
@@ -277,6 +344,7 @@ export class PostgresDataPoolStore implements DataPoolStore {
       datasetVersionId: row.dataset_version_id,
       sourceType: row.source_type,
       sourceId: row.source_id,
+      sourceTemplateId: row.source_template_id,
       holeId: row.hole_id,
       depthFrom: nullableNumber(row.depth_from),
       depthTo: nullableNumber(row.depth_to),
@@ -290,6 +358,196 @@ export class PostgresDataPoolStore implements DataPoolStore {
       quality: row.quality,
       observedAt: nullableIso(row.observed_at),
     }))
+  }
+
+  async saveTabularImport(projectId: string, input: TabularImportInput, createdBy: string | null): Promise<TabularImportResult> {
+    return this.#transaction(async (client) => {
+      const config = tabularImportLabels[input.section]
+      const datasetResult = await client.query<{
+        id: string
+        project_id: string
+        name: string
+        description: string | null
+        producer_type: Dataset['producerType']
+        producer_name: string
+        source_system: string | null
+        spatial_support: Dataset['spatialSupport']
+        status: Dataset['status']
+        current_version: number
+        created_at: Date | string
+        updated_at: Date | string
+      }>(`
+        INSERT INTO datasets (
+          project_id, name, description, producer_type, producer_name,
+          source_system, spatial_support, status, current_version, created_by
+        ) VALUES ($1, $2, $3, $4, $5, 'geoeye.analytics.csv', $6, 'active', 1, $7)
+        ON CONFLICT (project_id, name) DO UPDATE SET
+          current_version = datasets.current_version + 1,
+          description = EXCLUDED.description,
+          producer_type = EXCLUDED.producer_type,
+          producer_name = EXCLUDED.producer_name,
+          source_system = EXCLUDED.source_system,
+          spatial_support = EXCLUDED.spatial_support,
+          status = 'active',
+          updated_at = now()
+        RETURNING id, project_id, name, description, producer_type, producer_name,
+                  source_system, spatial_support, status, current_version, created_at, updated_at
+      `, [
+        projectId,
+        config.name,
+        `Explicitly saved ${input.section} CSV imports from GeoEye Analytics.`,
+        config.producerType,
+        config.producerName,
+        config.spatialSupport,
+        createdBy,
+      ])
+      const datasetRow = datasetResult.rows[0]
+      if (datasetRow === undefined) throw new Error('PostgreSQL did not return the imported dataset')
+
+      const versionResult = await client.query<{ id: string }>(`
+        INSERT INTO dataset_versions (
+          dataset_id, version, record_count, schema_json, source_object_key, created_by
+        ) VALUES ($1, $2, $3, $4::jsonb, NULL, $5)
+        RETURNING id
+      `, [
+        datasetRow.id,
+        datasetRow.current_version,
+        input.rows.length,
+        JSON.stringify({ columns: input.columns, fileName: input.fileName, section: input.section }),
+        createdBy,
+      ])
+      const datasetVersionId = versionResult.rows[0]?.id
+      if (datasetVersionId === undefined) throw new Error('PostgreSQL did not return the imported dataset version')
+
+      const holeIndex = importHeaderIndex(input.columns, ['holeid', 'borehole', 'hole', 'drillhole', 'drillholeid'])
+      const fromIndex = importHeaderIndex(input.columns, ['from', 'fromm', 'depthfrom', 'depthfromm'])
+      const toIndex = importHeaderIndex(input.columns, ['to', 'tom', 'depthto', 'depthtom'])
+      const locationColumns = new Set([holeIndex, fromIndex, toIndex].filter((index) => index >= 0))
+      const holeRows = await client.query<{ id: string; name: string }>(`
+        SELECT id, name FROM drill_holes WHERE project_id = $1
+      `, [projectId])
+      const holesByName = new Map(holeRows.rows.map((hole) => [normalizedImportHeader(hole.name), hole.id]))
+      const unmatchedHoles = new Set<string>()
+      const usedVariableKeys = new Set<string>()
+      const variables: Array<{ columnIndex: number; dataType: 'numeric' | 'text'; id: string }> = []
+
+      for (let columnIndex = 0; columnIndex < input.columns.length; columnIndex += 1) {
+        if (locationColumns.has(columnIndex)) continue
+        const populated = input.rows.map((row) => (row[columnIndex] ?? '').trim()).filter((value) => value.length > 0)
+        if (populated.length === 0) continue
+        const dataType = populated.every((value) => Number.isFinite(Number(value))) ? 'numeric' as const : 'text' as const
+        const base = `${input.section}.${importVariableSlug(input.columns[columnIndex] ?? '', columnIndex)}`
+        let variableKey = base
+        let suffix = 2
+        while (usedVariableKeys.has(variableKey)) {
+          variableKey = `${base}_${suffix}`
+          suffix += 1
+        }
+        usedVariableKeys.add(variableKey)
+        const variableResult = await client.query<{ id: string }>(`
+          INSERT INTO variable_definitions (
+            key, display_name, description, data_type, canonical_unit,
+            origin, spatial_support, compatible_analyses, metadata_json
+          ) VALUES ($1, $2, $3, $4, NULL, 'primary', $5, '{}', $6::jsonb)
+          ON CONFLICT (key) DO UPDATE SET
+            display_name = EXCLUDED.display_name,
+            description = EXCLUDED.description,
+            data_type = EXCLUDED.data_type,
+            spatial_support = EXCLUDED.spatial_support,
+            metadata_json = EXCLUDED.metadata_json
+          RETURNING id
+        `, [
+          variableKey,
+          input.columns[columnIndex],
+          `${config.name} column imported from ${input.fileName}.`,
+          dataType,
+          config.spatialSupport,
+          JSON.stringify({ importSection: input.section, sourceColumn: input.columns[columnIndex] }),
+        ])
+        const variableId = variableResult.rows[0]?.id
+        if (variableId === undefined) throw new Error(`PostgreSQL did not return variable ${variableKey}`)
+        await client.query(`
+          INSERT INTO dataset_variables (dataset_id, variable_id, source_name, source_unit)
+          VALUES ($1, $2, $3, NULL)
+          ON CONFLICT (dataset_id, variable_id) DO UPDATE SET source_name = EXCLUDED.source_name
+        `, [datasetRow.id, variableId, input.columns[columnIndex]])
+        variables.push({ columnIndex, dataType, id: variableId })
+      }
+
+      const observations: Array<Record<string, unknown>> = []
+      input.rows.forEach((row, rowIndex) => {
+        const rawHoleName = holeIndex < 0 ? '' : (row[holeIndex] ?? '').trim()
+        const holeId = rawHoleName.length === 0 ? null : holesByName.get(normalizedImportHeader(rawHoleName)) ?? null
+        if (rawHoleName.length > 0 && holeId === null) unmatchedHoles.add(rawHoleName)
+        const rawFrom = fromIndex < 0 ? null : finiteNumber(row[fromIndex])
+        const depthFrom = rawFrom !== null && rawFrom >= 0 ? rawFrom : null
+        const rawTo = toIndex < 0 ? null : finiteNumber(row[toIndex])
+        const depthTo = rawTo !== null && rawTo >= 0 && (depthFrom === null || rawTo >= depthFrom) ? rawTo : null
+        variables.forEach((variable) => {
+          const rawValue = (row[variable.columnIndex] ?? '').trim()
+          if (rawValue.length === 0) return
+          observations.push({
+            boolean_value: null,
+            category_value: null,
+            datetime_value: null,
+            depth_from: depthFrom,
+            depth_to: depthTo,
+            hole_id: holeId,
+            numeric_value: variable.dataType === 'numeric' ? Number(rawValue) : null,
+            source_id: `${input.fileName}:${rowIndex + 2}`,
+            text_value: variable.dataType === 'text' ? rawValue : null,
+            variable_id: variable.id,
+          })
+        })
+      })
+
+      await client.query('DELETE FROM observation_values WHERE dataset_id = $1', [datasetRow.id])
+      if (observations.length > 0) {
+        await client.query(`
+          INSERT INTO observation_values (
+            project_id, dataset_id, dataset_version_id, source_type, source_id,
+            hole_id, depth_from, depth_to, variable_id, numeric_value, text_value,
+            category_value, boolean_value, datetime_value, unit, quality, observed_at
+          )
+          SELECT $1, $2, $3, $4, record.source_id, record.hole_id, record.depth_from,
+                 record.depth_to, record.variable_id, record.numeric_value, record.text_value,
+                 record.category_value, record.boolean_value, record.datetime_value,
+                 NULL, 'raw', NULL
+          FROM jsonb_to_recordset($5::jsonb) AS record(
+            source_id text, hole_id uuid, depth_from numeric, depth_to numeric,
+            variable_id uuid, numeric_value double precision, text_value text,
+            category_value text, boolean_value boolean, datetime_value timestamptz
+          )
+        `, [
+          projectId,
+          datasetRow.id,
+          datasetVersionId,
+          `analytics.csv.${input.section}`,
+          JSON.stringify(observations),
+        ])
+      }
+
+      return {
+        dataset: {
+          createdAt: iso(datasetRow.created_at),
+          currentVersion: datasetRow.current_version,
+          description: datasetRow.description,
+          id: datasetRow.id,
+          name: datasetRow.name,
+          producerName: datasetRow.producer_name,
+          producerType: datasetRow.producer_type,
+          projectId: datasetRow.project_id,
+          sourceSystem: datasetRow.source_system,
+          spatialSupport: datasetRow.spatial_support,
+          status: datasetRow.status,
+          updatedAt: iso(datasetRow.updated_at),
+        },
+        importedRows: input.rows.length,
+        observationCount: observations.length,
+        unmatchedHoles: [...unmatchedHoles].sort((left, right) => left.localeCompare(right)),
+        version: datasetRow.current_version,
+      }
+    })
   }
 
   async createAnalysisRun(
@@ -767,6 +1025,72 @@ export class PostgresDataPoolStore implements DataPoolStore {
     }))
   }
 
+  /**
+   * Reads the Field-owned source rows for the review workspace. This does not
+   * project, accept, or mutate them; it only normalizes the established
+   * Alpha/Beta field aliases into a stable API shape.
+   */
+  async listFieldLoggingStructures(projectId: string): Promise<FieldLoggingStructure[]> {
+    await this.#requireProject(this.#pool, projectId)
+    if (!await this.#tableReadable('logging_structures')) return []
+    const dictionaryReadable = await this.#tableReadable('dictionary_items')
+    const result = await this.#pool.query<{
+      alpha_beta: unknown
+      depth_from: number | string | null
+      depth_to: number | string | null
+      hole_id: string | null
+      id: string
+      orientation_status: string | null
+      project_id: string
+      review_status: string
+      structure_type: string | null
+      template_id: string | null
+    }>(`
+      SELECT structure.id::text AS id, structure.project_id::text AS project_id,
+             structure.hole_id::text AS hole_id, structure.template_id::text AS template_id,
+             structure.depth_from, structure.depth_to, structure.selections_json AS alpha_beta,
+             structure.selections_json ->> '_orientation_status' AS orientation_status,
+             COALESCE(
+               ${dictionaryReadable ? "NULLIF(btrim(dictionary.name), ''), NULLIF(btrim(dictionary.code), '')," : ''}
+               NULLIF(btrim(structure.structure_type), ''),
+               NULLIF(btrim(structure.selections_json ->> 'discontinuity_type'), '')
+             ) AS structure_type,
+             structure.review_status
+      FROM logging_structures AS structure
+      ${dictionaryReadable
+        ? `LEFT JOIN dictionary_items AS dictionary
+             ON dictionary.id::text = COALESCE(
+               NULLIF(btrim(structure.structure_type), ''),
+               NULLIF(btrim(structure.selections_json ->> 'discontinuity_type'), '')
+             )`
+        : ''}
+      WHERE structure.project_id = $1
+      ORDER BY structure.hole_id NULLS LAST, structure.depth_from NULLS LAST, structure.id
+    `, [projectId])
+
+    return result.rows.map((row) => {
+      const selections = objectValue(row.alpha_beta)
+      const depthFrom = finiteNumber(row.depth_from)
+        ?? firstFinite(selections, ['structure_depth_m', 'depth_m'])
+      const depthTo = finiteNumber(row.depth_to)
+      return {
+        id: row.id,
+        projectId: row.project_id,
+        holeId: row.hole_id,
+        templateId: row.template_id,
+        depthFrom: depthFrom !== null && depthFrom >= 0 ? depthFrom : null,
+        depthTo: depthTo !== null && depthTo >= 0 ? depthTo : null,
+        alpha: firstFinite(selections, ['alpha_to_core_axis_deg', 'alpha']),
+        beta: firstFinite(selections, ['beta_reference_deg', 'beta']),
+        structureType: row.structure_type,
+        orientationStatus: row.orientation_status,
+        reviewStatus: row.review_status === 'accepted' || row.review_status === 'flagged'
+          ? row.review_status
+          : 'draft',
+      }
+    })
+  }
+
   /** Active Field templates and the holes where each template contains logging data. */
   async listFieldLogging(projectId: string): Promise<FieldLoggingOverview> {
     await this.#requireProject(this.#pool, projectId)
@@ -801,11 +1125,14 @@ export class PostgresDataPoolStore implements DataPoolStore {
     const templateResult = await this.#pool.query<{
       id: string
       name: string
+      template_json: unknown
+      updated_at: Date | string
       version: number | string
     }>(`
       SELECT template.id::text AS id,
              COALESCE(NULLIF(btrim(template.name), ''), template.id::text) AS name,
-             COALESCE((to_jsonb(template) ->> 'version')::integer, 1) AS version
+             COALESCE((to_jsonb(template) ->> 'version')::integer, 1) AS version,
+             template.template_json, template.updated_at
       FROM logging_templates AS template
       WHERE COALESCE((to_jsonb(template) ->> 'is_active')::boolean, true)
         AND (template.project_id = $1 ${assignedTemplate})
@@ -935,7 +1262,177 @@ export class PostgresDataPoolStore implements DataPoolStore {
       left.holeName.localeCompare(right.holeName)
       || left.templateName.localeCompare(right.templateName),
     )
-    return { projectId, templates, submissions }
+
+    const datasets: FieldLoggingDataset[] = []
+    if (coreRowsPresent && intervalsPresent) {
+      type Column = FieldLoggingDataset['columns'][number]
+      type Cell = FieldLoggingDataset['records'][number]['values'][string]
+      interface IntervalRow {
+        depth_from: number | string | null
+        depth_to: number | string | null
+        hole_id: string
+        id: string
+        row_id: string
+        selections_json: unknown
+        template_id: string
+      }
+      const fieldDefinitions = new Map<string, Map<string, Column>>()
+      for (const templateRow of templateResult.rows) {
+        const definitions = new Map<string, Column>()
+        const classes = objectValue(templateRow.template_json).classes
+        if (Array.isArray(classes)) {
+          for (const rawClass of classes) {
+            const fields = objectValue(rawClass).fields
+            if (!Array.isArray(fields)) continue
+            for (const rawField of fields) {
+              const field = objectValue(rawField)
+              const key = typeof field.id === 'string' ? field.id.trim() : ''
+              const label = typeof field.label === 'string' ? field.label.trim() : ''
+              if (key === '' || label === '') continue
+              const type = typeof field.type === 'string' ? field.type.toLocaleLowerCase() : ''
+              definitions.set(key, {
+                dataType: type === 'number' || type === 'numeric'
+                  ? 'numeric'
+                  : type === 'dictionary' || type === 'category' || type === 'select'
+                    ? 'category'
+                    : type === 'boolean'
+                      ? 'boolean'
+                      : type === 'date' || type === 'datetime'
+                        ? 'datetime'
+                        : 'text',
+                key,
+                label,
+                unit: typeof field.unit === 'string' && field.unit.trim() !== '' ? field.unit.trim() : null,
+              })
+            }
+          }
+        }
+        fieldDefinitions.set(templateRow.id, definitions)
+      }
+
+      const dictionaryReadable = await this.#tableReadable('dictionary_items')
+      const dictionaryById = new Map<string, string>()
+      if (dictionaryReadable) {
+        const dictionaryResult = await this.#pool.query<{ id: string; label: string }>(`
+          SELECT item.id::text AS id,
+                 COALESCE(NULLIF(btrim(item.name), ''), NULLIF(btrim(item.code), ''), item.id::text) AS label
+          FROM dictionary_items AS item
+        `)
+        for (const item of dictionaryResult.rows) dictionaryById.set(item.id, item.label)
+      }
+
+      const intervalResult = await this.#pool.query<IntervalRow>(`
+        SELECT interval.id::text AS id, interval.row_id::text AS row_id,
+               interval.template_id::text AS template_id, row.hole_id::text AS hole_id,
+               COALESCE(interval.depth_from, row.depth_from) AS depth_from,
+               COALESCE(interval.depth_to, row.depth_to, interval.depth_from, row.depth_from) AS depth_to,
+               interval.selections_json
+        FROM logging_intervals AS interval
+        JOIN core_rows AS row ON row.id = interval.row_id AND row.project_id = interval.project_id
+        WHERE interval.project_id = $1 AND interval.template_id IS NOT NULL
+        ORDER BY interval.updated_at, interval.id
+      `, [projectId])
+
+      const groupedByTemplate = new Map<string, Map<string, FieldLoggingDataset['records'][number]>>()
+      const columnsByTemplate = new Map<string, Map<string, Column>>()
+      for (const row of intervalResult.rows) {
+        const definitions = fieldDefinitions.get(row.template_id) ?? new Map<string, Column>()
+        const values = objectValue(row.selections_json)
+        const depthFrom = finiteNumber(row.depth_from)
+        const depthTo = finiteNumber(row.depth_to)
+        const groupId = `${row.template_id}:${row.hole_id}:${row.row_id}:${depthFrom ?? 'none'}:${depthTo ?? 'none'}`
+        const groups = groupedByTemplate.get(row.template_id) ?? new Map()
+        const record = groups.get(groupId) ?? {
+          depthFrom: depthFrom !== null && depthFrom >= 0 ? depthFrom : null,
+          depthTo: depthTo !== null && depthTo >= 0 ? depthTo : null,
+          holeId: row.hole_id,
+          id: groupId,
+          values: {},
+        }
+        const observedColumns = columnsByTemplate.get(row.template_id) ?? new Map<string, Column>()
+        for (const [key, rawValue] of Object.entries(values)) {
+          if (key.startsWith('_') || rawValue === undefined || (typeof rawValue === 'object' && rawValue !== null)) continue
+          const definition = definitions.get(key)
+          // Generated calculation internals are intentionally not exposed as
+          // selectable user columns. Only fields declared by the template are
+          // stable enough for an exact saved mapping.
+          if (definition === undefined) continue
+          const value: Cell = typeof rawValue === 'string' ? dictionaryById.get(rawValue) ?? rawValue : rawValue as Cell
+          record.values[key] = value
+          observedColumns.set(key, definition)
+        }
+        groups.set(groupId, record)
+        groupedByTemplate.set(row.template_id, groups)
+        columnsByTemplate.set(row.template_id, observedColumns)
+      }
+
+      if (structuresPresent) {
+        const structureResult = await this.#pool.query<{
+          depth_from: number | string | null
+          depth_to: number | string | null
+          hole_id: string
+          id: string
+          selections_json: unknown
+          template_id: string
+        }>(`
+          SELECT structure.id::text AS id, structure.template_id::text AS template_id,
+                 structure.hole_id::text AS hole_id, structure.depth_from, structure.depth_to,
+                 structure.selections_json
+          FROM logging_structures AS structure
+          WHERE structure.project_id = $1
+            AND structure.template_id IS NOT NULL AND structure.hole_id IS NOT NULL
+          ORDER BY structure.updated_at, structure.id
+        `, [projectId])
+        for (const row of structureResult.rows) {
+          const definitions = fieldDefinitions.get(row.template_id) ?? new Map<string, Column>()
+          const values = objectValue(row.selections_json)
+          const depthFrom = finiteNumber(row.depth_from) ?? firstFinite(values, ['structure_depth_m', 'depth_m'])
+          const depthTo = finiteNumber(row.depth_to) ?? depthFrom
+          const groups = groupedByTemplate.get(row.template_id) ?? new Map()
+          const record: FieldLoggingDataset['records'][number] = {
+            depthFrom: depthFrom !== null && depthFrom >= 0 ? depthFrom : null,
+            depthTo: depthTo !== null && depthTo >= 0 ? depthTo : null,
+            holeId: row.hole_id,
+            id: `${row.template_id}:structure:${row.id}`,
+            values: {},
+          }
+          const observedColumns = columnsByTemplate.get(row.template_id) ?? new Map<string, Column>()
+          for (const [key, rawValue] of Object.entries(values)) {
+            if (key.startsWith('_') || rawValue === undefined || (typeof rawValue === 'object' && rawValue !== null)) continue
+            const definition = definitions.get(key)
+            if (definition === undefined) continue
+            const value: Cell = typeof rawValue === 'string' ? dictionaryById.get(rawValue) ?? rawValue : rawValue as Cell
+            record.values[key] = value
+            observedColumns.set(key, definition)
+          }
+          groups.set(record.id, record)
+          groupedByTemplate.set(row.template_id, groups)
+          columnsByTemplate.set(row.template_id, observedColumns)
+        }
+      }
+
+      for (const templateRow of templateResult.rows) {
+        const records = [...(groupedByTemplate.get(templateRow.id)?.values() ?? [])]
+          .filter((record) => Object.keys(record.values).length > 0)
+          .sort((left, right) => (left.holeId ?? '').localeCompare(right.holeId ?? '')
+            || (left.depthFrom ?? Number.POSITIVE_INFINITY) - (right.depthFrom ?? Number.POSITIVE_INFINITY)
+            || left.id.localeCompare(right.id))
+        const columns = [...(columnsByTemplate.get(templateRow.id)?.values() ?? [])]
+          .sort((left, right) => left.label.localeCompare(right.label) || left.key.localeCompare(right.key))
+        if (records.length === 0 || columns.length === 0) continue
+        const category = objectValue(templateRow.template_json).category
+        datasets.push({
+          category: typeof category === 'string' && category.trim() !== '' ? category.trim() : null,
+          columns,
+          id: templateRow.id,
+          name: templateRow.name,
+          records,
+          updatedAt: iso(templateRow.updated_at),
+          version: Number(templateRow.version),
+        })
+      }
+    }
+    return { datasets, projectId, templates, submissions }
   }
 
   async saveCollar(projectId: string, holeId: string, input: CollarInput): Promise<Collar> {

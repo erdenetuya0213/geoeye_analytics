@@ -72,7 +72,7 @@ export function LiveDrillholesPage({ client, project, scope }: LiveDrillholesPag
           })
           collars += 1
         } catch {
-          problems.push(`${collar.holeName}: the Data Pool rejected the collar`)
+          problems.push(`${collar.holeName}: the Database rejected the collar`)
         }
       }
       for (const survey of plan.surveys) {
@@ -83,7 +83,7 @@ export function LiveDrillholesPage({ client, project, scope }: LiveDrillholesPag
           surveys += 1
           stationCount += survey.stations.length
         } catch {
-          problems.push(`${survey.holeName}: the Data Pool rejected the survey`)
+          problems.push(`${survey.holeName}: the Database rejected the survey`)
         }
       }
       return { collars, surveys, stations: stationCount, unknownHoles: plan.unknownHoles, problems }
@@ -122,7 +122,7 @@ export function LiveDrillholesPage({ client, project, scope }: LiveDrillholesPag
           className="button button-secondary"
           disabled={!project.canWrite || !epsgValid || publish.isPending || holes.length === 0}
           onClick={() => setShowImport(true)}
-          title={!project.canWrite ? 'Your role on this project is read-only' : epsgValid ? 'Import collar and survey CSV files into the Data Pool' : 'Enter the EPSG code of the collar coordinates first'}
+          title={!project.canWrite ? 'Your role on this project is read-only' : epsgValid ? 'Import collar and survey CSV files into the Database' : 'Enter the EPSG code of the collar coordinates first'}
           type="button"
         >
           <Upload size={16} /> {publish.isPending ? 'Publishing…' : 'Import CSV'}
@@ -130,11 +130,11 @@ export function LiveDrillholesPage({ client, project, scope }: LiveDrillholesPag
       </div>
 
       {publish.isError ? (
-        <div className="drillhole-publish-report has-problems" role="alert">The import could not be published to the Data Pool. No summary is available; reload to see what was saved.</div>
+        <div className="drillhole-publish-report has-problems" role="alert">The import could not be published to the Database. No summary is available; reload to see what was saved.</div>
       ) : null}
       {report !== null ? (
         <div className={`drillhole-publish-report ${reportHasProblems ? 'has-problems' : ''}`} role="status">
-          <strong>Published to the Data Pool: {report.collars} collars, {report.surveys} surveys ({report.stations} stations).</strong>
+          <strong>Published to the Database: {report.collars} collars, {report.surveys} surveys ({report.stations} stations).</strong>
           {report.unknownHoles.length > 0 ? (
             <p>Not in this project, so not imported: {report.unknownHoles.join(', ')}. Drillholes are created in GeoEye Field.</p>
           ) : null}
@@ -148,7 +148,7 @@ export function LiveDrillholesPage({ client, project, scope }: LiveDrillholesPag
             <div className="borehole-data-row borehole-data-header">
               {columns.map((column) => <span key={column}>{column}</span>)}
             </div>
-            {holesQuery.isError ? <p className="pool-live-note is-error" role="alert"><CircleAlert size={14} /> Drillholes could not be loaded from the Data Pool.</p> : null}
+            {holesQuery.isError ? <p className="pool-live-note is-error" role="alert"><CircleAlert size={14} /> Drillholes could not be loaded from the Database.</p> : null}
             {holesQuery.isPending ? <p className="pool-live-note">Loading drillholes…</p> : null}
             {!holesQuery.isPending && !holesQuery.isError && holes.length === 0 ? (
               <p className="pool-live-note">{project.name} has no drillholes yet. Drillholes appear here once GeoEye Field creates them.</p>
@@ -190,7 +190,7 @@ export function LiveDrillholesPage({ client, project, scope }: LiveDrillholesPag
                 <div>
                   <span>{selected.collar === null ? 'Collar' : `Collar · ${selected.collar.crs.authority}:${selected.collar.crs.code} · ${selected.collar.source}`}</span>
                   <strong>{selected.collar === null
-                    ? 'No collar in the Data Pool yet'
+                    ? 'No collar in the Database yet'
                     : `E ${coordinate(selected.collar.easting)} · N ${coordinate(selected.collar.northing)} · RL ${coordinate(selected.collar.elevation)}`}</strong>
                 </div>
               </div>

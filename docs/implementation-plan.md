@@ -47,7 +47,8 @@
 - [x] Preserve missing values and pairwise-complete populations instead of coercing nulls to zero.
 - [x] Expose dataset, drillhole, lithology, comparison-variable, and swath-axis controls.
 - [x] Resolve the selected workspace to a Data Pool project UUID.
-- [ ] Replace the labelled demo adapter in the analysis workspaces with Data Pool observations (Arrow/Parquet snapshot loading).
+- [x] Replace the labelled demo adapter in the analysis workspaces with normalized Data Pool observation loading and project-scoped query caches.
+- [ ] Add Arrow/Parquet snapshot transport for production-scale project datasets.
 - [ ] Move production-scale calculations behind the execution backend and Python analytics engine.
 
 ## Definition of the first architecture validation

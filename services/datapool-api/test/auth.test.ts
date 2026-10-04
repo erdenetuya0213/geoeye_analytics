@@ -88,6 +88,7 @@ class AuthStore implements DataPoolStore {
   }
   async listDrillholes(): Promise<DrillholeSummary[]> { return [] }
   async listFieldLogging(projectId: string) { return { projectId, templates: [], submissions: [] } }
+  async listFieldLoggingStructures() { return [] }
   async saveCollar(): Promise<Collar> {
     this.collarSaves += 1
     return {
@@ -269,6 +270,7 @@ describe('sign-in and tenant isolation', () => {
 
     expect((await call(endpoint, token, `/v1/projects/${ownProject}/drillholes`)).status).toBe(200)
     expect((await call(endpoint, token, `/v1/projects/${foreignProject}/drillholes`)).status).toBe(404)
+    expect((await call(endpoint, token, `/v1/projects/${foreignProject}/logging/structures`)).status).toBe(404)
     expect((await call(endpoint, token, `/v1/datasets?projectId=${foreignProject}`)).status).toBe(404)
     expect((await call(endpoint, token, '/v1/observations/query', {
       method: 'POST',

@@ -33,6 +33,8 @@ export const observationValueSchema = z
     datasetVersionId: z.string().uuid().nullable(),
     sourceType: z.string().min(1),
     sourceId: z.string().min(1),
+    /** Field logging template that owns the source row, when the source provides one. */
+    sourceTemplateId: z.string().uuid().nullable().optional(),
     holeId: z.string().uuid().nullable(),
     depthFrom: z.number().nonnegative().nullable(),
     depthTo: z.number().nonnegative().nullable(),
@@ -77,4 +79,3 @@ export const observationQuerySchema = z.object({
 export type ObservationQuality = z.infer<typeof observationQualitySchema>
 export type ObservationValue = z.infer<typeof observationValueSchema>
 export type ObservationQuery = z.infer<typeof observationQuerySchema>
-

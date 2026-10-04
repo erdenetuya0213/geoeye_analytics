@@ -22,6 +22,16 @@ export const CORE_VARIABLES = [
     compatibleAnalyses: ['structure.alpha_beta_conversion', 'structure.stereonet'],
   },
   {
+    key: 'structure.type',
+    displayName: 'Structure type',
+    description: 'Dictionary-backed classification assigned to a structural observation.',
+    dataType: 'category',
+    canonicalUnit: null,
+    origin: 'primary',
+    spatialSupport: 'orientation',
+    compatibleAnalyses: ['structure.stereonet', 'structure.summary', 'structure.domains'],
+  },
+  {
     key: 'structure.apparent_angle',
     displayName: 'Apparent angle',
     description: 'Feature angle measured on the row image by GeoEye Field.',

@@ -62,6 +62,19 @@ describe('RMR76 canonical input resolver', () => {
     expect(resolved.inputs['geotech.ucs']).toMatchObject({ availability: 'direct', value: 125 })
   })
 
+  it('accepts mapped numeric component ratings in their documented ranges', () => {
+    const interval = completeInterval({
+      candidates: completeInterval().candidates.map((item) => {
+        if (item.canonicalKey === 'geotech.joint_condition') return { ...item, value: 12 }
+        if (item.canonicalKey === 'geotech.groundwater') return { ...item, value: 4 }
+        if (item.canonicalKey === 'structure.orientation_rating') return { ...item, value: -7 }
+        return item
+      }),
+    })
+    const result = calculateRmr76Intervals([interval], sourceIds, 'run-ratings', '2026-10-01T00:00:00.000Z').intervals[0]
+    expect(result?.calculation).toMatchObject({ orientationAdjustment: -7, total: 66 })
+  })
+
   it('reports a canonical variable as missing when no selected source provides it', () => {
     const selected = new Set(['direct', 'derived', 'fallback'])
     const resolved = new InputResolver().resolve(completeInterval(), selected)

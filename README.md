@@ -21,7 +21,7 @@ The unified-database milestone connects that foundation to the real GeoEye Field
 - a projection that reconciles accepted Field `logging_structures` and core-row RQD into `observation_values`, with change detection, per-project bindings, and issue reporting, while leaving Field tables read-only;
 - shared project and drillhole discovery, plus collar and downhole-survey editing through the Data Pool API;
 - a read-only database preflight, an API smoke test, and `staging:*` commands for the Supabase staging project;
-- live project, Data Pool, and Drillholes screens in the Analytics UI when it is connected to a Data Pool.
+- live project, Data Pool, dataset, and analytical workspaces in the Analytics UI when it is connected to a Data Pool.
 
 To roll this out against staging, follow the [staging runbook](./docs/staging-runbook.md).
 For production, work through the [production to-do list](./docs/production-checklist.md): it covers the
@@ -70,8 +70,9 @@ The EDA workspace implements the architecture's first Explore registry: summary 
 CDF, normal probability plot, scatter, correlation matrix, and spatial swath. Apache ECharts 6 renders
 2D charts through the shared Canvas-first `GeoEyeChart`, the global GeoEye SelectionContext links source
 observations across views, and TanStack Query owns snapshot loading/cache state.
-The included assay snapshot is a deterministic demo fixture and is labelled as such in the UI; live
-project observations will replace it once the active workspace exposes its Data Pool project UUID.
+The included assay snapshot is a deterministic fixture used only by the opt-in demo workspace. A
+signed-in workspace loads normalized observations and dataset metadata for the active Data Pool
+project; saved demo selections are not reused as project-data selections.
 
 The default suite tests contracts, projection behavior, the client, and HTTP routes without external
 services. To exercise the full migration, projection, query, and publish workflow against PostgreSQL 16, run:

@@ -1,9 +1,10 @@
-import { Check, CircleAlert, Filter, MapPin, Plus, Route, Search, ShieldCheck, Upload } from 'lucide-react'
+import { Check, CircleAlert, Filter, MapPin, Plus, Route, Save, Search, ShieldCheck, Upload } from 'lucide-react'
 import { useDeferredValue, useState } from 'react'
 import { DrillholeImportDialog } from '../components/DrillholeImportDialog.js'
 import type { DrillholeImportResult, ImportedCollarRecord, ImportedSurveyRecord } from '../components/DrillholeImportDialog.js'
 import { drillholes } from '../data/demo.js'
 import { readDrillholeImport, saveDrillholeImport } from '../data/drillholeImportStore.js'
+import { effectiveDrillholes, effectiveSurveysByHoleId } from '../data/localProjectDb.js'
 import { useDataPoolWorkspace } from '../state/DataPoolWorkspaceContext.js'
 import { usePersistentState } from '../state/persistentState.js'
 import { buildDrillholeTrace, formatTraceDepth } from '../visualization/drillholeTrace.js'
@@ -36,7 +37,7 @@ function coordinate(value: number) {
 }
 
 function normalizedHoleId(value: string) {
-  return value.trim().toLocaleLowerCase()
+  return value.trim().toLocaleLowerCase().replace(/[^a-z0-9]/g, '')
 }
 
 function sameHole(left: string, right: string) {
@@ -71,18 +72,44 @@ function metric(value: number | undefined, suffix: string) {
 export function DrillholesPage() {
   const workspace = useDataPoolWorkspace()
   const seedDemo = !workspace.live
-  return <CsvDrillholesPage key={seedDemo ? 'demo' : 'csv'} seedDemo={seedDemo} />
+  if (workspace.live && (workspace.projectsLoading || workspace.localLoading)) return <div className="page drillholes-page"><div className="eda-state panel">Opening the local drillhole workspace…</div></div>
+  if (workspace.live && workspace.project === null) return <div className="page drillholes-page"><div className="eda-state panel">No project is available for this account.</div></div>
+  const localVersion = workspace.live ? workspace.project?.id ?? 'none' : 'demo'
+  return <CsvDrillholesPage key={localVersion} seedDemo={seedDemo} />
 }
 
 function CsvDrillholesPage({ seedDemo }: { seedDemo: boolean }) {
+  const workspace = useDataPoolWorkspace()
   const [query, setQuery] = usePersistentState('drillholes.query', '')
   const [selectedId, setSelectedId] = usePersistentState<string>('drillholes.selectedId', drillholes[0].id)
   const [view, setView] = usePersistentState<DrillholeView>('drillholes.view', 'collar')
-  const [savedImport] = useState(readDrillholeImport)
+  const [savedImport] = useState(() => {
+    if (seedDemo) return readDrillholeImport()
+    if (workspace.localDrillholeDraft !== null) return workspace.localDrillholeDraft
+    const holes = effectiveDrillholes(workspace.localSnapshot, null)
+    const surveys = effectiveSurveysByHoleId(workspace.localSnapshot, null)
+    return {
+      collar: holes.flatMap((hole): ImportedCollarRecord[] => hole.collar === null ? [] : [{
+        crs: `${hole.collar.crs.authority}:${hole.collar.crs.code}`,
+        easting: hole.collar.easting,
+        elevation: hole.collar.elevation,
+        holeId: hole.name,
+        northing: hole.collar.northing,
+      }]),
+      survey: holes.flatMap((hole) => (surveys[hole.id] ?? []).map((station): ImportedSurveyRecord => ({
+        azimuth: station.azimuth,
+        depth: station.measuredDepth,
+        dip: station.dip,
+        holeId: hole.name,
+      }))),
+    }
+  })
   const [collars, setCollars] = useState<ImportedCollarRecord[]>(() => savedImport?.collar ?? (seedDemo ? initialCollars : []))
   const [surveys, setSurveys] = useState<ImportedSurveyRecord[]>(() => savedImport?.survey ?? (seedDemo ? initialSurveys : []))
   const [showImport, setShowImport] = useState(false)
   const [importSummary, setImportSummary] = useState('')
+  const [publishing, setPublishing] = useState(false)
+  const [publishSummary, setPublishSummary] = useState('')
   const deferredQuery = useDeferredValue(query)
 
   const surveyGroups = Array.from(new Set(surveys.map((record) => normalizedHoleId(record.holeId)))).map((normalizedId) => {
@@ -128,11 +155,25 @@ function CsvDrillholesPage({ seedDemo }: { seedDemo: boolean }) {
   const applyImport = (result: DrillholeImportResult) => {
     setCollars(result.collar)
     setSurveys(result.survey)
-    saveDrillholeImport(result)
+    if (seedDemo) saveDrillholeImport(result)
+    else void workspace.saveDrillholesLocally(result)
     setSelectedId(result.collar[0]?.holeId ?? result.survey[0]?.holeId ?? selectedId)
     setView('collar')
     setImportSummary(`${result.collar.length} collar · ${result.survey.length} survey rows imported`)
     setShowImport(false)
+  }
+
+  const publish = async () => {
+    setPublishing(true)
+    try {
+      const report = await workspace.publishLocalDrillholes()
+      const details = [`${report.collars} collars`, `${report.surveys} surveys (${report.stations} stations)`]
+      if (report.unknownHoles.length > 0) details.push(`${report.unknownHoles.length} unknown holes`)
+      if (report.problems.length > 0) details.push(...report.problems)
+      setPublishSummary(details.join(' · '))
+    } finally {
+      setPublishing(false)
+    }
   }
 
   return (
@@ -156,8 +197,21 @@ function CsvDrillholesPage({ seedDemo }: { seedDemo: boolean }) {
         <button className="filter-button" type="button">Validation: All</button>
         {importSummary === '' ? <span className="result-count">{supportRows.length} shown</span> : <span className="import-summary"><Check size={13} />{importSummary}</span>}
         <button className="button button-secondary" onClick={() => setShowImport(true)} type="button"><Upload size={16} /> Import CSV</button>
+        {!seedDemo ? (
+          <button
+            className="button button-primary"
+            disabled={publishing || !workspace.project?.canWrite || workspace.localDrillholeDraft?.dirty !== true}
+            onClick={() => void publish()}
+            title={!workspace.project?.canWrite ? 'Your role on this project is read-only' : workspace.localDrillholeDraft?.dirty === true ? 'Send the local collar and survey draft to the Database' : 'The local drillhole draft is already saved'}
+            type="button"
+          >
+            <Save size={16} /> {publishing ? 'Saving…' : 'Save to Database'}
+          </button>
+        ) : null}
         <button className="button button-primary" type="button"><Plus size={16} /> Add drillhole</button>
       </div>
+
+      {!seedDemo ? <p className="pool-live-note" role="status">{publishSummary || (workspace.localDrillholeDraft?.dirty === true ? 'Local changes are preserved on this computer and have not been sent to the Database.' : 'Showing the persistent local project copy.')}</p> : null}
 
       <div className="drillhole-layout">
         <section className="panel drillhole-table-panel">

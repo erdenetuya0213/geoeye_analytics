@@ -22,7 +22,7 @@ const dataRibbon = {
   id: 'data',
   label: 'Data',
   tools: [
-    { label: 'Data Pool', icon: DataPoolIcon, primary: true, section: 'data-pool' },
+    { label: 'Database', icon: DataPoolIcon, primary: true, section: 'data-pool' },
     { label: 'Drillholes', icon: DrillholeIcon, primary: true, section: 'drillholes' },
     { label: 'Logging', icon: FieldLoggingIcon, primary: true, section: 'field-logging' },
     { label: 'Lab', icon: AssayIcon, primary: true, section: 'laboratory' },
@@ -84,7 +84,7 @@ export function WorkspaceRibbon({ active, onNavigate, onOpenConnection }: Worksp
       </section>
       {group.id === 'data' ? (
         <div className="ribbon-workspace-action">
-          <button className="button button-secondary" onClick={onOpenConnection} title="Data Pool connection" type="button"><PlugZap size={14} /> Connection</button>
+          <button className="button button-secondary" onClick={onOpenConnection} title="Database connection" type="button"><PlugZap size={14} /> Connection</button>
         </div>
       ) : null}
     </nav>

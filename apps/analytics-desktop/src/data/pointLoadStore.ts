@@ -111,15 +111,15 @@ export const pointLoadDemoRecords: readonly PointLoadRecord[] = demoInputs.map((
   createPointLoadRecord(input, id, `${input.testedAt}T08:00:00.000Z`)
 ))
 
-export function readPointLoadRecords(storage: StorageLike): PointLoadRecord[] {
+export function readPointLoadRecords(storage: StorageLike, seedDemo = true): PointLoadRecord[] {
   try {
     const raw = storage.getItem(storageKey)
-    if (raw === null) return [...pointLoadDemoRecords]
+    if (raw === null) return seedDemo ? [...pointLoadDemoRecords] : []
     const parsed = JSON.parse(raw) as unknown
-    if (!Array.isArray(parsed)) return [...pointLoadDemoRecords]
+    if (!Array.isArray(parsed)) return seedDemo ? [...pointLoadDemoRecords] : []
     return parsed.map(parseRecord).filter((record): record is PointLoadRecord => record !== null)
   } catch {
-    return [...pointLoadDemoRecords]
+    return seedDemo ? [...pointLoadDemoRecords] : []
   }
 }
 

@@ -7,6 +7,7 @@ import {
   datasetSchema,
   drillholeSummarySchema,
   fieldLoggingOverviewSchema,
+  fieldLoggingStructureSchema,
   loginInputSchema,
   loginResultSchema,
   observationQuerySchema,
@@ -21,6 +22,8 @@ import {
   saveAnalysisResultPackageInputSchema,
   saveProjectionBindingsInputSchema,
   surveyStationSchema,
+  tabularImportInputSchema,
+  tabularImportResultSchema,
   variableDefinitionSchema,
   type AnalysisRun,
   type AnalysisResultPackageQuery,
@@ -28,7 +31,11 @@ import {
   type Collar,
   type DerivedValueInput,
   type DrillholeSummary,
+  type FieldLoggingColumn,
+  type FieldLoggingDataset,
   type FieldLoggingOverview,
+  type FieldLoggingRecord,
+  type FieldLoggingStructure,
   type FieldLoggingSubmission,
   type LoginResult,
   type ProjectSummary,
@@ -39,6 +46,8 @@ import {
   type SavedAnalysisResultPackage,
   type Session,
   type SurveyStation,
+  type TabularImportInput,
+  type TabularImportResult,
 } from '@geoeye/types'
 import { z } from 'zod'
 
@@ -46,7 +55,11 @@ export type {
   Collar,
   Dataset,
   DrillholeSummary,
+  FieldLoggingColumn,
+  FieldLoggingDataset,
   FieldLoggingOverview,
+  FieldLoggingRecord,
+  FieldLoggingStructure,
   FieldLoggingSubmission,
   LoginResult,
   OrganizationSummary,
@@ -58,6 +71,9 @@ export type {
   ProjectionRunResult,
   ProjectionStatus,
   SurveyStation,
+  TabularImportInput,
+  TabularImportResult,
+  TabularImportSection,
   VariableDefinition,
 } from '@geoeye/types'
 
@@ -136,6 +152,13 @@ export class DataPoolClient {
   async fieldLogging(projectId: string): Promise<FieldLoggingOverview> {
     return fieldLoggingOverviewSchema.parse(
       await this.#request(`/v1/projects/${encodeURIComponent(projectId)}/logging`),
+    )
+  }
+
+  /** Source Alpha/Beta rows, including drafts awaiting Structure Analysis. */
+  async fieldLoggingStructures(projectId: string): Promise<FieldLoggingStructure[]> {
+    return fieldLoggingStructureSchema.array().parse(
+      await this.#request(`/v1/projects/${encodeURIComponent(projectId)}/logging/structures`),
     )
   }
 
@@ -219,6 +242,16 @@ export class DataPoolClient {
     )
   }
 
+  /** Publishes an explicitly saved local CSV draft as the current database dataset version. */
+  async saveTabularImport(projectId: string, input: TabularImportInput): Promise<TabularImportResult> {
+    return tabularImportResultSchema.parse(
+      await this.#request(`/v1/projects/${encodeURIComponent(projectId)}/tabular-imports`, {
+        method: 'POST',
+        body: JSON.stringify(tabularImportInputSchema.parse(input)),
+      }),
+    )
+  }
+
   async createAnalysisRun(input: CreateAnalysisRunInput): Promise<AnalysisRun> {
     return analysisRunSchema.parse(
       await this.#request('/v1/analysis-runs', {
@@ -288,7 +321,7 @@ export class DataPoolClient {
       : await response.text()
 
     if (!response.ok) {
-      throw new DataPoolError(`Data Pool request failed with status ${response.status}`, response.status, payload)
+      throw new DataPoolError(`Database request failed with status ${response.status}`, response.status, payload)
     }
 
     return payload

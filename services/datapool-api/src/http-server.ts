@@ -26,6 +26,7 @@ import {
   projectionBindingsBodySchema,
   projectionRunBodySchema,
   surveysBodySchema,
+  tabularImportBodySchema,
   uuidPathParameterSchema,
 } from './schemas.js'
 import type { DataPoolStore } from './store.js'
@@ -337,6 +338,14 @@ export function createDataPoolServer(options: DataPoolServerOptions): Server {
         return
       }
 
+      const loggingStructuresMatch = /^\/v1\/projects\/([^/]+)\/logging\/structures$/.exec(url.pathname)
+      if (method === 'GET' && loggingStructuresMatch !== null) {
+        const projectId = uuidPathParameterSchema.parse(loggingStructuresMatch[1])
+        requireProject(principal, projectId, 'read')
+        sendJson(response, 200, await options.store.listFieldLoggingStructures(projectId))
+        return
+      }
+
       const collarMatch = /^\/v1\/projects\/([^/]+)\/drillholes\/([^/]+)\/collar$/.exec(url.pathname)
       if (method === 'PUT' && collarMatch !== null) {
         const projectId = uuidPathParameterSchema.parse(collarMatch[1])
@@ -402,6 +411,18 @@ export function createDataPoolServer(options: DataPoolServerOptions): Server {
         const input = observationQuerySchema.parse(await readJson(request))
         requireProject(principal, input.projectId, 'read')
         sendJson(response, 200, await options.store.queryObservations(input))
+        return
+      }
+
+      const tabularImportMatch = /^\/v1\/projects\/([^/]+)\/tabular-imports$/.exec(url.pathname)
+      if (method === 'POST' && tabularImportMatch !== null) {
+        const projectId = uuidPathParameterSchema.parse(tabularImportMatch[1])
+        requireProject(principal, projectId, 'write')
+        if (options.store.saveTabularImport === undefined) {
+          throw new ApiError(501, 'not_implemented', 'Tabular database imports are not configured')
+        }
+        const input = tabularImportBodySchema.parse(await readJson(request))
+        sendJson(response, 201, await options.store.saveTabularImport(projectId, input, actorId(principal)))
         return
       }
 

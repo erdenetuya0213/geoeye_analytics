@@ -18,6 +18,8 @@ import type {
   SaveAnalysisResultPackageInput,
   SavedAnalysisResultPackage,
   SurveyStation,
+  TabularImportInput,
+  TabularImportResult,
   VariableDefinition,
 } from '@geoeye/types'
 import type { AddressInfo } from 'node:net'
@@ -85,6 +87,7 @@ class FakeStore implements DataPoolStore {
     saveBindings: [] as ProjectionBindingInput[][],
     listBindings: [] as Array<string | null>,
     runProjection: [] as Array<{ projectId: string; force: boolean }>,
+    tabularImports: [] as Array<{ projectId: string; input: TabularImportInput; createdBy: string | null }>,
   }
 
   async listProjects(): Promise<ProjectSummary[]> {
@@ -124,6 +127,22 @@ class FakeStore implements DataPoolStore {
         updatedAt: '2026-10-03T00:00:00.000Z',
       }],
     }
+  }
+
+  async listFieldLoggingStructures(id: string) {
+    return [{
+      alpha: 38,
+      beta: 126,
+      depthFrom: 27.73,
+      depthTo: 27.73,
+      holeId,
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      orientationStatus: 'review_required',
+      projectId: id,
+      reviewStatus: 'draft' as const,
+      structureType: 'Joint',
+      templateId: datasetId,
+    }]
   }
 
   async saveCollar(id: string, hole: string, input: CollarInput): Promise<Collar> {
@@ -211,6 +230,30 @@ class FakeStore implements DataPoolStore {
   async queryObservations(query: ObservationQuery): Promise<ObservationValue[]> {
     this.calls.observations.push(query)
     return []
+  }
+
+  async saveTabularImport(id: string, input: TabularImportInput, createdBy: string | null): Promise<TabularImportResult> {
+    this.calls.tabularImports.push({ projectId: id, input, createdBy })
+    return {
+      dataset: {
+        id: datasetId,
+        projectId: id,
+        name: 'Laboratory CSV imports',
+        description: null,
+        producerType: 'laboratory',
+        producerName: 'Laboratory',
+        sourceSystem: 'geoeye.analytics.csv',
+        spatialSupport: 'interval',
+        status: 'active',
+        currentVersion: 2,
+        createdAt: '2026-10-04T00:00:00.000Z',
+        updatedAt: '2026-10-04T00:00:00.000Z',
+      },
+      importedRows: input.rows.length,
+      observationCount: 1,
+      unmatchedHoles: [],
+      version: 2,
+    }
   }
 
   async createAnalysisRun(input: CreateAnalysisRunInput, _createdBy: string | null): Promise<AnalysisRun> {
@@ -354,6 +397,26 @@ describe('Data Pool HTTP server', () => {
       variableKeys: ['structure.alpha'],
       acceptedOnly: true,
     }])
+  })
+
+  it('publishes a validated local CSV draft only through the explicit import route', async () => {
+    const store = new FakeStore()
+    const endpoint = await start(store)
+    const input: TabularImportInput = {
+      columns: ['Hole ID', 'From', 'Au ppm'],
+      fileName: 'assay.csv',
+      rows: [['UDD-103', '10', '1.2']],
+      section: 'laboratory',
+    }
+    const response = await fetch(`${endpoint}/v1/projects/${projectId}/tabular-imports`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    })
+
+    expect(response.status).toBe(201)
+    expect(store.calls.tabularImports).toEqual([{ projectId, input, createdBy: null }])
+    await expect(response.json()).resolves.toMatchObject({ importedRows: 1, observationCount: 1, version: 2 })
   })
 
   it('rejects malformed input before calling the store', async () => {
@@ -531,6 +594,16 @@ describe('Data Pool HTTP server', () => {
       templates: [{ name: 'Lithology' }],
       submissions: [{ holeName: 'UDD-103', intervalCount: 24 }],
     })
+
+    const structures = await fetch(`${endpoint}/v1/projects/${projectId}/logging/structures`)
+    expect(structures.status).toBe(200)
+    await expect(structures.json()).resolves.toMatchObject([{
+      alpha: 38,
+      beta: 126,
+      holeId,
+      reviewStatus: 'draft',
+      structureType: 'Joint',
+    }])
   })
 
   it('saves a collar and normalizes optional fields', async () => {

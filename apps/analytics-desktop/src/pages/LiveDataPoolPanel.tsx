@@ -1,11 +1,14 @@
-import type { DataPoolClient, ProjectSummary } from '@geoeye/datapool-client'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import type { ProjectSummary } from '@geoeye/datapool-client'
 import { Check, CircleAlert, RefreshCw } from 'lucide-react'
+import { effectiveDrillholes, type LocalDrillholeDraft, type LocalProjectSnapshot } from '../data/localProjectDb.js'
 
 interface LiveDataPoolPanelProps {
-  client: DataPoolClient
+  draft: LocalDrillholeDraft | null
+  error: string | null
+  onRefresh: () => Promise<void>
   project: ProjectSummary
-  scope: string
+  refreshing: boolean
+  snapshot: LocalProjectSnapshot | null
 }
 
 const sourceLabels: Record<string, string> = {
@@ -41,37 +44,15 @@ function issueText(summary: Record<string, number>): string {
 }
 
 /** Live view of what the Data Pool holds for the active project. */
-export function LiveDataPoolPanel({ client, project, scope }: LiveDataPoolPanelProps) {
-  const queryClient = useQueryClient()
-  const baseKey = ['datapool', scope, project.id] as const
-
-  const datasets = useQuery({
-    queryKey: [...baseKey, 'datasets'],
-    queryFn: () => client.datasets(project.id),
-  })
-  const projection = useQuery({
-    queryKey: [...baseKey, 'projection'],
-    queryFn: () => client.projectionStatus(project.id),
-  })
-  const drillholes = useQuery({
-    queryKey: [...baseKey, 'drillholes'],
-    queryFn: () => client.drillholes(project.id),
-  })
-
-  const sync = useMutation({
-    mutationFn: () => client.runProjection(project.id),
-    onSettled: () => queryClient.invalidateQueries({ queryKey: baseKey }),
-  })
-
-  const holes = drillholes.data ?? []
+export function LiveDataPoolPanel({ draft, error, onRefresh, project, refreshing, snapshot }: LiveDataPoolPanelProps) {
+  const datasets = snapshot?.datasets ?? []
+  const holes = effectiveDrillholes(snapshot, draft)
   const withCollar = holes.filter((hole) => hole.collar !== null).length
   const surveyed = holes.filter((hole) => hole.surveyStationCount > 0).length
-  const statuses = projection.data ?? []
+  const statuses = snapshot?.projection ?? []
   const observationsByDataset = new Map(statuses.flatMap((status) =>
     status.datasetId === null ? [] : [[status.datasetId, status.observationCount] as const],
   ))
-  const failedSync = sync.data?.sources.filter((source) => source.outcome === 'failed') ?? []
-  const loadFailed = datasets.isError || projection.isError || drillholes.isError
 
   return (
     <>
@@ -80,23 +61,17 @@ export function LiveDataPoolPanel({ client, project, scope }: LiveDataPoolPanelP
           <div><p className="eyebrow">Field feed</p><h2>{project.name}</h2></div>
           <div className="pool-console-actions">
             <span className="record-pill">{holes.length} drillholes · {withCollar} with collar · {surveyed} surveyed</span>
-            <button className="button button-secondary" disabled={sync.isPending || !project.canWrite} onClick={() => sync.mutate()} title={project.canWrite ? undefined : 'Your role on this project is read-only'} type="button">
-              <RefreshCw className={sync.isPending ? 'spin' : ''} size={14} /> Sync from Field
+            <button className="button button-secondary" disabled={refreshing} onClick={() => void onRefresh()} type="button">
+              <RefreshCw className={refreshing ? 'spin' : ''} size={14} /> Refresh local copy
             </button>
           </div>
         </div>
-        {loadFailed ? (
-          <p className="pool-live-note is-error" role="alert"><CircleAlert size={14} /> The Data Pool did not return this project. Check the connection and try again.</p>
-        ) : null}
-        {sync.isError || failedSync.length > 0 ? (
-          <p className="pool-live-note is-error" role="alert">
-            <CircleAlert size={14} /> Sync failed{failedSync.length > 0 ? `: ${failedSync.map((source) => source.message ?? source.sourceEntityType).join('; ')}` : '.'}
-          </p>
-        ) : null}
+        {error !== null ? <p className="pool-live-note is-error" role="alert"><CircleAlert size={14} /> {error}</p> : null}
+        {snapshot !== null ? <p className="pool-live-note">Local snapshot saved {new Date(snapshot.refreshedAt).toLocaleString()}. All analytical features read this copy.</p> : <p className="pool-live-note">No local project snapshot yet. Refresh once to make the project available offline.</p>}
         <div className="pool-activity-table">
           <div className="pool-activity-row pool-activity-header"><span>Source</span><span>Field rows</span><span>Observations</span><span>Last sync</span><span>Status</span></div>
-          {statuses.length === 0 && !projection.isPending ? (
-            <p className="pool-live-note">Nothing has been projected for this project yet. Choose Sync from Field to build the analytical read model.</p>
+          {statuses.length === 0 ? (
+            <p className="pool-live-note">No projection status is stored in the local snapshot.</p>
           ) : null}
           {statuses.map((status) => (
             <div className="pool-activity-row" key={status.sourceEntityType} title={status.lastError ?? issueText(status.issueSummary)}>
@@ -115,14 +90,14 @@ export function LiveDataPoolPanel({ client, project, scope }: LiveDataPoolPanelP
       <section className="panel pool-activity-panel">
         <div className="panel-heading pool-console-heading">
           <div><p className="eyebrow">Registry</p><h2>Datasets</h2></div>
-          <span className="record-pill">{(datasets.data ?? []).length} registered</span>
+          <span className="record-pill">{datasets.length} registered</span>
         </div>
         <div className="pool-activity-table">
           <div className="pool-activity-row pool-activity-header"><span>Producer</span><span>Dataset</span><span>Records</span><span>Updated</span><span>Status</span></div>
-          {(datasets.data ?? []).length === 0 && !datasets.isPending ? (
+          {datasets.length === 0 ? (
             <p className="pool-live-note">No datasets are registered for this project.</p>
           ) : null}
-          {(datasets.data ?? []).map((dataset) => (
+          {datasets.map((dataset) => (
             <div className="pool-activity-row" key={dataset.id}>
               <span><strong>{dataset.producerName}</strong></span>
               <span>{dataset.name}</span>

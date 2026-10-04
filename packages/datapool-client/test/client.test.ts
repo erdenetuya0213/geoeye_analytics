@@ -99,6 +99,41 @@ describe('DataPoolClient', () => {
     expect(JSON.parse(String(init?.body))).toEqual(input)
   })
 
+  it('posts an explicit tabular Database import', async () => {
+    const projectId = '11111111-1111-4111-8111-111111111111'
+    const responseBody = {
+      dataset: {
+        id: '55555555-5555-4555-8555-555555555555',
+        projectId,
+        name: 'XRF CSV imports',
+        description: null,
+        producerType: 'instrument',
+        producerName: 'Portable XRF',
+        sourceSystem: 'geoeye.analytics.csv',
+        spatialSupport: 'point',
+        status: 'active',
+        currentVersion: 1,
+        createdAt: '2026-10-04T00:00:00.000Z',
+        updatedAt: '2026-10-04T00:00:00.000Z',
+      },
+      importedRows: 1,
+      observationCount: 1,
+      unmatchedHoles: [],
+      version: 1,
+    }
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(
+      JSON.stringify(responseBody),
+      { status: 201, headers: { 'content-type': 'application/json' } },
+    ))
+    const client = new DataPoolClient({ endpoint: 'http://localhost:8080', fetch: fetchMock })
+    const input = { columns: ['Hole ID', 'Cu ppm'], fileName: 'xrf.csv', rows: [['DH-1', '1200']], section: 'xrf' as const }
+
+    await expect(client.saveTabularImport(projectId, input)).resolves.toEqual(responseBody)
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(`http://localhost:8080/v1/projects/${projectId}/tabular-imports`)
+    expect(fetchMock.mock.calls[0]?.[1]?.method).toBe('POST')
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual(input)
+  })
+
   it('queries reusable result packages for the 3D workspace', async () => {
     const projectId = '11111111-1111-4111-8111-111111111111'
     const boreholeId = '99999999-9999-4999-8999-999999999999'
@@ -169,7 +204,21 @@ describe('DataPoolClient', () => {
         calls.push({ url, method: init?.method ?? 'GET', body })
         const payload = url.endsWith('/v1/projects')
           ? [{ id: projectId, name: 'Gorge', description: null, isActive: true, drillholeCount: 1, organizationId: null, organizationName: null, canWrite: true }]
-          : url.endsWith('/logging')
+          : url.endsWith('/logging/structures')
+            ? [{
+                alpha: 38,
+                beta: 126,
+                depthFrom: 27.73,
+                depthTo: 27.73,
+                holeId,
+                id: '55555555-5555-4555-8555-555555555555',
+                orientationStatus: 'review_required',
+                projectId,
+                reviewStatus: 'draft',
+                structureType: 'Joint',
+                templateId: '44444444-4444-4444-8444-444444444444',
+              }]
+            : url.endsWith('/logging')
             ? {
                 projectId,
                 templates: [{ id: '44444444-4444-4444-8444-444444444444', name: 'Lithology', version: 2 }],
@@ -213,6 +262,11 @@ describe('DataPoolClient', () => {
     await expect(client.projects()).resolves.toHaveLength(1)
     await expect(client.drillholes(projectId)).resolves.toMatchObject([{ name: 'UDD-103' }])
     await expect(client.fieldLogging(projectId)).resolves.toMatchObject({ submissions: [{ templateName: 'Lithology' }] })
+    await expect(client.fieldLoggingStructures(projectId)).resolves.toMatchObject([{
+      alpha: 38,
+      beta: 126,
+      reviewStatus: 'draft',
+    }])
     await client.saveCollar(projectId, holeId, {
       easting: 512345.6,
       northing: 5300120.1,
@@ -229,12 +283,13 @@ describe('DataPoolClient', () => {
       'GET /v1/projects',
       `GET /v1/projects/${projectId}/drillholes`,
       `GET /v1/projects/${projectId}/logging`,
+      `GET /v1/projects/${projectId}/logging/structures`,
       `PUT /v1/projects/${projectId}/drillholes/${holeId}/collar`,
       `PUT /v1/projects/${projectId}/drillholes/${holeId}/surveys`,
       `POST /v1/projects/${projectId}/projection`,
     ])
-    expect(calls[3]?.body).toMatchObject({ latitude: null, surveyMethod: null })
-    expect(calls[5]?.body).toEqual({ force: false })
+    expect(calls[4]?.body).toMatchObject({ latitude: null, surveyMethod: null })
+    expect(calls[6]?.body).toEqual({ force: false })
   })
 
   it('rejects an invalid survey before sending it', async () => {

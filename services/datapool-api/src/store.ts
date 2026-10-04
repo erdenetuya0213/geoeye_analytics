@@ -10,6 +10,7 @@ import type {
   DerivedValueInput,
   DrillholeSummary,
   FieldLoggingOverview,
+  FieldLoggingStructure,
   ObservationQuery,
   ObservationValue,
   ProjectSummary,
@@ -19,6 +20,8 @@ import type {
   ProjectionStatus,
   ReplaceSurveysInput,
   SurveyStation,
+  TabularImportInput,
+  TabularImportResult,
   VariableDefinition,
 } from '@geoeye/types'
 import type { LoginAccount, UserAccess } from './auth.js'
@@ -35,6 +38,7 @@ export interface DataPoolStore {
   listProjects(): Promise<ProjectSummary[]>
   listDrillholes(projectId: string): Promise<DrillholeSummary[]>
   listFieldLogging(projectId: string): Promise<FieldLoggingOverview>
+  listFieldLoggingStructures(projectId: string): Promise<FieldLoggingStructure[]>
   saveCollar(projectId: string, holeId: string, input: CollarInput): Promise<Collar>
   listSurveys(projectId: string, holeId: string): Promise<SurveyStation[]>
   replaceSurveys(projectId: string, holeId: string, input: ReplaceSurveysInput): Promise<SurveyStation[]>
@@ -44,6 +48,7 @@ export interface DataPoolStore {
   runProjection(projectId: string, force: boolean): Promise<ProjectionRunResult>
   listDatasets(projectId: string): Promise<Dataset[]>
   queryObservations(query: ObservationQuery): Promise<ObservationValue[]>
+  saveTabularImport?(projectId: string, input: TabularImportInput, createdBy: string | null): Promise<TabularImportResult>
   createAnalysisRun(input: CreateAnalysisRunInput, createdBy: string | null): Promise<AnalysisRun>
   saveDerivedValues(runId: string, values: DerivedValueInput[]): Promise<string[]>
   listAnalysisResultPackages(query: AnalysisResultPackageQuery): Promise<AnalysisResultPackageRecord[]>

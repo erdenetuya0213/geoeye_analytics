@@ -12,7 +12,8 @@ export interface SurveyStation {
   holeId: string
 }
 
-export type StructureTypeId = 'fault' | 'fz-bottom' | 'fz-top' | 'joint' | 'unclassified'
+/** Database dictionary label (or `unclassified` when the source has no type). */
+export type StructureTypeId = string
 
 export interface StructureObservation {
   alpha: number
@@ -51,6 +52,11 @@ const degrees = (value: number) => value * 180 / Math.PI
 const clamp = (value: number, min = -1, max = 1) => Math.max(min, Math.min(max, value))
 const normalizeAngle = (value: number) => (value % 360 + 360) % 360
 
+/** Match Field and CSV hole-id formatting such as TT_2026_002GT and TT2026-002-GT. */
+export function normalizeStructureHoleId(value: string) {
+  return value.trim().toLocaleLowerCase().replace(/[^a-z0-9]/g, '')
+}
+
 type Vector = readonly [number, number, number]
 
 function add(a: Vector, b: Vector): Vector {
@@ -80,7 +86,10 @@ function normalize(vector: Vector): Vector {
 
 function holeVector(azimuth: number, dip: number): Vector {
   const azimuthRadians = radians(azimuth)
-  const dipRadians = radians(dip)
+  // Survey exports in circulation use both signed-down dip (-60) and
+  // positive-down inclination (60). A core hole cannot point upward here, so
+  // normalize both conventions to the same downhole vector.
+  const dipRadians = radians(-Math.abs(dip))
   return normalize([
     Math.cos(dipRadians) * Math.sin(azimuthRadians),
     Math.cos(dipRadians) * Math.cos(azimuthRadians),
@@ -204,14 +213,14 @@ function clusterNormals(normals: readonly Vector[]) {
 
 export function analyzeStructure(
   observations: readonly StructureObservation[],
-  collars: readonly CollarRecord[],
+  _collars: readonly CollarRecord[],
   surveys: readonly SurveyStation[],
 ): StructureAnalysisResult {
   const converted = observations.flatMap((observation) => {
-    const hasCollar = collars.some((collar) => collar.holeId === observation.holeId)
-    const holeSurvey = surveys.filter((station) => station.holeId === observation.holeId)
+    const normalizedHoleId = normalizeStructureHoleId(observation.holeId)
+    const holeSurvey = surveys.filter((station) => normalizeStructureHoleId(station.holeId) === normalizedHoleId)
     const orientation = interpolateSurvey(holeSurvey, observation.depth)
-    if (!hasCollar || orientation === undefined) return []
+    if (orientation === undefined) return []
     const result = convertAlphaBeta(observation.alpha, observation.beta, orientation.azimuth, orientation.dip)
     return [{ observation, ...result }]
   })

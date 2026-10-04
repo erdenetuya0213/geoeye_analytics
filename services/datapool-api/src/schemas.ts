@@ -6,6 +6,7 @@ import {
   replaceSurveysInputSchema,
   saveAnalysisResultPackageInputSchema,
   saveProjectionBindingsInputSchema,
+  tabularImportInputSchema,
 } from '@geoeye/types'
 import { z } from 'zod'
 
@@ -37,6 +38,7 @@ export const loginBodySchema = loginInputSchema
 export const uuidPathParameterSchema = z.string().uuid()
 export const collarBodySchema = collarInputSchema
 export const surveysBodySchema = replaceSurveysInputSchema
+export const tabularImportBodySchema = tabularImportInputSchema
 export const projectionBindingsBodySchema = saveProjectionBindingsInputSchema
 export const analysisResultPackageBodySchema = saveAnalysisResultPackageInputSchema
 export const analysisResultPackagesQuerySchema = analysisResultPackageQuerySchema

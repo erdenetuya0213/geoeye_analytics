@@ -6,9 +6,11 @@ import {
   RefreshCw,
   SlidersHorizontal,
 } from 'lucide-react'
+import type { ProjectSummary } from '@geoeye/datapool-client'
 import type { AnalyticalSeriesResult, VariogramAnalysisResult } from '../analysis/chartResults.js'
 import { TechnicalPlot } from '../components/TechnicalPlot.js'
 import { activities, datasets, projectMetrics } from '../data/demo.js'
+import { effectiveDrillholes, type LocalDrillholeDraft, type LocalProjectSnapshot } from '../data/localProjectDb.js'
 import { useDataPoolWorkspace } from '../state/DataPoolWorkspaceContext.js'
 import type { SectionId } from '../types.js'
 
@@ -78,8 +80,10 @@ const technicalPlots = [
 
 export function OverviewPage({ onNavigate }: OverviewPageProps) {
   const workspace = useDataPoolWorkspace()
-  if (workspace.live && workspace.client !== null && workspace.project !== null) {
-    return <LiveOverviewPage client={workspace.client} onNavigate={onNavigate} project={workspace.project} scope={workspace.scope} />
+  if (workspace.live) {
+    if (workspace.projectsLoading || workspace.localLoading) return <div className="page overview-page"><div className="eda-state panel">Opening the local project copy…</div></div>
+    if (workspace.project === null) return <div className="page overview-page"><div className="eda-state panel">No project is available for this account.</div></div>
+    return <LiveOverviewPage draft={workspace.localDrillholeDraft} onNavigate={onNavigate} onRefresh={workspace.refreshLocalProject} project={workspace.project} refreshing={workspace.localRefreshing} snapshot={workspace.localSnapshot} />
   }
   return <DemoOverviewPage onNavigate={onNavigate} />
 }
@@ -142,7 +146,7 @@ function DemoOverviewPage({ onNavigate }: OverviewPageProps) {
 
       <section className="panel datasets-panel supervisor-datasets-panel">
         <div className="panel-heading">
-          <div><p className="eyebrow">Data Pool</p><h2>Project datasets</h2></div>
+          <div><p className="eyebrow">Database</p><h2>Project datasets</h2></div>
           <button className="button button-small button-ghost" type="button"><RefreshCw size={14} /> Refresh</button>
         </div>
         <div className="dataset-table">
@@ -167,28 +171,18 @@ function DemoOverviewPage({ onNavigate }: OverviewPageProps) {
   )
 }
 
-function LiveOverviewPage({ client, onNavigate, project, scope }: {
-  client: DataPoolClient
+function LiveOverviewPage({ draft, onNavigate, onRefresh, project, refreshing, snapshot }: {
+  draft: LocalDrillholeDraft | null
   onNavigate: (section: SectionId) => void
+  onRefresh: () => Promise<void>
   project: ProjectSummary
-  scope: string
+  refreshing: boolean
+  snapshot: LocalProjectSnapshot | null
 }) {
-  const projectQuery = useQuery({
-    queryKey: ['datapool', scope, project.id, 'overview'],
-    queryFn: async () => {
-      const [liveDatasets, drillholes, projection, variables] = await Promise.all([
-        client.datasets(project.id),
-        client.drillholes(project.id),
-        client.projectionStatus(project.id),
-        client.variables(),
-      ])
-      return { liveDatasets, drillholes, projection, variables }
-    },
-  })
-  if (projectQuery.isPending) return <div className="page overview-page"><div className="eda-state panel">Loading {project.name}…</div></div>
-  if (projectQuery.isError) return <div className="page overview-page"><div className="eda-state panel" role="alert">The connected project summary could not be loaded.</div></div>
-
-  const { drillholes, liveDatasets, projection, variables } = projectQuery.data
+  const drillholes = effectiveDrillholes(snapshot, draft)
+  const liveDatasets = snapshot?.datasets ?? []
+  const projection = snapshot?.projection ?? []
+  const variables = snapshot?.variables ?? []
   const observationCount = projection.reduce((sum, item) => sum + item.observationCount, 0)
   const sourceCount = projection.reduce((sum, item) => sum + item.sourceRowCount, 0)
   const issues = projection.reduce((sum, item) => sum + Object.values(item.issueSummary).reduce((subtotal, count) => subtotal + count, 0), 0)
@@ -199,14 +193,15 @@ function LiveOverviewPage({ client, onNavigate, project, scope }: {
     <div className="page overview-page">
       <section aria-label="Project summary" className="supervisor-status-strip">
         <article className="supervisor-status-cell"><span>Drillholes</span><strong>{drillholes.length.toLocaleString()}</strong><small>{withCollar} collars · {surveyed} surveyed</small><em className="trend-neutral">Live</em></article>
-        <article className="supervisor-status-cell"><span>Datasets</span><strong>{liveDatasets.length.toLocaleString()}</strong><small>{variables.length} registered variables</small><em className="trend-neutral">Data Pool</em></article>
+        <article className="supervisor-status-cell"><span>Datasets</span><strong>{liveDatasets.length.toLocaleString()}</strong><small>{variables.length} registered variables</small><em className="trend-neutral">Database</em></article>
         <article className="supervisor-status-cell"><span>Observations</span><strong>{observationCount.toLocaleString()}</strong><small>{sourceCount.toLocaleString()} source rows</small><em className="trend-up">Accepted</em></article>
         <article className="supervisor-status-cell"><span>Projection issues</span><strong>{issues.toLocaleString()}</strong><small>{projection.filter((item) => item.lastStatus !== 'ok').length} failed sources</small><em className={issues > 0 ? 'trend-neutral' : 'trend-up'}>{issues > 0 ? 'Review' : 'Current'}</em></article>
       </section>
 
       <div className="supervisor-workbench">
         <section className="panel plot-matrix-panel">
-          <div className="panel-heading workbench-heading"><div><p className="eyebrow">Connected project</p><h2>{project.name}</h2></div><button className="button button-small button-secondary" onClick={() => void projectQuery.refetch()} type="button"><RefreshCw size={14} /> Refresh</button></div>
+          <div className="panel-heading workbench-heading"><div><p className="eyebrow">Local project copy</p><h2>{project.name}</h2></div><button className="button button-small button-secondary" disabled={refreshing} onClick={() => void onRefresh()} type="button"><RefreshCw className={refreshing ? 'spin' : ''} size={14} /> Refresh local copy</button></div>
+          {snapshot === null ? <p className="pool-live-note">No local snapshot yet. Refresh once before running project features.</p> : <p className="pool-live-note">Snapshot saved {new Date(snapshot.refreshedAt).toLocaleString()}.</p>}
           <div className="pool-activity-table">
             <div className="pool-activity-row pool-activity-header"><span>Source</span><span>Rows</span><span>Observations</span><span>Issues</span><span>Status</span></div>
             {projection.map((item) => <div className="pool-activity-row" key={item.sourceEntityType}><span><strong>{item.sourceEntityType}</strong></span><span>{item.sourceRowCount.toLocaleString()}</span><span>{item.observationCount.toLocaleString()}</span><span>{Object.values(item.issueSummary).reduce((sum, count) => sum + count, 0).toLocaleString()}</span><span className={item.lastStatus === 'ok' ? 'pool-accepted' : 'validation-label needs-review'}>{item.lastStatus === 'ok' ? <Check size={13} /> : <CircleAlert size={13} />} {item.lastStatus === 'ok' ? 'Current' : 'Failed'}</span></div>)}
@@ -222,13 +217,13 @@ function LiveOverviewPage({ client, onNavigate, project, scope }: {
               <div className={issues > 0 ? 'has-warning' : ''}><span>{issues > 0 ? <CircleAlert size={14} /> : <Check size={14} />} Projection inputs</span><strong>{issues > 0 ? `${issues} issues` : 'Ready'}</strong></div>
               <div><span><Check size={14} /> Accepted observations</span><strong>{observationCount.toLocaleString()}</strong></div>
             </div>
-            <button className="card-link" onClick={() => onNavigate('data-pool')} type="button">Open Data Pool <ArrowRight size={14} /></button>
+            <button className="card-link" onClick={() => onNavigate('data-pool')} type="button">Open Database <ArrowRight size={14} /></button>
           </section>
         </aside>
       </div>
 
       <section className="panel datasets-panel supervisor-datasets-panel">
-        <div className="panel-heading"><div><p className="eyebrow">Data Pool</p><h2>Project datasets</h2></div></div>
+        <div className="panel-heading"><div><p className="eyebrow">Database</p><h2>Project datasets</h2></div></div>
         <div className="dataset-table">
           <div className="dataset-row dataset-header"><span>Dataset</span><span>Support</span><span>Version</span><span>Status</span><span>Updated</span></div>
           {liveDatasets.map((dataset) => <button className="dataset-row" key={dataset.id} onClick={() => onNavigate('data-pool')} type="button"><span className="dataset-name-cell"><i /><span><strong>{dataset.name}</strong><small>{dataset.producerName}</small></span></span><span><span className="support-tag">{dataset.spatialSupport}</span></span><span className="tabular">v{dataset.currentVersion}</span><span>{dataset.status}</span><span className="muted-cell">{new Date(dataset.updatedAt).toLocaleString()}</span></button>)}
@@ -238,5 +233,3 @@ function LiveOverviewPage({ client, onNavigate, project, scope }: {
     </div>
   )
 }
-import type { DataPoolClient, ProjectSummary } from '@geoeye/datapool-client'
-import { useQuery } from '@tanstack/react-query'
