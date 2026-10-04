@@ -6246,3 +6246,7 @@ textarea,
 span.project-selector { cursor: default; }
 span.profile-button { cursor: default; }
 .project-selector, .profile-button { caret-color: transparent; user-select: none; }
+
+.geotech-mean-option { padding: 12px 16px; border-top: 1px solid var(--border); }
+.geotech-mean-option label { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.geotech-mean-option p { margin: 8px 0 0; font-size: 12px; color: var(--text-muted); }

@@ -13,7 +13,6 @@ import {
   History,
   Layers3,
   Map as MapIcon,
-  RefreshCw,
   Save,
   Table2,
   X,
@@ -22,7 +21,6 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   buildRmr76SourceSignature,
   calculateRmr76Intervals,
-  InputResolver,
   RMR76_METHOD_DEFINITION,
   summarizeInputReadiness,
   type InputAvailability,
@@ -38,26 +36,28 @@ import {
 } from '../data/analysisSaveStore.js'
 import { barGraphImage } from '../data/analysisGraphImages.js'
 import { saveAnalysisResultPackage } from '../data/analysisResultStore.js'
+import { useDurableAction } from '../state/useDurableAction.js'
 import {
   buildSavedRmr76Run,
   readGeotechnicalDerivedDocument,
   saveRmr76DerivedFields,
 } from '../data/geotechnicalDerivedStore.js'
-import { formatInterval, latestRmrDataset, rmrDatasets } from '../data/geotechnicalDemo.js'
 import {
   buildDatabaseRmrSources,
   buildFieldLoggingRmrSources,
-  buildMappedRmrDataset,
-  isCompleteRmrMapping,
+  buildJoinedRmrDataset,
+  isCompleteRmrSourceMapping,
   isRmrColumnCompatible,
   rmrColumnLabel,
+  rmrSourceOptionLabel,
   type DatabaseRmrSource,
-  type Rmr76ColumnMapping,
+  type Rmr76ParameterSourceMapping,
 } from '../data/geotechnicalDatabase.js'
 import { saveSpatialViewRequest } from '../data/spatialViewStore.js'
 import type { SectionId } from '../types.js'
 import { usePersistentState } from '../state/persistentState.js'
 import { useDataPoolWorkspace } from '../state/DataPoolWorkspaceContext.js'
+import { useProjectStorage } from '../state/ProjectStorageContext.js'
 import { effectiveDrillholes } from '../data/localProjectDb.js'
 
 type ClassificationId = 'rmr76' | 'rmr89' | 'mrmr' | 'q-system'
@@ -68,7 +68,6 @@ type ResultTab = 'downhole' | 'table' | 'components'
 interface GeotechnicalPageProps {
   onNavigate: (section: SectionId) => void
 }
-
 const classifications: ReadonlyArray<{ id: ClassificationId; label: string; method: string; ready: boolean }> = [
   { id: 'rmr76', label: 'RMR76', method: 'Bieniawski 1976', ready: true },
   { id: 'rmr89', label: 'RMR89', method: 'Bieniawski 1989', ready: false },
@@ -79,7 +78,7 @@ const classifications: ReadonlyArray<{ id: ClassificationId; label: string; meth
 const availabilityDisplay: Record<InputAvailability, { label: string; symbol: string }> = {
   direct: { label: 'Direct', symbol: '✓' },
   derived: { label: 'Derived', symbol: '◇' },
-  fallback: { label: 'Fallback', symbol: '△' },
+  fallback: { label: 'Estimated', symbol: '△' },
   missing: { label: 'Missing', symbol: '!' },
 }
 
@@ -104,6 +103,10 @@ function classCode(classification: string | null | undefined) {
 
 function formatScore(value: number | null) {
   return value === null ? '—' : Number.isInteger(value) ? value.toString() : value.toFixed(1)
+}
+
+function formatInterval(depthFrom: number, depthTo: number) {
+  return `${depthFrom.toFixed(1)}–${depthTo.toFixed(1)} m`
 }
 
 function statusText(result: Rmr76IntervalResult) {
@@ -131,61 +134,67 @@ export function GeotechnicalPage({ onNavigate }: GeotechnicalPageProps) {
   const workspace = useDataPoolWorkspace()
   const databaseSources = useMemo(() => {
     const snapshot = workspace.localSnapshot
-    if (!workspace.live || snapshot === null) return undefined
+    if (!workspace.live || snapshot === null) return []
     const holeNames = new Map(effectiveDrillholes(snapshot, workspace.localDrillholeDraft).map((hole) => [hole.id, hole.name]))
     return [
       ...buildDatabaseRmrSources(snapshot.datasets, snapshot.observations, snapshot.variables, holeNames),
       ...buildFieldLoggingRmrSources(snapshot.fieldLogging.datasets ?? [], holeNames),
     ]
   }, [workspace.live, workspace.localDrillholeDraft, workspace.localSnapshot])
-  if (workspace.live && (workspace.projectsLoading || workspace.localLoading)) return <div className="page geotechnical-page"><div className="eda-state panel">Opening local geotechnical data…</div></div>
-  if (workspace.live && workspace.project === null) return <div className="page geotechnical-page"><div className="eda-state panel" role="alert">No project is available for this account.</div></div>
-  if (workspace.live && workspace.project !== null && workspace.localSnapshot === null) return <div className="page geotechnical-page"><div className="eda-state panel"><strong>No database snapshot is stored locally.</strong><button className="button button-accent" onClick={() => { void workspace.refreshLocalProject() }} type="button">Load datasets from Database</button></div></div>
-  if (workspace.live && workspace.project !== null) return <GeotechnicalWorkbench databaseSources={databaseSources ?? []} key={workspace.project.id} onNavigate={onNavigate} onRefresh={() => { void workspace.refreshLocalProject() }} projectId={workspace.project.id} tenantId={workspace.project.organizationId ?? 'Database'} />
-  return <GeotechnicalWorkbench key="demo" onNavigate={onNavigate} />
+  if (!workspace.live) return <div className="page geotechnical-page"><div className="eda-state panel">No local project data is open.</div></div>
+  if (workspace.projectsLoading || workspace.localLoading) return <div className="page geotechnical-page"><div className="eda-state panel">Opening local geotechnical data…</div></div>
+  if (workspace.project === null) return <div className="page geotechnical-page"><div className="eda-state panel" role="alert">No project is available for this account.</div></div>
+  if (workspace.localSnapshot === null) return <div className="page geotechnical-page"><div className="eda-state panel"><strong>No local project snapshot is available.</strong><button className="button button-accent" onClick={() => onNavigate('data-pool')} type="button">Open Data</button></div></div>
+  return <GeotechnicalWorkbench databaseSources={databaseSources} key={workspace.project.id} onNavigate={onNavigate} projectId={workspace.project.id} tenantId={workspace.project.organizationId ?? '_unassigned'} />
 }
 
-function GeotechnicalWorkbench({ databaseSources, onNavigate, onRefresh, projectId = 'Oyu Ridge', tenantId = 'GeoEye Demo' }: GeotechnicalPageProps & {
-  databaseSources?: readonly DatabaseRmrSource[]
-  onRefresh?: () => void
-  projectId?: string
-  tenantId?: string
+function GeotechnicalWorkbench({ databaseSources, onNavigate, projectId, tenantId }: GeotechnicalPageProps & {
+  databaseSources: readonly DatabaseRmrSource[]
+  projectId: string
+  tenantId: string
 }) {
   const queryClient = useQueryClient()
-  const persistenceScope = databaseSources === undefined ? 'demo' : projectId
-  const [databaseDatasetId, setDatabaseDatasetId] = usePersistentState('geotechnical.databaseDatasetId', databaseSources?.[0]?.dataset.id ?? '', { scope: persistenceScope })
-  const [columnMappings, setColumnMappings] = usePersistentState<Record<string, Rmr76ColumnMapping>>('geotechnical.columnMappings', {}, { scope: persistenceScope })
+  const storage = useProjectStorage()
+  const durable = useDurableAction()
+  const persistenceScope = projectId
+  const [parameterMappings, setParameterMappings] = usePersistentState<Rmr76ParameterSourceMapping>('geotechnical.parameterSources.v2', {}, { scope: persistenceScope })
   const [excavationType, setExcavationType] = usePersistentState<ExcavationType>('geotechnical.excavationType', 'tunnel', { scope: persistenceScope })
   const [classificationId, setClassificationId] = usePersistentState<ClassificationId>('geotechnical.classificationId', 'rmr76')
-  const [snapshotId, setSnapshotId] = usePersistentState('geotechnical.snapshotId', '43', { scope: persistenceScope })
-  const [refreshChecked, setRefreshChecked] = usePersistentState('geotechnical.refreshChecked', false)
   const [holeId, setHoleId] = usePersistentState('geotechnical.holeId', 'all', { scope: persistenceScope })
   const [depthRange, setDepthRange] = usePersistentState<DepthRange>('geotechnical.depthRange', 'all')
+  const [useJointConditionMean, setUseJointConditionMean] = usePersistentState('geotechnical.useJointConditionMean', false, { scope: persistenceScope })
   const [run, setRun] = usePersistentState<Rmr76CalculationRun | null>('geotechnical.run', null, { scope: persistenceScope })
   const [savedRunId, setSavedRunId] = usePersistentState<string | null>('geotechnical.savedRunId', null, { scope: persistenceScope })
   const [savedScenarioName, setSavedScenarioName] = usePersistentState('geotechnical.savedScenarioName', 'Geotechnical logging', { scope: persistenceScope })
-  const selectedDatabaseSource = databaseSources?.find((source) => source.dataset.id === databaseDatasetId) ?? databaseSources?.[0]
-  const storedMapping = selectedDatabaseSource === undefined ? {} : columnMappings[selectedDatabaseSource.dataset.id] ?? {}
   const effectiveMapping = useMemo(() => {
-    if (selectedDatabaseSource === undefined) return {} as Rmr76ColumnMapping
-    const columns = new Map(selectedDatabaseSource.columns.map((column) => [column.key, column]))
+    const sources = new Map(databaseSources.map((source) => [source.dataset.id, source]))
     return Object.fromEntries(RMR76_METHOD_DEFINITION.requiredInputs.flatMap((definition) => {
-      const columnKey = storedMapping[definition.key]
-      const column = columnKey === undefined ? undefined : columns.get(columnKey)
-      return column !== undefined && isRmrColumnCompatible(definition.key, column) ? [[definition.key, columnKey]] : []
-    })) as Rmr76ColumnMapping
-  }, [selectedDatabaseSource, storedMapping])
+      const selection = parameterMappings[definition.key]
+      if (selection === undefined) return []
+      const source = sources.get(selection.sourceId)
+      const column = source?.columns.find((item) => item.key === selection.columnKey)
+      return column !== undefined && isRmrColumnCompatible(definition.key, column) ? [[definition.key, selection]] : []
+    })) as Rmr76ParameterSourceMapping
+  }, [databaseSources, parameterMappings])
   const mappingCount = RMR76_METHOD_DEFINITION.requiredInputs.filter((definition) => effectiveMapping[definition.key] !== undefined).length
-  const mappingComplete = databaseSources === undefined || isCompleteRmrMapping(effectiveMapping)
-  const mappedDatabaseDataset = useMemo(() => selectedDatabaseSource === undefined
-    ? undefined
-    : buildMappedRmrDataset(selectedDatabaseSource, effectiveMapping, excavationType), [effectiveMapping, excavationType, selectedDatabaseSource])
-  const baseDatasets = databaseSources === undefined ? rmrDatasets : mappedDatabaseDataset === undefined ? [] : [mappedDatabaseDataset]
+  const mappingComplete = isCompleteRmrSourceMapping(effectiveMapping, databaseSources)
+  const joinedDatabaseDataset = useMemo(() => buildJoinedRmrDataset(databaseSources, effectiveMapping, excavationType, {
+    useJointConditionMean,
+    inScope: (record, source) => {
+      if (holeId !== 'all' && (source.holeNames.get(record.holeId ?? '') ?? record.holeId) !== holeId) return false
+      if (depthRange === 'shallow') return record.depthFrom !== null && record.depthFrom < 60
+      if (depthRange === 'deep') return record.depthTo !== null && record.depthTo > 60
+      return true
+    },
+  }), [databaseSources, effectiveMapping, excavationType, useJointConditionMean, holeId, depthRange])
+  const baseDatasets = [joinedDatabaseDataset.dataset]
+  const joinDiagnostics = joinedDatabaseDataset.diagnostics
+  const selectedLocalSourceCount = new Set(Object.values(effectiveMapping).flatMap((selection) => selection === undefined ? [] : [selection.sourceId])).size
   const [templateVersion, setTemplateVersion] = useState(() => {
     const initialDataset = baseDatasets[0]
     if (initialDataset === undefined) return 1
     return currentAnalysisTemplateVersion(
-      window.localStorage,
+      storage,
       initialDataset.targetTemplateId,
       templateVersionFromId(initialDataset.targetTemplateId),
     )
@@ -194,19 +203,15 @@ function GeotechnicalWorkbench({ databaseSources, onNavigate, onRefresh, project
   const [includeComponents, setIncludeComponents] = usePersistentState('geotechnical.includeComponents', false)
   const [detailTab, setDetailTab] = usePersistentState<DetailTab>('geotechnical.detailTab', 'method')
   const [resultTab, setResultTab] = usePersistentState<ResultTab>('geotechnical.resultTab', 'downhole')
-  const [sourceDetailKey, setSourceDetailKey] = usePersistentState<Rmr76CanonicalInputKey | null>('geotechnical.sourceDetailKey', null)
   const [saveAsOpen, setSaveAsOpen] = useState(false)
-  const [savedDocument, setSavedDocument] = useState(() => readGeotechnicalDerivedDocument(window.localStorage))
+  const [savedDocument, setSavedDocument] = useState(() => readGeotechnicalDerivedDocument(storage))
 
-  const snapshotOptions = useMemo(() => databaseSources !== undefined
-    ? baseDatasets
-    : refreshChecked
-      ? [latestRmrDataset, ...baseDatasets]
-      : snapshotId === latestRmrDataset.snapshotId ? [latestRmrDataset, ...baseDatasets] : baseDatasets, [baseDatasets, databaseSources, refreshChecked, snapshotId])
-  const dataset = snapshotOptions.find((item) => item.snapshotId === snapshotId) ?? baseDatasets[0]
+  const dataset = baseDatasets[0]
   const classification = classifications.find((item) => item.id === classificationId) ?? classifications[0]!
   const selectedSourceIds = useMemo(() => new Set(dataset?.sources.map((source) => source.id) ?? []), [dataset])
-  const holes = useMemo(() => [...new Set(dataset?.intervals.map((interval) => interval.holeId) ?? [])].sort(), [dataset])
+  const holes = useMemo(() => [...new Set(databaseSources.flatMap((source) => source.records.flatMap((record) => record.holeId === null
+      ? []
+      : [source.holeNames.get(record.holeId) ?? record.holeId])))].sort(), [databaseSources])
   const scopedIntervals = useMemo(() => dataset?.intervals.filter((interval) => {
     if (holeId !== 'all' && interval.holeId !== holeId) return false
     if (depthRange === 'shallow') return interval.depthFrom < 60
@@ -221,7 +226,6 @@ function GeotechnicalWorkbench({ databaseSources, onNavigate, onRefresh, project
     () => classification.ready ? summarizeInputReadiness(scopedIntervals, selectedSourceIds) : [],
     [classification.ready, scopedIntervals, selectedSourceIds],
   )
-  const availableInputCount = readiness.filter((item) => item.availability !== 'missing').length
   const stale = run !== null && (run.sourceSignature !== sourceSignature || run.snapshotId !== dataset?.snapshotId)
   const isSaved = run !== null && savedRunId === run.runId && !stale
   const selectedResult = run?.intervals.find((interval) => interval.id === selectedIntervalId)
@@ -232,51 +236,43 @@ function GeotechnicalWorkbench({ databaseSources, onNavigate, onRefresh, project
     for (const interval of run?.intervals ?? []) groups.set(interval.holeId, [...(groups.get(interval.holeId) ?? []), interval])
     return [...groups.entries()]
   }, [run])
-  const resolver = useMemo(() => new InputResolver(), [])
-  const sourceDetail = sourceDetailKey === null ? null : scopedIntervals
-    .map((interval) => resolver.resolve(interval, selectedSourceIds).inputs[sourceDetailKey])
-    .find((resolved) => resolved.availability !== 'missing')
-    ?? null
-
   useEffect(() => {
-    if (selectedDatabaseSource !== undefined && databaseDatasetId !== selectedDatabaseSource.dataset.id) setDatabaseDatasetId(selectedDatabaseSource.dataset.id)
     if (dataset === undefined) return
-    if (snapshotId !== dataset.snapshotId) setSnapshotId(dataset.snapshotId)
     if (holeId !== 'all' && !holes.includes(holeId)) setHoleId('all')
-  }, [databaseDatasetId, dataset, holeId, holes, selectedDatabaseSource, snapshotId])
+  }, [dataset, holeId, holes, setHoleId])
 
-  if (dataset === undefined) return <div className="page geotechnical-page"><div className="eda-state panel"><strong>No database dataset with observed columns is available.</strong>{onRefresh === undefined ? null : <button className="button button-accent" onClick={onRefresh} type="button">Refresh database datasets</button>}</div></div>
+  if (dataset === undefined) return <div className="page geotechnical-page"><div className="eda-state panel"><strong>No local analytical snapshot is available.</strong><button className="button button-accent" onClick={() => onNavigate('data-pool')} type="button">Open Data</button></div></div>
 
   const changeClassification = (next: ClassificationId) => {
     setClassificationId(next)
     setRun(null)
     setSavedRunId(null)
     setSelectedIntervalId(null)
-    setSourceDetailKey(null)
   }
 
   const resetCalculation = () => {
     setRun(null)
     setSavedRunId(null)
     setSelectedIntervalId(null)
-    setSourceDetailKey(null)
   }
 
-  const changeDatabaseDataset = (nextDatasetId: string) => {
-    setDatabaseDatasetId(nextDatasetId)
+  const changeParameterSource = (key: Rmr76CanonicalInputKey, sourceId: string) => {
+    setParameterMappings((current) => ({
+      ...current,
+      [key]: sourceId === '' ? undefined : { columnKey: '', sourceId },
+    }))
     setHoleId('all')
     resetCalculation()
   }
 
-  const changeColumnMapping = (key: Rmr76CanonicalInputKey, columnKey: string) => {
-    if (selectedDatabaseSource === undefined) return
-    setColumnMappings((current) => ({
-      ...current,
-      [selectedDatabaseSource.dataset.id]: {
-        ...(current[selectedDatabaseSource.dataset.id] ?? {}),
-        [key]: columnKey === '' ? undefined : columnKey,
-      },
-    }))
+  const changeParameterColumn = (key: Rmr76CanonicalInputKey, columnKey: string) => {
+    setParameterMappings((current) => {
+      const selection = current[key]
+      return {
+        ...current,
+        [key]: selection === undefined || columnKey === '' ? (selection === undefined ? undefined : { ...selection, columnKey: '' }) : { ...selection, columnKey },
+      }
+    })
     resetCalculation()
   }
 
@@ -286,7 +282,7 @@ function GeotechnicalWorkbench({ databaseSources, onNavigate, onRefresh, project
   }
 
   const calculate = () => {
-    if (!classification.ready || !mappingComplete) return
+    if (!classification.ready || !mappingComplete || scopedIntervals.length === 0) return
     const next = calculateRmr76Intervals(scopedIntervals, selectedSourceIds, makeRunId(classificationId), new Date().toISOString(), dataset.snapshotId)
     setRun(next)
     setSavedRunId(null)
@@ -294,9 +290,9 @@ function GeotechnicalWorkbench({ databaseSources, onNavigate, onRefresh, project
     setResultTab('downhole')
   }
 
-  const save = (createVersion: boolean) => {
+  const save = (createVersion: boolean) => durable.perform(async () => {
     if (run === null || stale || run.summary.valid === 0) return
-    const nextVersion = resolveAnalysisTemplateVersion(window.localStorage, {
+    const nextVersion = resolveAnalysisTemplateVersion(storage, {
       fallbackVersion: templateVersionFromId(dataset.targetTemplateId),
       mode: createVersion ? 'new-version' : 'overwrite',
       templateId: dataset.targetTemplateId,
@@ -308,8 +304,8 @@ function GeotechnicalWorkbench({ databaseSources, onNavigate, onRefresh, project
       scenarioId: `${dataset.targetTemplateId}:v${nextVersion}`,
       scenarioName: versionLabel,
     })
-    const document = saveRmr76DerivedFields(window.localStorage, saved)
-    recordAnalysisTemplateSave(window.localStorage, {
+    const document = saveRmr76DerivedFields(storage, saved)
+    recordAnalysisTemplateSave(storage, {
       analysisFileId,
       derivedFieldKeys: saved.fieldDefinitions.map((field) => field.key),
       feature: 'geotechnical',
@@ -328,7 +324,7 @@ function GeotechnicalWorkbench({ databaseSources, onNavigate, onRefresh, project
       boreholeId,
     ))
     const classCounts = Object.entries(run.summary.classCounts).map(([label, value]) => ({ label, value }))
-    saveAnalysisResultPackage(window.localStorage, {
+    await saveAnalysisResultPackage(storage, {
       analysisFileId,
       analysisPayload: saved,
       boreholeIds,
@@ -351,7 +347,7 @@ function GeotechnicalWorkbench({ databaseSources, onNavigate, onRefresh, project
     setTemplateVersion(nextVersion)
     setSaveAsOpen(false)
     void queryClient.invalidateQueries({ queryKey: ['eda-datasets'] })
-  }
+  })
 
   const chooseStatus = (status: Rmr76IntervalResult['status']) => {
     const match = run?.intervals.find((interval) => interval.status === status)
@@ -362,7 +358,7 @@ function GeotechnicalWorkbench({ databaseSources, onNavigate, onRefresh, project
 
   const openSpatial = (mode: 'plan' | 'isometric') => {
     if (run === null) return
-    saveSpatialViewRequest(window.localStorage, {
+    saveSpatialViewRequest(storage, {
       colorBy: 'geotech.rmr76',
       datasetId: dataset.id,
       label: savedScenarioName,
@@ -379,6 +375,7 @@ function GeotechnicalWorkbench({ databaseSources, onNavigate, onRefresh, project
   return (
     <div className="page geotechnical-page geotech-calculator">
       <h1 className="sr-only">Geotechnical classification</h1>
+      {durable.notice ? <p role="status">{durable.notice}</p> : null}
 
       <section className="panel geotech-setup" aria-label="Geotechnical calculation setup">
         <div className="geotech-setup-row">
@@ -391,37 +388,40 @@ function GeotechnicalWorkbench({ databaseSources, onNavigate, onRefresh, project
             <select aria-label="Classification method" onChange={(event) => changeClassification(event.target.value as ClassificationId)} value={classificationId}>{classifications.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select>
             <ChevronDown size={14} />
           </label>
-          <div className="geotech-snapshot-picker">
-            <span>{databaseSources === undefined ? 'Data snapshot' : 'Database dataset'}</span>
-            {databaseSources === undefined
-              ? <div><label><select aria-label="Local project snapshot" onChange={(event) => setSnapshotId(event.target.value)} value={dataset.snapshotId}>{snapshotOptions.map((item) => <option key={item.snapshotId} value={item.snapshotId}>{item.snapshotLabel}</option>)}</select><ChevronDown size={13} /></label><button className="button button-secondary" onClick={() => setRefreshChecked(true)} type="button"><RefreshCw size={13} /> Check latest</button></div>
-              : <div><label><select aria-label="RMR database dataset" onChange={(event) => changeDatabaseDataset(event.target.value)} value={selectedDatabaseSource?.dataset.id ?? ''}>{databaseSources.map((source) => <option key={source.dataset.id} value={source.dataset.id}>{source.dataset.name} · v{source.dataset.currentVersion} · {source.recordCount} rows</option>)}</select><ChevronDown size={13} /></label><button className="button button-secondary" onClick={onRefresh} type="button"><RefreshCw size={13} /> Refresh</button></div>}
-          </div>
+          <div className="geotech-local-input-summary"><span>Templates</span><strong>{databaseSources.length} available</strong></div>
           <div className="geotech-scope-picker">
             <span>Scope</span>
             <div><label><select aria-label="RMR hole" onChange={(event) => setHoleId(event.target.value)} value={holeId}><option value="all">All holes</option>{holes.map((hole) => <option key={hole} value={hole}>{hole}</option>)}</select><ChevronDown size={13} /></label><label><select aria-label="RMR depth range" onChange={(event) => setDepthRange(event.target.value as DepthRange)} value={depthRange}><option value="all">All depths</option><option value="shallow">Above 60 m</option><option value="deep">60 m and below</option></select><ChevronDown size={13} /></label></div>
           </div>
-          <div className="geotech-readiness-total"><span>{databaseSources === undefined ? 'Input readiness' : 'Column mapping'}</span><strong>{classification.ready ? `${databaseSources === undefined ? availableInputCount : mappingCount} / ${RMR76_METHOD_DEFINITION.requiredInputs.length} ${databaseSources === undefined ? 'available' : 'mapped'}` : 'Method setup required'}</strong></div>
-          <button className="button button-accent geotech-primary-action" disabled={!classification.ready || !mappingComplete || scopedIntervals.length === 0} onClick={calculate} title={!mappingComplete ? 'Map every required RMR76 parameter before calculating' : undefined} type="button"><Calculator size={15} /> {run === null || !stale ? 'Calculate' : 'Recalculate'}</button>
+          <div className="geotech-readiness-total"><span>Intervals</span><strong>{classification.ready ? `${joinDiagnostics.matchedIntervalCount} matched` : 'Setup required'}</strong></div>
+          <button className="button button-accent geotech-primary-action" disabled={!classification.ready || !mappingComplete || scopedIntervals.length === 0} onClick={calculate} title={!mappingComplete ? 'Map every RMR76 input' : scopedIntervals.length === 0 ? 'No matching intervals' : undefined} type="button"><Calculator size={15} /> {run === null || !stale ? 'Calculate' : 'Recalculate'}</button>
         </div>
-        {selectedDatabaseSource === undefined ? null : (
-          <div className="geotech-column-mapper" aria-label="RMR76 parameter column mapping">
+        <div className="geotech-column-mapper" aria-label="RMR76 parameter column mapping">
             <header>
-              <span><strong>Map the dataset columns used by RMR76</strong><small>No column is selected automatically. Numeric condition, water, and orientation columns are consumed as component ratings.</small></span>
-              <label><span>Excavation type</span><select aria-label="RMR excavation type" onChange={(event) => changeExcavationType(event.target.value as ExcavationType)} value={excavationType}><option value="tunnel">Tunnel</option><option value="foundation">Foundation</option><option value="slope">Slope</option></select><ChevronDown size={13} /></label>
+              <strong>Inputs</strong>
+              <label><span>Excavation</span><select aria-label="RMR excavation type" onChange={(event) => changeExcavationType(event.target.value as ExcavationType)} value={excavationType}><option value="tunnel">Tunnel</option><option value="foundation">Foundation</option><option value="slope">Slope</option></select><ChevronDown size={13} /></label>
             </header>
-            <div>{RMR76_METHOD_DEFINITION.requiredInputs.map((definition) => {
-              const compatibleColumns = selectedDatabaseSource.columns.filter((column) => isRmrColumnCompatible(definition.key, column))
-              return <label className={effectiveMapping[definition.key] === undefined ? 'is-unmapped' : 'is-mapped'} key={definition.key}><span>{definition.label}{definition.unit === null ? '' : ` (${definition.unit})`}</span><select aria-label={`${definition.label} source column`} onChange={(event) => changeColumnMapping(definition.key, event.target.value)} value={effectiveMapping[definition.key] ?? ''}><option value="">Choose column…</option>{compatibleColumns.map((column) => <option key={column.key} value={column.key}>{rmrColumnLabel(column)} · {column.dataType}</option>)}</select><ChevronDown size={13} /><small>{effectiveMapping[definition.key] === undefined ? `${compatibleColumns.length} compatible columns` : effectiveMapping[definition.key]}</small></label>
+            <div className="geotech-parameter-grid">{RMR76_METHOD_DEFINITION.requiredInputs.map((definition) => {
+              const rawSelection = parameterMappings[definition.key]
+              const selectedSource = databaseSources.find((source) => source.dataset.id === rawSelection?.sourceId)
+              const sourceOptions = databaseSources
+              const compatibleColumns = selectedSource?.columns ?? []
+              const diagnostic = joinDiagnostics?.parameters[definition.key]
+              return <div className={`geotech-parameter-source ${effectiveMapping[definition.key] === undefined ? 'is-unmapped' : 'is-mapped'}`} key={definition.key}><span>{definition.label}{definition.unit === null ? '' : ` (${definition.unit})`}</span><label><small>Template or completed export</small><select aria-label={`${definition.label} template`} onChange={(event) => changeParameterSource(definition.key, event.target.value)} value={rawSelection?.sourceId ?? ''}><option value="">Choose source…</option>{sourceOptions.map((source) => <option key={source.dataset.id} value={source.dataset.id}>{rmrSourceOptionLabel(source, sourceOptions)}</option>)}</select><ChevronDown size={13} /></label><label><small>Value</small><select aria-label={`${definition.label} value`} disabled={selectedSource === undefined} onChange={(event) => changeParameterColumn(definition.key, event.target.value)} value={effectiveMapping[definition.key]?.columnKey ?? ''}><option value="">Choose value…</option>{compatibleColumns.map((column) => <option disabled={!isRmrColumnCompatible(definition.key, column)} key={column.key} value={column.key}>{rmrColumnLabel(column)} · {column.dataType}{isRmrColumnCompatible(definition.key, column) ? '' : ' · incompatible type'}</option>)}</select><ChevronDown size={13} /></label><footer>{effectiveMapping[definition.key] === undefined ? selectedSource === undefined ? `${sourceOptions.length} sources` : `${compatibleColumns.length} values` : `${diagnostic?.sourceIntervalCount ?? 0} rows · ${diagnostic?.unmatchedIntervalCount ?? 0} unmatched`}</footer></div>
             })}</div>
+            <div className="geotech-mean-option">
+              <label><input type="checkbox" checked={useJointConditionMean} onChange={(event) => { setUseJointConditionMean(event.target.checked); resetCalculation() }} /> Use mean for missing joint condition</label>
+              <p role="status">{effectiveMapping['geotech.joint_condition'] === undefined
+                ? 'Select a joint-condition template and value first.'
+                : joinDiagnostics.jointConditionMean === null
+                  ? 'No valid joint-condition ratings in this scope. A mean cannot be calculated; missing values remain missing.'
+                  : `Scoped mean: ${joinDiagnostics.jointConditionMean.toFixed(2)} / 25 from ${joinDiagnostics.jointConditionSampleCount} distinct intervals. ${useJointConditionMean ? `${joinDiagnostics.jointConditionEstimatedCount} missing intervals filled as estimates.` : 'Enable to fill missing intervals as estimates.'} Existing values are preserved.`}</p>
+            </div>
           </div>
-        )}
-        {databaseSources === undefined && refreshChecked && Number(snapshotId) < latestRmrDataset.version ? <div className="geotech-snapshot-update" role="status"><RefreshCw size={13} /><span><strong>Snapshot #44 available</strong><small>Your active calculation snapshot has not changed.</small></span><button className="button button-secondary" onClick={() => { setSnapshotId(latestRmrDataset.snapshotId); setRefreshChecked(false) }} type="button">Use latest</button></div> : null}
-        {classification.ready ? <div className="geotech-readiness-list" aria-label="Canonical input readiness">{readiness.map((item) => <button aria-expanded={sourceDetailKey === item.key} className={`availability-${item.availability} ${sourceDetailKey === item.key ? 'is-active' : ''}`} key={item.key} onClick={() => setSourceDetailKey((current) => current === item.key ? null : item.key)} type="button"><b>{availabilityDisplay[item.availability].symbol}</b><span>{item.label}</span><small>{availabilityDisplay[item.availability].label}</small></button>)}</div> : <div className="geotech-method-unavailable"><AlertTriangle size={14} /><span><strong>{classification.label} starts a separate method workspace.</strong> Its deterministic {classification.method} definition and required Database mappings are not installed, so no RMR76 result can be overwritten.</span></div>}
-        {sourceDetailKey !== null ? <div className={`geotech-source-detail availability-${sourceDetail?.availability ?? 'missing'}`}><CircleDot size={12} /><span><strong>{RMR76_METHOD_DEFINITION.requiredInputs.find((item) => item.key === sourceDetailKey)?.label}</strong><small>{sourceDetail?.lineage === null || sourceDetail === null ? 'No compatible source in this snapshot and scope.' : `${sourceDetail.lineage.sourceLabel} · ${sourceDetail.lineage.sourceFieldId} · ${sourceDetail.lineage.observationId}`}</small></span>{sourceDetail === null ? <button className="button button-secondary" onClick={() => onNavigate('data-pool')} type="button">Open Database</button> : <b>{availabilityDisplay[sourceDetail.availability].label}</b>}</div> : null}
+        {classification.ready ? <div className="geotech-readiness-list" aria-label="Canonical input readiness">{readiness.map((item) => <button aria-expanded="false" className={`availability-${item.availability}`} key={item.key} type="button"><b>{availabilityDisplay[item.availability].symbol}</b><span>{item.label}</span><small>{availabilityDisplay[item.availability].label}</small></button>)}</div> : <div className="geotech-method-unavailable"><AlertTriangle size={14} /><span><strong>{classification.label} starts a separate method workspace.</strong> Its deterministic {classification.method} definition and required Database mappings are not installed, so no RMR76 result can be overwritten.</span></div>}
       </section>
 
-      {run === null ? <section className="panel geotech-empty-state"><div className="geotech-empty-hero"><span className="geotech-empty-icon"><Database size={27} /></span><p className="eyebrow">RMR76 calculation</p><h2>{classification.ready ? databaseSources !== undefined && !mappingComplete ? 'Choose the six RMR76 input columns' : `${classification.label} is ready to calculate` : `${classification.label} requires a deterministic method definition`}</h2><p className="geotech-empty-copy">{classification.ready ? databaseSources === undefined ? 'Canonical inputs are resolved from the demo snapshot. The calculation creates a reviewable result without changing primary observations.' : 'Select exactly which column supplies each RMR76 parameter. The calculation uses only this dataset and these mappings; database observations remain unchanged.' : 'RMR76 stays available as the current production engine. Other classifications remain isolated until their own inputs, formulas, versions, and save fields are defined.'}</p>{classification.ready ? <><div className="geotech-empty-metrics"><span><strong>{databaseSources !== undefined && !mappingComplete ? selectedDatabaseSource?.recordCount ?? 0 : scopedIntervals.length}</strong><small>{databaseSources !== undefined && !mappingComplete ? 'Database records' : 'Dataset rows in scope'}</small></span><span><strong>{databaseSources === undefined ? availableInputCount : mappingCount} / {RMR76_METHOD_DEFINITION.requiredInputs.length}</strong><small>{databaseSources === undefined ? 'Inputs available' : 'Columns mapped'}</small></span><span><strong>{databaseSources === undefined ? `#${dataset.snapshotId}` : `v${dataset.version}`}</strong><small>{databaseSources === undefined ? 'Data snapshot' : 'Dataset version'}</small></span></div><button className="button button-accent geotech-empty-action" disabled={!mappingComplete || scopedIntervals.length === 0} onClick={calculate} type="button"><Calculator size={15} /> Calculate {classification.label}</button><div className="geotech-availability-legend" aria-label="Input availability legend"><span><b className="availability-direct">✓</b> Valid mapped value</span><span><b className="availability-missing">!</b> Missing or invalid value</span></div></> : null}</div></section> : <>
+      {run === null ? <section className="panel geotech-empty-state"><div className="geotech-empty-hero"><span className="geotech-empty-icon"><Database size={27} /></span><p className="eyebrow">RMR76 calculation</p><h2>{classification.ready ? !mappingComplete ? 'Map six inputs' : scopedIntervals.length === 0 ? 'No matching intervals' : `${classification.label} is ready` : `${classification.label} requires setup`}</h2>{classification.ready ? <><div className="geotech-empty-metrics"><span><strong>{joinDiagnostics.matchedIntervalCount}</strong><small>Intervals</small></span><span><strong>{mappingCount} / {RMR76_METHOD_DEFINITION.requiredInputs.length}</strong><small>Inputs mapped</small></span><span><strong>{selectedLocalSourceCount}</strong><small>Templates selected</small></span></div><button className="button button-accent geotech-empty-action" disabled={!mappingComplete || scopedIntervals.length === 0} onClick={calculate} type="button"><Calculator size={15} /> Calculate {classification.label}</button><div className="geotech-availability-legend" aria-label="Input availability legend"><span><b className="availability-direct">✓</b> Valid</span><span><b className="availability-missing">!</b> Missing</span></div></> : null}</div></section> : <>
         {stale ? <div className="geotech-stale-banner" role="status"><AlertTriangle size={15} /><span>Snapshot or scope changed. Run {run.runId.slice(0, 8)} remains pinned to snapshot #{run.snapshotId} for review until you recalculate.</span></div> : null}
         <section className="geotech-summary-grid" aria-label="RMR76 result summary">
           <div><span>Mean RMR</span><strong>{formatScore(run.summary.mean)}</strong><small>Valid intervals</small></div><div><span>Median RMR</span><strong>{formatScore(run.summary.median)}</strong><small>Valid intervals</small></div><div><span>Valid</span><strong>{run.summary.valid}</strong><small>Calculated</small></div>
@@ -441,7 +441,6 @@ function GeotechnicalWorkbench({ databaseSources, onNavigate, onRefresh, project
           <aside className="panel geotech-detail-panel">{selectedResult === null ? null : <><div className="panel-heading"><div><p className="eyebrow">Selected interval</p><h2>{formatInterval(selectedResult.depthFrom, selectedResult.depthTo)}</h2></div><strong className="geotech-detail-score">{selectedResult.calculation?.total ?? '—'}</strong></div><div className="geotech-detail-class"><span>{selectedResult.calculation?.classification ?? statusText(selectedResult)}</span><small>{selectedResult.holeId} · {selectedResult.lithology}</small></div>
             {selectedResult.status === 'missing' ? <div className="geotech-reason-card is-missing"><AlertTriangle size={14} /><span><strong>Missing: {selectedResult.missing.map(missingReason).join('; ')}</strong><small>The interval is retained, but no final classification is calculated.</small></span><button onClick={() => onNavigate('data-pool')} type="button">Open Database</button></div> : null}
             {selectedResult.status === 'excluded' ? <div className="geotech-reason-card"><AlertTriangle size={14} /><span><strong>Excluded: {selectedResult.exclusionReason}</strong><small>Source: {selectedResult.exclusionSource ?? 'Database quality rule'}</small></span></div> : null}
-            {databaseSources === undefined && selectedResult.missing.some((key) => key.startsWith('structure.')) ? <div className="geotech-structure-missing"><AlertTriangle size={15} /><span><strong>Accepted structure result required</strong><small>Joint spacing and orientation resolve from accepted J1/J2/J3.</small></span><button onClick={() => onNavigate('structure')} type="button">Open Structure Analysis</button></div> : null}
             <dl className="geotech-component-list"><div className="geotech-component-heading"><dt>Basic RMR</dt><dd>{selectedResult.calculation?.basic ?? '—'}</dd></div>{(['strength', 'rqd', 'jointSpacing', 'jointCondition', 'groundwater'] as const).map((key) => <div key={key}><dt>{componentLabels[key]}</dt><dd>{scoreFor(selectedResult, key) === null ? '—' : `${scoreFor(selectedResult, key)} pts`}</dd></div>)}<div className="geotech-component-heading"><dt>Orientation adjustment</dt><dd>{scoreFor(selectedResult, 'orientation') === null ? '—' : `${scoreFor(selectedResult, 'orientation')} pts`}</dd></div><div className="is-total"><dt>Final RMR</dt><dd>{selectedResult.calculation?.total ?? '—'}</dd></div><div className="is-class"><dt>Class</dt><dd>{selectedResult.calculation?.classification ?? '—'}</dd></div></dl>
             <div className="geotech-lineage"><h3>Source lineage</h3>{selectedResult.lineage.map((lineage) => <div key={`${lineage.canonicalKey}-${lineage.observationId}`}><CircleDot size={11} /><span><strong>{lineage.canonicalKey}</strong><small>{lineage.sourceLabel} · {lineage.sourceFieldId}</small></span><b>{availabilityDisplay[lineage.availability].symbol}</b></div>)}</div></>}</aside>
         </div>
@@ -451,13 +450,13 @@ function GeotechnicalWorkbench({ databaseSources, onNavigate, onRefresh, project
       </>}
 
       <section className="panel geotech-details-panel"><div className="geotech-detail-tabs" role="tablist" aria-label="Geotechnical details">{([['method', 'Method details'], ['mapping', 'Source mapping'], ['references', 'References'], ['history', 'Run history']] as const).map(([id, label]) => <button aria-selected={detailTab === id} className={detailTab === id ? 'is-active' : ''} key={id} onClick={() => setDetailTab(id)} role="tab" type="button">{id === 'history' ? <History size={13} /> : null}{label}</button>)}</div>
-        {detailTab === 'method' ? <div className="geotech-method-details"><div><span>Method</span><strong>{classification.label} · {classification.method}</strong></div><div><span>Version</span><strong>{classification.ready ? RMR76_METHOD_DEFINITION.version : 'Not installed'}</strong></div><div><span>Execution</span><strong>{classification.ready ? 'Deterministic · interval support' : 'Separate method required'}</strong></div><p>{classification.ready ? 'Five basic component ratings plus the excavation-specific orientation adjustment are evaluated from Database-resolved canonical inputs. Thresholds and class boundaries remain in the engineering calculation module.' : `${classification.label} cannot reuse RMR76 formulas. It will create separate runs and result fields when its deterministic method definition is installed.`}</p></div> : null}
+        {detailTab === 'method' ? <div className="geotech-method-details"><div><span>Method</span><strong>{classification.label} · {classification.method}</strong></div><div><span>Version</span><strong>{classification.ready ? RMR76_METHOD_DEFINITION.version : 'Not installed'}</strong></div><div><span>Execution</span><strong>{classification.ready ? 'Deterministic' : 'Setup required'}</strong></div></div> : null}
         {detailTab === 'mapping' ? <div className="geotech-mapping-list">{classification.ready ? RMR76_METHOD_DEFINITION.requiredInputs.map((definition) => {
-          const columnKey = effectiveMapping[definition.key]
-          const column = selectedDatabaseSource?.columns.find((item) => item.key === columnKey)
-          const resolved = selectedDatabaseSource === undefined && scopedIntervals[0] !== undefined ? resolver.resolve(scopedIntervals[0], selectedSourceIds).inputs[definition.key] : null
-          const mapped = column !== undefined || resolved?.lineage != null
-          return <div key={definition.key}><span className={`availability-${mapped ? 'direct' : 'missing'}`}>{availabilityDisplay[mapped ? 'direct' : 'missing'].symbol}</span><strong>{definition.label}</strong><small>{column === undefined ? resolved?.lineage == null ? 'No column selected' : `${resolved.lineage.sourceLabel} · ${resolved.lineage.sourceFieldId}` : `${rmrColumnLabel(column)} · ${column.key}`}</small></div>
+          const selection = effectiveMapping[definition.key]
+          const source = databaseSources.find((item) => item.dataset.id === selection?.sourceId)
+          const column = source?.columns.find((item) => item.key === selection?.columnKey)
+          const mapped = column !== undefined
+          return <div key={definition.key}><span className={`availability-${mapped ? 'direct' : 'missing'}`}>{availabilityDisplay[mapped ? 'direct' : 'missing'].symbol}</span><strong>{definition.label}</strong><small>{column === undefined ? 'Not mapped' : `${source?.dataset.name} → ${rmrColumnLabel(column)} · ${column.key}`}</small></div>
         }) : <p>Source mapping is method-specific and has not been configured for {classification.label}.</p>}</div> : null}
         {detailTab === 'references' ? <div className="geotech-reference-list"><a href={GEOTECHNICAL_REFERENCES.rmr76.url} rel="noreferrer" target="_blank"><span><strong>Bieniawski 1976</strong><small>Original publication record</small></span><ExternalLink size={14} /></a><a href={GEOTECHNICAL_REFERENCES.rmr76Table.url} rel="noreferrer" target="_blank"><span><strong>RMR76 rating tables</strong><small>Hoek, Kaiser &amp; Bawden · pp. 103–104</small></span><ExternalLink size={14} /></a></div> : null}
         {detailTab === 'history' ? <div className="geotech-run-history">{savedDocument.runs.length === 0 ? <p>No saved classification runs yet.</p> : savedDocument.runs.map((item) => <div key={`${item.scenarioId}-${item.runId}`}><Check size={13} /><span><strong>{item.scenarioName} · {item.runId.slice(0, 8)}</strong><small>{item.classificationId.toUpperCase()} · snapshot #{item.snapshotId} · {new Date(item.savedAt).toLocaleString()} · {item.includeComponentRatings ? 'with components' : 'final fields only'}</small></span></div>)}</div> : null}

@@ -30,6 +30,11 @@ import {
 import { Pool, type PoolClient, type PoolConfig } from 'pg'
 import type { LoginAccount, ProjectPermission, UserAccess } from './auth.js'
 import { conflict, notFound } from './errors.js'
+import {
+  generatedLoggingDataset,
+  generatedLoggingDatasetId,
+  generatedLoggingTemplateVersion,
+} from './generated-logging.js'
 import { runProjectProjection } from './projection.js'
 import type { CreateAnalysisRunInput } from './schemas.js'
 import type { DataPoolStore } from './store.js'
@@ -1417,9 +1422,10 @@ export class PostgresDataPoolStore implements DataPoolStore {
           .sort((left, right) => (left.holeId ?? '').localeCompare(right.holeId ?? '')
             || (left.depthFrom ?? Number.POSITIVE_INFINITY) - (right.depthFrom ?? Number.POSITIVE_INFINITY)
             || left.id.localeCompare(right.id))
-        const columns = [...(columnsByTemplate.get(templateRow.id)?.values() ?? [])]
+        // Preserve the complete declared schema, including fields with no values yet.
+        const columns = [...(fieldDefinitions.get(templateRow.id)?.values() ?? [])]
           .sort((left, right) => left.label.localeCompare(right.label) || left.key.localeCompare(right.key))
-        if (records.length === 0 || columns.length === 0) continue
+        if (columns.length === 0) continue
         const category = objectValue(templateRow.template_json).category
         datasets.push({
           category: typeof category === 'string' && category.trim() !== '' ? category.trim() : null,
@@ -1431,6 +1437,44 @@ export class PostgresDataPoolStore implements DataPoolStore {
           version: Number(templateRow.version),
         })
       }
+    }
+    if (generatedLogsPresent) {
+      const exports = await this.#pool.query<{
+        id: string; template_id: string; hole_id: string; name: string; payload_json: unknown; updated_at: Date | string
+      }>(`
+        SELECT DISTINCT ON (log.template_id, log.drill_hole_id)
+          log.id::text AS id, log.template_id::text AS template_id,
+          log.drill_hole_id::text AS hole_id, log.name, log.payload_json, log.updated_at
+        FROM generated_logs AS log
+        WHERE log.project_id = $1 AND log.status <> 'archived'
+          AND log.template_id IS NOT NULL AND log.drill_hole_id IS NOT NULL
+          AND jsonb_typeof(log.payload_json -> 'csv') = 'string'
+        ORDER BY log.template_id, log.drill_hole_id, log.updated_at DESC, log.id DESC
+      `, [projectId])
+      const generated = new Map<string, FieldLoggingDataset>()
+      for (const log of exports.rows) {
+        const template = templateById.get(log.template_id)
+        if (template === undefined || !holeById.has(log.hole_id)) continue
+        const payload = objectValue(log.payload_json)
+        const csv = payload.csv
+        if (typeof csv !== 'string') continue
+        const version = generatedLoggingTemplateVersion(payload, template.version)
+        const dataset = generatedLoggingDataset({ csv, holeId: log.hole_id,
+          id: generatedLoggingDatasetId(log.template_id, version), name: `${template.name} · generated CSV`,
+          updatedAt: iso(log.updated_at), version })
+        const existing = generated.get(dataset.id)
+        if (existing === undefined) generated.set(dataset.id, dataset)
+        else {
+          const columns = new Map(existing.columns.map(column => [column.key, column]))
+          for (const column of dataset.columns) {
+            if (columns.get(column.key)?.dataType !== 'numeric') columns.set(column.key, column)
+          }
+          existing.columns = [...columns.values()]
+          existing.records.push(...dataset.records)
+          if (dataset.updatedAt > existing.updatedAt) existing.updatedAt = dataset.updatedAt
+        }
+      }
+      datasets.push(...generated.values())
     }
     return { datasets, projectId, templates, submissions }
   }
