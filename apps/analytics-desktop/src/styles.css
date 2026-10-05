@@ -6890,3 +6890,89 @@ span.profile-button { cursor: default; }
 .geotech-mean-option { padding: 12px 16px; border-top: 1px solid var(--border); }
 .geotech-mean-option label { display: flex; align-items: center; gap: 8px; font-size: 12px; }
 .geotech-mean-option p { margin: 8px 0 0; font-size: 12px; color: var(--text-muted); }
+
+/* Shared analysis fields: quiet labels, readable values and responsive widths. */
+.app-shell .analysis-toolbar {
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+}
+.app-shell .tool-select.tool-select-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 14px;
+  grid-template-rows: 14px 20px;
+  column-gap: 8px;
+  row-gap: 2px;
+  height: auto;
+  min-height: 48px;
+  min-width: 0;
+  width: 180px;
+  max-width: 100%;
+  padding: 6px 10px;
+  background: var(--input);
+  border-radius: 6px;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+.app-shell .tool-select.tool-select-field > span {
+  grid-area: 1 / 1 / 2 / 3;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+  font: 500 11px/14px var(--font-ui);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.app-shell .tool-select.tool-select-field > select {
+  grid-area: 2 / 1 / 3 / 3;
+  position: static;
+  width: 100%;
+  height: 20px;
+  min-width: 0;
+  padding: 0 22px 0 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--foreground);
+  font: 600 13px/20px var(--font-ui);
+  outline: none;
+}
+.app-shell .tool-select.tool-select-field > svg {
+  grid-area: 2 / 2;
+  align-self: center;
+  color: var(--muted-foreground);
+}
+.app-shell .tool-select.tool-select-field:hover { border-color: var(--muted-foreground); }
+.app-shell .tool-select.tool-select-field:focus-within {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px var(--focus-tint);
+}
+.app-shell .tool-select.tool-select-field:has(select:disabled) { opacity: .6; cursor: default; }
+.app-shell .analysis-toolbar > .tool-select-field { flex: 0 1 180px; }
+.app-shell .analysis-toolbar > :is(.eda-dataset-select, .mv-dataset-select, .domain-dataset-select, .domain-primary-source, .domain-source-select),
+.app-shell .structure-analysis-toolbar > .tool-select-field:first-child {
+  flex: 1 1 280px;
+  width: 280px;
+}
+.app-shell .analysis-toolbar .mv-cluster-count { flex-basis: 110px; width: 110px; }
+.app-shell .analysis-toolbar > .toolbar-spacer { min-width: 0; }
+.app-shell .eda-filter-control { min-width: 0; max-width: 100%; }
+.app-shell .eda-filter-control .tool-select-field { flex: 1; }
+@media (max-width: 760px) {
+  .app-shell .analysis-toolbar > .tool-select-field { flex: 1 1 160px; }
+  .app-shell .analysis-toolbar > .toolbar-spacer { display: none; }
+}
+
+/* Keep the thin app chevron and suppress the bold browser arrow everywhere. */
+.app-shell select:not([multiple]):not([size])::picker-icon {
+  display: none !important;
+}
+@supports not (appearance: base-select) {
+  .app-shell select:not([multiple]):not([size]) {
+    appearance: none !important;
+    -webkit-appearance: none !important;
+    background-image: none !important;
+  }
+}
