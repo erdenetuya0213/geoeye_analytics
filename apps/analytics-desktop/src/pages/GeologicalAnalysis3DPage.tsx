@@ -8,12 +8,15 @@ import { Fragment, lazy, Suspense, useEffect, useMemo, useRef, useState, type Po
 import type { EdaObservation } from '../analysis/eda.js'
 import type { Scene3DHole, Scene3DStructure } from '../components/GeoEyeScene3D.js'
 import type { SceneGridDensity } from '../visualization/scene3dThreeMath.js'
+import { sceneBoundsForPoints, sceneHoleIsLocated, surveyGeometry } from '../visualization/sceneDrillholes.js'
+import { normalizeStructureHoleId } from '../analysis/structureAnalysis.js'
+import { effectiveDrillholes, effectiveSurveysByHoleId } from '../data/localProjectDb.js'
 import { readDrillholeImport } from '../data/drillholeImportStore.js'
 import { readAnalysisResultDocument, type AnalysisResultPackage } from '../data/analysisResultStore.js'
 import { useProjectEdaDatasets } from '../data/liveEda.js'
 import { readSpatialViewRequest } from '../data/spatialViewStore.js'
 import { useGeoEyeSelection } from '../state/SelectionContext.js'
-import { sceneCollarRenderPoint, sceneElevation, type SceneBounds, type SceneViewMode } from '../visualization/scene3dProjection.js'
+import { sceneElevation, type SceneBounds, type SceneViewMode } from '../visualization/scene3dProjection.js'
 import { compileSceneQuery } from '../visualization/scene3dQuery.js'
 import type { SceneTextPreferences } from '../visualization/sceneTextPreferences.js'
 import {
@@ -312,11 +315,17 @@ export function GeologicalAnalysis3DPage({ backgroundColor, onBackgroundColorCha
   })
   const { replaceSelection, selectedIds, toggleSelection } = useGeoEyeSelection()
   const dataset = datasets.find((item) => item.id === datasetId) ?? datasets[0]
-  const importedDrillholes = useMemo(
-    () => workspace.localDrillholeDraft
-      ?? (typeof window === 'undefined' ? undefined : readDrillholeImport(storage)),
-    [storage, workspace.localDrillholeDraft],
-  )
+  const importedDrillholes = useMemo(() => {
+    if (workspace.project === null) return readDrillholeImport(storage)
+    const holes = effectiveDrillholes(workspace.localSnapshot, workspace.localDrillholeDraft)
+    const surveys = effectiveSurveysByHoleId(workspace.localSnapshot, workspace.localDrillholeDraft)
+    return {
+      collar: holes.flatMap((hole) => hole.collar === null ? [] : [{ ...hole.collar, holeId: hole.name }]),
+      survey: holes.flatMap((hole) => (surveys[hole.id] ?? []).map((station) => ({
+        holeId: hole.name, depth: station.measuredDepth, azimuth: station.azimuth, dip: station.dip,
+      }))),
+    }
+  }, [storage, workspace.project, workspace.localSnapshot, workspace.localDrillholeDraft])
   const [savedAnalysisResults, setSavedAnalysisResults] = useState(
     () => readAnalysisResultDocument(storage).packages,
   )
@@ -341,8 +350,10 @@ export function GeologicalAnalysis3DPage({ backgroundColor, onBackgroundColorCha
   if (datasetsQuery.isPending) return <div className="page map2d-page scene3d-page"><div className="eda-state panel">Opening the central 3D analysis viewer…</div></div>
   if (datasetsQuery.isError || dataset === undefined) return <div className="page map2d-page scene3d-page"><div className="eda-state panel">The 3D analysis dataset is unavailable.</div></div>
 
-  const rows = dataset.observations
-  const holes = [...new Set(rows.map((row) => row.holeId))]
+  const rows = dataset.observations.filter((row) => sceneHoleIsLocated(row.holeId, row.easting, row.northing, importedDrillholes?.collar ?? []))
+  const unlocatedCount = dataset.observations.length - rows.length
+  const holes = [...new Map([...rows.map((row) => row.holeId), ...(importedDrillholes?.collar ?? []).map((collar) => collar.holeId)]
+    .map((hole) => [normalizeStructureHoleId(hole), hole])).values()]
   const rowSourceIdSet = new Set(rows.flatMap((row) => sourceIds(row)))
   const applicableAnalysisResults = savedAnalysisResults.filter((result) => (
     (workspace.project === null || result.projectId === workspace.project.id)
@@ -352,28 +363,31 @@ export function GeologicalAnalysis3DPage({ backgroundColor, onBackgroundColorCha
       || result.boreholeIds.some((id) => holes.includes(id))
     )
   ))
-  const importedCollars = new Map((importedDrillholes?.collar ?? []).map((collar) => [collar.holeId, collar]))
+  const importedCollars = new Map((importedDrillholes?.collar ?? []).map((collar) => [normalizeStructureHoleId(collar.holeId), collar]))
   const collarElevationFrom = (row: EdaObservation | undefined) => {
     if (row === undefined) return 0
     const value = row.values['collar.elevation'] ?? row.values.elevation ?? row.values.rl
     return typeof value === 'number' && Number.isFinite(value) ? value : 0
   }
   const collars = new Map(holes.map((hole) => {
-    const imported = importedCollars.get(hole)
-    const firstRow = rows.find((row) => row.holeId === hole)
-    return [hole, imported?.elevation ?? collarElevationFrom(firstRow)]
+    const imported = importedCollars.get(normalizeStructureHoleId(hole))
+    const firstRow = rows.find((row) => normalizeStructureHoleId(row.holeId) === normalizeStructureHoleId(hole))
+    return [normalizeStructureHoleId(hole), imported?.elevation ?? collarElevationFrom(firstRow)]
   }))
-  const elevations = rows.flatMap((row) => [sceneElevation(collars.get(row.holeId) ?? 0, row.depthFrom), sceneElevation(collars.get(row.holeId) ?? 0, row.depthTo)])
-  const collarCoordinates = holes.flatMap((hole) => {
-    const imported = importedCollars.get(hole)
-    return imported === undefined ? [] : [{ x: imported.easting, y: imported.northing }]
+  const geometry = new Map(holes.flatMap((hole) => {
+    const collar = importedCollars.get(normalizeStructureHoleId(hole))
+    return collar === undefined ? [] : [[hole, surveyGeometry(collar, importedDrillholes?.survey ?? [], rows.filter((row) => normalizeStructureHoleId(row.holeId) === normalizeStructureHoleId(hole)).flatMap((row) => [row.depthFrom, row.depthTo]))] as const]
+  }))
+  const tracePoints = [...geometry.values()].flatMap((item) => item.trajectory)
+  const fallbackPoints = rows.flatMap((row) => {
+    if (importedCollars.has(normalizeStructureHoleId(row.holeId))) return []
+    const elevation = collars.get(normalizeStructureHoleId(row.holeId)) ?? 0
+    return [
+      { x: row.easting, y: row.northing, z: sceneElevation(elevation, row.depthFrom) },
+      { x: row.easting, y: row.northing, z: sceneElevation(elevation, row.depthTo) },
+    ]
   })
-  const allX = [...rows.map((row) => row.easting), ...collarCoordinates.map((point) => point.x)]
-  const allY = [...rows.map((row) => row.northing), ...collarCoordinates.map((point) => point.y)]
-  const bounds: SceneBounds = {
-    maxX: Math.max(...allX) + 30, maxY: Math.max(...allY) + 30, maxZ: Math.max(...elevations),
-    minX: Math.min(...allX) - 30, minY: Math.min(...allY) - 30, minZ: Math.min(...elevations) - 10,
-  }
+  const bounds: SceneBounds = sceneBoundsForPoints([...tracePoints, ...fallbackPoints])
   const resolvedSection = {
     ...section,
     centreX: section.centreX ?? (bounds.minX + bounds.maxX) / 2,
@@ -381,7 +395,7 @@ export function GeologicalAnalysis3DPage({ backgroundColor, onBackgroundColorCha
     centreZ: section.centreZ ?? (bounds.minZ + bounds.maxZ) / 2,
   }
   const query = compileSceneQuery(dataset, appliedQuery)
-  const corridorFor = (row: EdaObservation) => sectionCorridorState(row, resolvedSection, sceneElevation(collars.get(row.holeId) ?? 0, (row.depthFrom + row.depthTo) / 2))
+  const corridorFor = (row: EdaObservation) => sectionCorridorState(row, resolvedSection, sceneElevation(collars.get(normalizeStructureHoleId(row.holeId)) ?? 0, (row.depthFrom + row.depthTo) / 2))
   const queryRows = rows.filter((row) => query.matches(row))
   const querySourceIds = new Set(uniqueSourceObservationIds(queryRows))
   const filteredRows = rows.filter((row) => !section.clip || corridorFor(row).inside)
@@ -418,7 +432,7 @@ export function GeologicalAnalysis3DPage({ backgroundColor, onBackgroundColorCha
   const symbolDefinition = activeColorScale.definition
   const { categories, maximum, minimum, values: symbolValues } = activeColorScale
   const effectiveClassification: Classification = activeColorScale.classification
-  const structures = extractStructureObservations(rows, (row) => sceneElevation(collars.get(row.holeId) ?? 0, (row.depthFrom + row.depthTo) / 2))
+  const structures = extractStructureObservations(rows, (row) => sceneElevation(collars.get(normalizeStructureHoleId(row.holeId)) ?? 0, (row.depthFrom + row.depthTo) / 2))
   const layers: Layer[] = buildSceneLayers({
     datasetName: dataset.name,
     handoff: handoff === null ? null : { count: rows.filter((row) => matchesIds(row, handoffIds)).length, label: handoff.label, sourceModule: handoff.sourceModule },
@@ -555,29 +569,23 @@ export function GeologicalAnalysis3DPage({ backgroundColor, onBackgroundColorCha
   }
   const holeRowsById = new Map<string, EdaObservation[]>()
   rows.forEach((row) => {
-    const holeRows = holeRowsById.get(row.holeId) ?? []
+    const holeRows = holeRowsById.get(normalizeStructureHoleId(row.holeId)) ?? []
     holeRows.push(row)
-    holeRowsById.set(row.holeId, holeRows)
+    holeRowsById.set(normalizeStructureHoleId(row.holeId), holeRows)
   })
   const buildSceneHoles = (paneLayers: ReadonlySet<string>, colorOf: (row: EdaObservation) => string): Scene3DHole[] => holes.flatMap((hole) => {
-    const holeRows = [...(holeRowsById.get(hole) ?? [])].sort((left, right) => left.depthFrom - right.depthFrom)
+    const holeRows = [...(holeRowsById.get(normalizeStructureHoleId(hole)) ?? [])].sort((left, right) => left.depthFrom - right.depthFrom)
     const collarRow = holeRows[0]
-    if (collarRow === undefined) return []
-    const importedCollar = importedCollars.get(hole)
-    const collarZ = collars.get(hole) ?? 0
+    const importedCollar = importedCollars.get(normalizeStructureHoleId(hole))
+    if (collarRow === undefined && importedCollar === undefined) return []
+    const collarZ = collars.get(normalizeStructureHoleId(hole)) ?? 0
     const sourceCollar = {
-      x: importedCollar?.easting ?? collarRow.easting,
-      y: importedCollar?.northing ?? collarRow.northing,
+      x: importedCollar?.easting ?? (collarRow?.easting ?? 0),
+      y: importedCollar?.northing ?? (collarRow?.northing ?? 0),
       z: collarZ,
     }
-    // Analytical datasets can begin below MD 0. Keep the collar marker attached
-    // to the first available interval while retaining the source collar as datum.
-    const firstIntervalStart = {
-      x: collarRow.easting,
-      y: collarRow.northing,
-      z: sceneElevation(collarZ, collarRow.depthFrom),
-    }
-    const collar = sceneCollarRenderPoint(sourceCollar, firstIntervalStart)
+    const trace = geometry.get(hole)
+    const collar = sourceCollar
     return [{
       collar,
       id: hole,
@@ -594,7 +602,7 @@ export function GeologicalAnalysis3DPage({ backgroundColor, onBackgroundColorCha
         return [{
           color: colorOf(row),
           faded,
-          from: { x: row.easting, y: row.northing, z: sceneElevation(collarZ, row.depthFrom) },
+          from: trace?.pointAt(row.depthFrom) ?? { x: row.easting, y: row.northing, z: sceneElevation(collarZ, row.depthFrom) },
           id: row.id,
           label: `${hole} ${row.depthFrom.toFixed(0)} m`,
           linked,
@@ -602,10 +610,10 @@ export function GeologicalAnalysis3DPage({ backgroundColor, onBackgroundColorCha
           selected,
           thickness,
           title: `${hole} · ${row.depthFrom.toFixed(1)}–${row.depthTo.toFixed(1)} m · ${sourceIds(row).join(', ')}`,
-          to: { x: next?.easting ?? row.easting, y: next?.northing ?? row.northing, z: sceneElevation(collarZ, row.depthTo) },
+          to: trace?.pointAt(row.depthTo) ?? { x: next?.easting ?? row.easting, y: next?.northing ?? row.northing, z: sceneElevation(collarZ, row.depthTo) },
         }]
       }),
-      trajectory: [collar, ...holeRows.map((row) => ({ x: row.easting, y: row.northing, z: sceneElevation(collarZ, row.depthTo) }))],
+      trajectory: trace?.trajectory ?? [collar, ...holeRows.map((row) => ({ x: row.easting, y: row.northing, z: sceneElevation(collarZ, row.depthTo) }))],
     }]
   })
   const buildSceneStructures = (paneLayers: ReadonlySet<string>): Scene3DStructure[] => structures.flatMap((structure) => {
@@ -861,6 +869,6 @@ export function GeologicalAnalysis3DPage({ backgroundColor, onBackgroundColorCha
         {panel === 'legend' ? <div className="scene3d-legend-overlay"><header><span>{symbolDefinition?.label}</span><small>{effectiveClassification}</small></header>{effectiveClassification === 'categorical' ? categories.slice(0, 7).map((category, index) => <div key={category}><i style={{ background: categoryPalette[index % categoryPalette.length] }} /><span>{category}</span></div>) : <><i className="is-gradient" /><div><span>{displayNumber(maximum, 2)}</span><span>{displayNumber(minimum, 2)}</span></div></>}</div> : null}
       </main>
     </div>
-    <footer className={`map2d-statusbar scene3d-statusbar ${leftCollapsed ? 'is-left-collapsed' : ''}`}><span>Ready</span><span><Crosshair size={11} /> {camera === 'section' ? `AZ ${section.azimuth}° / DIP ${section.dip}°` : `${camera} camera`}</span><span>Vertical {verticalExaggeration.toFixed(2)}×</span><span>{renderRows.length} visible / {rows.length} · {selectedIds.length} selected</span></footer>
+    <footer className={`map2d-statusbar scene3d-statusbar ${leftCollapsed ? 'is-left-collapsed' : ''}`}><span>{unlocatedCount > 0 ? `${unlocatedCount} records without a collar location` : 'Ready'}</span><span><Crosshair size={11} /> {camera === 'section' ? `AZ ${section.azimuth}° / DIP ${section.dip}°` : `${camera} camera`}</span><span>Vertical {verticalExaggeration.toFixed(2)}×</span><span>{renderRows.length} visible / {rows.length} · {selectedIds.length} selected</span></footer>
   </div>
 }
