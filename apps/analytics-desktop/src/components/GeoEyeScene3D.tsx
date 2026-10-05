@@ -771,17 +771,19 @@ export default function GeoEyeScene3D(props: GeoEyeScene3DProps) {
       labels.domElement.className = 'geoeye-scene3d-label-layer'
       container.append(labels.domElement)
       const controls = new OrbitControls(camera, renderer.domElement)
-      controls.enableDamping = true
-      controls.dampingFactor = .08
+      // Apply each pointer delta immediately; inertia makes geological features
+      // lag behind the cursor and drift after a precise drag has ended.
+      controls.enableDamping = false
       controls.keyPanSpeed = 14
       controls.minDistance = 4
       controls.maxDistance = 30_000
-      controls.panSpeed = .75
+      controls.panSpeed = 1
       // Keep OrbitControls' object-drag convention so the rendered geology follows
       // the pointer instead of moving in the opposite direction.
-      controls.rotateSpeed = .55
+      controls.rotateSpeed = 1
       controls.screenSpacePanning = true
       controls.zoomSpeed = .85
+      controls.zoomToCursor = true
 
       const content = new THREE.Group()
       scene.add(content)
@@ -886,7 +888,9 @@ export default function GeoEyeScene3D(props: GeoEyeScene3DProps) {
         pointerStart = { x: event.clientX, y: event.clientY }
       }
       const pointerMove = (event: PointerEvent) => {
-        if (!activeRef.current) {
+        // Raycasting thousands of intervals during an orbit competes with the
+        // camera update. Hover feedback is only useful when no drag is active.
+        if (!activeRef.current || event.buttons !== 0) {
           renderer.domElement.classList.remove('is-over-object')
           return
         }
@@ -951,7 +955,7 @@ export default function GeoEyeScene3D(props: GeoEyeScene3DProps) {
   }, [
     props.backgroundColor, props.bounds, props.holes, props.labels, props.opacity, props.section,
     props.gridDensity, props.showAxes, props.showAxisNumbers, props.showAxisTitles, props.showCollars, props.showGrid, props.showGridCoordinates, props.showIntervals, props.showTrajectories, props.structures, props.verticalExaggeration,
-    activePreset, isPlanView,
+    activePreset === 'top', isPlanView,
   ])
 
   useEffect(() => setActivePreset(presetForCameraMode(props.cameraMode)), [props.cameraMode])
