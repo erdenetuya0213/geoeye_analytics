@@ -23,6 +23,7 @@ export interface Rmr76Inputs {
 }
 
 export interface Rmr76Result {
+  ratingBasis?: 'basic' | 'adjusted'
   basic: number | null
   classification: string | null
   missing: string[]

@@ -14,10 +14,10 @@ import {
   Layers3,
   Map as MapIcon,
   Save,
-  Table2,
   X,
 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
+import { GeotechnicalResultsTable, type ResultStatusFilter } from './GeotechnicalResultsTable.js'
 import {
   buildRmr76SourceSignature,
   calculateRmr76Intervals,
@@ -63,7 +63,6 @@ import { effectiveDrillholes } from '../data/localProjectDb.js'
 type ClassificationId = 'rmr76' | 'rmr89' | 'mrmr' | 'q-system'
 type DepthRange = 'all' | 'shallow' | 'deep'
 type DetailTab = 'method' | 'mapping' | 'references' | 'history'
-type ResultTab = 'downhole' | 'table' | 'components'
 
 interface GeotechnicalPageProps {
   onNavigate: (section: SectionId) => void
@@ -176,7 +175,6 @@ function GeotechnicalWorkbench({ databaseSources, onNavigate, projectId, tenantI
       return column !== undefined && isRmrColumnCompatible(definition.key, column) ? [[definition.key, selection]] : []
     })) as Rmr76ParameterSourceMapping
   }, [databaseSources, parameterMappings])
-  const mappingCount = RMR76_METHOD_DEFINITION.requiredInputs.filter((definition) => effectiveMapping[definition.key] !== undefined).length
   const mappingComplete = isCompleteRmrSourceMapping(effectiveMapping, databaseSources)
   const joinedDatabaseDataset = useMemo(() => buildJoinedRmrDataset(databaseSources, effectiveMapping, excavationType, {
     useJointConditionMean,
@@ -189,7 +187,6 @@ function GeotechnicalWorkbench({ databaseSources, onNavigate, projectId, tenantI
   }), [databaseSources, effectiveMapping, excavationType, useJointConditionMean, holeId, depthRange])
   const baseDatasets = [joinedDatabaseDataset.dataset]
   const joinDiagnostics = joinedDatabaseDataset.diagnostics
-  const selectedLocalSourceCount = new Set(Object.values(effectiveMapping).flatMap((selection) => selection === undefined ? [] : [selection.sourceId])).size
   const [templateVersion, setTemplateVersion] = useState(() => {
     const initialDataset = baseDatasets[0]
     if (initialDataset === undefined) return 1
@@ -202,7 +199,9 @@ function GeotechnicalWorkbench({ databaseSources, onNavigate, projectId, tenantI
   const [selectedIntervalId, setSelectedIntervalId] = usePersistentState<string | null>('geotechnical.selectedIntervalId', null, { scope: persistenceScope })
   const [includeComponents, setIncludeComponents] = usePersistentState('geotechnical.includeComponents', false)
   const [detailTab, setDetailTab] = usePersistentState<DetailTab>('geotechnical.detailTab', 'method')
-  const [resultTab, setResultTab] = usePersistentState<ResultTab>('geotechnical.resultTab', 'downhole')
+  const [activeTab, setActiveTab] = useState<'input' | 'result'>(run === null ? 'input' : 'result')
+  const [intervalDetailsOpen, setIntervalDetailsOpen] = useState(false)
+  const [resultStatus, setResultStatus] = useState<ResultStatusFilter>('all')
   const [saveAsOpen, setSaveAsOpen] = useState(false)
   const [savedDocument, setSavedDocument] = useState(() => readGeotechnicalDerivedDocument(storage))
 
@@ -231,11 +230,6 @@ function GeotechnicalWorkbench({ databaseSources, onNavigate, projectId, tenantI
   const selectedResult = run?.intervals.find((interval) => interval.id === selectedIntervalId)
     ?? run?.intervals[0]
     ?? null
-  const groupedResults = useMemo(() => {
-    const groups = new Map<string, Rmr76IntervalResult[]>()
-    for (const interval of run?.intervals ?? []) groups.set(interval.holeId, [...(groups.get(interval.holeId) ?? []), interval])
-    return [...groups.entries()]
-  }, [run])
   useEffect(() => {
     if (dataset === undefined) return
     if (holeId !== 'all' && !holes.includes(holeId)) setHoleId('all')
@@ -287,7 +281,10 @@ function GeotechnicalWorkbench({ databaseSources, onNavigate, projectId, tenantI
     setRun(next)
     setSavedRunId(null)
     setSelectedIntervalId(next.intervals[0]?.id ?? null)
-    setResultTab('downhole')
+    setActiveTab('result')
+    setResultStatus('all')
+    setIntervalDetailsOpen(false)
+    document.getElementById('rmr-tab-result')?.focus()
   }
 
   const save = (createVersion: boolean) => durable.perform(async () => {
@@ -353,7 +350,8 @@ function GeotechnicalWorkbench({ databaseSources, onNavigate, projectId, tenantI
     const match = run?.intervals.find((interval) => interval.status === status)
     if (match === undefined) return
     setSelectedIntervalId(match.id)
-    setResultTab('table')
+    setResultStatus(status)
+    setActiveTab('result')
   }
 
   const openSpatial = (mode: 'plan' | 'isometric') => {
@@ -377,6 +375,17 @@ function GeotechnicalWorkbench({ databaseSources, onNavigate, projectId, tenantI
       <h1 className="sr-only">Geotechnical classification</h1>
       {durable.notice ? <p role="status">{durable.notice}</p> : null}
 
+      <div className="rmr-workbench-tabs" role="tablist" aria-label="RMR workspace" onKeyDown={event => {
+        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+        event.preventDefault()
+        const next = event.key === 'Home' ? 'input' : event.key === 'End' ? 'result' : activeTab === 'input' ? 'result' : 'input'
+        setActiveTab(next)
+        document.getElementById('rmr-tab-' + next)?.focus()
+      }}>
+        <button id="rmr-tab-input" role="tab" aria-selected={activeTab === 'input'} aria-controls="rmr-input-panel" tabIndex={activeTab === 'input' ? 0 : -1} onClick={() => setActiveTab('input')} type="button">Input</button>
+        <button id="rmr-tab-result" role="tab" aria-selected={activeTab === 'result'} aria-controls="rmr-result-panel" tabIndex={activeTab === 'result' ? 0 : -1} onClick={() => setActiveTab('result')} type="button">Result</button>
+      </div>
+      <div id="rmr-input-panel" role="tabpanel" aria-labelledby="rmr-tab-input" hidden={activeTab !== 'input'}>
       <section className="panel geotech-setup" aria-label="Geotechnical calculation setup">
         <div className="geotech-setup-row">
           <div className="geotech-workspace-title" aria-hidden="true">
@@ -421,35 +430,38 @@ function GeotechnicalWorkbench({ databaseSources, onNavigate, projectId, tenantI
         {classification.ready ? <div className="geotech-readiness-list" aria-label="Canonical input readiness">{readiness.map((item) => <button aria-expanded="false" className={`availability-${item.availability}`} key={item.key} type="button"><b>{availabilityDisplay[item.availability].symbol}</b><span>{item.label}</span><small>{availabilityDisplay[item.availability].label}</small></button>)}</div> : <div className="geotech-method-unavailable"><AlertTriangle size={14} /><span><strong>{classification.label} starts a separate method workspace.</strong> Its deterministic {classification.method} definition and required Database mappings are not installed, so no RMR76 result can be overwritten.</span></div>}
       </section>
 
-      {run === null ? <section className="panel geotech-empty-state"><div className="geotech-empty-hero"><span className="geotech-empty-icon"><Database size={27} /></span><p className="eyebrow">RMR76 calculation</p><h2>{classification.ready ? !mappingComplete ? 'Map six inputs' : scopedIntervals.length === 0 ? 'No matching intervals' : `${classification.label} is ready` : `${classification.label} requires setup`}</h2>{classification.ready ? <><div className="geotech-empty-metrics"><span><strong>{joinDiagnostics.matchedIntervalCount}</strong><small>Intervals</small></span><span><strong>{mappingCount} / {RMR76_METHOD_DEFINITION.requiredInputs.length}</strong><small>Inputs mapped</small></span><span><strong>{selectedLocalSourceCount}</strong><small>Templates selected</small></span></div><button className="button button-accent geotech-empty-action" disabled={!mappingComplete || scopedIntervals.length === 0} onClick={calculate} type="button"><Calculator size={15} /> Calculate {classification.label}</button><div className="geotech-availability-legend" aria-label="Input availability legend"><span><b className="availability-direct">✓</b> Valid</span><span><b className="availability-missing">!</b> Missing</span></div></> : null}</div></section> : <>
-        {stale ? <div className="geotech-stale-banner" role="status"><AlertTriangle size={15} /><span>Snapshot or scope changed. Run {run.runId.slice(0, 8)} remains pinned to snapshot #{run.snapshotId} for review until you recalculate.</span></div> : null}
+      </div>
+      <div id="rmr-result-panel" role="tabpanel" aria-labelledby="rmr-tab-result" hidden={activeTab !== 'result'}>
+      {run === null ? <section className="panel rmr-empty-result"><strong>No results</strong><button className="button button-secondary" onClick={() => setActiveTab('input')} type="button">Go to Input</button></section> : <>
+        {stale ? <div className="geotech-stale-banner" role="status"><AlertTriangle size={15} /><span>Results out of date.</span><button className="button button-secondary" type="button" onClick={() => setActiveTab('input')}>Update inputs</button></div> : null}
         <section className="geotech-summary-grid" aria-label="RMR76 result summary">
-          <div><span>Mean RMR</span><strong>{formatScore(run.summary.mean)}</strong><small>Valid intervals</small></div><div><span>Median RMR</span><strong>{formatScore(run.summary.median)}</strong><small>Valid intervals</small></div><div><span>Valid</span><strong>{run.summary.valid}</strong><small>Calculated</small></div>
-          <button disabled={run.summary.excluded === 0} onClick={() => chooseStatus('excluded')} type="button"><span>Excluded</span><strong>{run.summary.excluded}</strong><small>Click for exact reason</small></button><button disabled={run.summary.missing === 0} onClick={() => chooseStatus('missing')} type="button"><span>Missing</span><strong>{run.summary.missing}</strong><small>Click for exact reason</small></button>
+          <div><span>Mean RMR</span><strong>{formatScore(run.summary.mean)}</strong></div><div><span>Median RMR</span><strong>{formatScore(run.summary.median)}</strong></div><div><span>Calculated</span><strong>{run.summary.valid}</strong></div>
+          <button disabled={run.summary.excluded === 0} onClick={() => chooseStatus('excluded')} type="button"><span>Excluded</span><strong>{run.summary.excluded}</strong></button><button disabled={run.summary.missing === 0} onClick={() => chooseStatus('missing')} type="button"><span>Missing</span><strong>{run.summary.missing}</strong></button>
           <div className="geotech-class-proportions"><span>Class proportions</span><div>{Object.entries(run.summary.classCounts).map(([classificationName, count]) => <i key={classificationName} style={{ flex: count }} title={`${classificationName}: ${count}`}><b>{classCode(classificationName)}</b><small>{Math.round(count / Math.max(1, run.summary.valid) * 100)}%</small></i>)}</div></div>
         </section>
 
-        <div className="geotech-results-workspace">
+        <div className="geotech-results-workspace rmr-table-workspace">
           <main className="panel geotech-results-panel">
-            <div className="panel-heading geotech-results-heading"><div><p className="eyebrow">Interval results</p><h2>{RMR76_METHOD_DEFINITION.name}</h2></div><span className="geotech-run-id">Run {run.runId.slice(0, 8)} · Snapshot #{run.snapshotId}</span></div>
-            <div className="geotech-result-tabs" role="tablist" aria-label="Result views"><button aria-selected={resultTab === 'downhole'} className={resultTab === 'downhole' ? 'is-active' : ''} onClick={() => setResultTab('downhole')} role="tab" type="button"><Layers3 size={13} />Downhole</button><button aria-selected={resultTab === 'table'} className={resultTab === 'table' ? 'is-active' : ''} onClick={() => setResultTab('table')} role="tab" type="button"><Table2 size={13} />Table</button><button aria-selected={resultTab === 'components'} className={resultTab === 'components' ? 'is-active' : ''} onClick={() => setResultTab('components')} role="tab" type="button"><Calculator size={13} />Components</button></div>
-            {resultTab === 'downhole' ? <div className="geotech-downhole-groups" aria-label="Downhole RMR view grouped by hole">{groupedResults.map(([groupHoleId, intervals]) => <section key={groupHoleId}><header><Database size={12} /><strong>{groupHoleId}</strong><small>{intervals.length} intervals · {formatInterval(intervals[0]?.depthFrom ?? 0, intervals.at(-1)?.depthTo ?? 0)}</small></header><div className="geotech-downhole">{intervals.map((interval) => <button className={interval.id === selectedResult?.id ? 'is-selected' : ''} key={interval.id} onClick={() => setSelectedIntervalId(interval.id)} type="button"><span>{formatInterval(interval.depthFrom, interval.depthTo)}</span><i className={`status-${interval.status}`} style={{ width: `${interval.calculation?.total ?? 7}%` }} /><b>{interval.calculation?.total ?? '—'}</b></button>)}</div></section>)}</div> : null}
-            {resultTab === 'table' ? <div className="geotech-result-table" role="table" aria-label="RMR76 interval results"><div className="geotech-result-row is-header" role="row"><span>Hole / depth</span><span>RMR</span><span>Class</span><span>RQD</span><span>UCS</span><span>Joint condition</span><span>Status</span></div>{run.intervals.map((interval) => { const jointCondition = interval.resolvedInputs['geotech.joint_condition']; return <button className={`geotech-result-row ${interval.id === selectedResult?.id ? 'is-selected' : ''}`} key={interval.id} onClick={() => setSelectedIntervalId(interval.id)} role="row" type="button"><span><strong>{interval.holeId}</strong><small>{formatInterval(interval.depthFrom, interval.depthTo)}</small></span><b>{interval.calculation?.total ?? '—'}</b><span>{classCode(interval.calculation?.classification)}</span><span>{interval.inputValues.rqdPercent?.toFixed(1) ?? '—'}%</span><span>{interval.inputValues.ucsMpa?.toFixed(0) ?? '—'} MPa</span><span>{jointCondition.availability === 'missing' ? '—' : String(jointCondition.value).replaceAll('-', ' ')}</span><span className={`geotech-status status-${interval.status}`}>{statusText(interval)}</span></button> })}</div> : null}
-            {resultTab === 'components' ? <div className="geotech-components-table" role="table" aria-label="RMR76 component ratings"><div className="is-header"><span>Hole / depth</span><span>Basic</span><span>Strength</span><span>RQD</span><span>Spacing</span><span>Condition</span><span>Water</span><span>Orient.</span><span>Final</span></div>{run.intervals.map((interval) => <button className={interval.id === selectedResult?.id ? 'is-selected' : ''} key={interval.id} onClick={() => setSelectedIntervalId(interval.id)} role="row" type="button"><span><strong>{interval.holeId}</strong><small>{formatInterval(interval.depthFrom, interval.depthTo)}</small></span><b>{interval.calculation?.basic ?? '—'}</b><span>{scoreFor(interval, 'strength') ?? '—'}</span><span>{scoreFor(interval, 'rqd') ?? '—'}</span><span>{scoreFor(interval, 'jointSpacing') ?? '—'}</span><span>{scoreFor(interval, 'jointCondition') ?? '—'}</span><span>{scoreFor(interval, 'groundwater') ?? '—'}</span><span>{scoreFor(interval, 'orientation') ?? '—'}</span><b>{interval.calculation?.total ?? '—'}</b></button>)}</div> : null}
+            <div className="panel-heading geotech-results-heading"><div><p className="eyebrow">Interval results</p><h2>RMR results &amp; derived values</h2></div><span className="geotech-run-id">{run.intervals.length.toLocaleString()} intervals · {new Set(run.intervals.map(interval => interval.holeId)).size} boreholes</span></div>
+            <GeotechnicalResultsTable key={run.runId} intervals={run.intervals} selectedId={intervalDetailsOpen ? selectedResult?.id ?? null : null} onSelect={id => { setSelectedIntervalId(id); setIntervalDetailsOpen(true) }} status={resultStatus} onStatusChange={setResultStatus} />
+
+
+
           </main>
 
-          <aside className="panel geotech-detail-panel">{selectedResult === null ? null : <><div className="panel-heading"><div><p className="eyebrow">Selected interval</p><h2>{formatInterval(selectedResult.depthFrom, selectedResult.depthTo)}</h2></div><strong className="geotech-detail-score">{selectedResult.calculation?.total ?? '—'}</strong></div><div className="geotech-detail-class"><span>{selectedResult.calculation?.classification ?? statusText(selectedResult)}</span><small>{selectedResult.holeId} · {selectedResult.lithology}</small></div>
-            {selectedResult.status === 'missing' ? <div className="geotech-reason-card is-missing"><AlertTriangle size={14} /><span><strong>Missing: {selectedResult.missing.map(missingReason).join('; ')}</strong><small>The interval is retained, but no final classification is calculated.</small></span><button onClick={() => onNavigate('data-pool')} type="button">Open Database</button></div> : null}
+          <details className="panel rmr-interval-disclosure" open={intervalDetailsOpen} onToggle={event => setIntervalDetailsOpen(event.currentTarget.open)}><summary>Selected interval details <span>{selectedResult?.holeId} · {selectedResult === null ? '' : formatInterval(selectedResult.depthFrom, selectedResult.depthTo)}</span><ChevronDown size={14} /></summary><aside className="geotech-detail-panel">{selectedResult === null ? null : <><div className="panel-heading"><div><p className="eyebrow">Selected interval</p><h2>{formatInterval(selectedResult.depthFrom, selectedResult.depthTo)}</h2></div><strong className="geotech-detail-score">{selectedResult.calculation?.total ?? '—'}</strong></div><div className="geotech-detail-class"><span>{selectedResult.calculation?.classification ?? statusText(selectedResult)}</span><small>{selectedResult.holeId} · {selectedResult.lithology}</small></div>
+            {selectedResult.status === 'missing' ? <div className="geotech-reason-card is-missing"><AlertTriangle size={14} /><span><strong>Missing: {selectedResult.missing.map(missingReason).join('; ')}</strong></span><button onClick={() => onNavigate('data-pool')} type="button">Open Database</button></div> : null}
             {selectedResult.status === 'excluded' ? <div className="geotech-reason-card"><AlertTriangle size={14} /><span><strong>Excluded: {selectedResult.exclusionReason}</strong><small>Source: {selectedResult.exclusionSource ?? 'Database quality rule'}</small></span></div> : null}
-            <dl className="geotech-component-list"><div className="geotech-component-heading"><dt>Basic RMR</dt><dd>{selectedResult.calculation?.basic ?? '—'}</dd></div>{(['strength', 'rqd', 'jointSpacing', 'jointCondition', 'groundwater'] as const).map((key) => <div key={key}><dt>{componentLabels[key]}</dt><dd>{scoreFor(selectedResult, key) === null ? '—' : `${scoreFor(selectedResult, key)} pts`}</dd></div>)}<div className="geotech-component-heading"><dt>Orientation adjustment</dt><dd>{scoreFor(selectedResult, 'orientation') === null ? '—' : `${scoreFor(selectedResult, 'orientation')} pts`}</dd></div><div className="is-total"><dt>Final RMR</dt><dd>{selectedResult.calculation?.total ?? '—'}</dd></div><div className="is-class"><dt>Class</dt><dd>{selectedResult.calculation?.classification ?? '—'}</dd></div></dl>
-            <div className="geotech-lineage"><h3>Source lineage</h3>{selectedResult.lineage.map((lineage) => <div key={`${lineage.canonicalKey}-${lineage.observationId}`}><CircleDot size={11} /><span><strong>{lineage.canonicalKey}</strong><small>{lineage.sourceLabel} · {lineage.sourceFieldId}</small></span><b>{availabilityDisplay[lineage.availability].symbol}</b></div>)}</div></>}</aside>
+            <dl className="geotech-component-list"><div className="geotech-component-heading"><dt>Basic RMR</dt><dd>{selectedResult.calculation?.basic ?? '—'}</dd></div>{(['strength', 'rqd', 'jointSpacing', 'jointCondition', 'groundwater'] as const).map((key) => <div key={key}><dt>{componentLabels[key]}</dt><dd>{scoreFor(selectedResult, key) === null ? '—' : `${scoreFor(selectedResult, key)} pts`}</dd></div>)}<div className="geotech-component-heading"><dt>Orientation adjustment</dt><dd>{scoreFor(selectedResult, 'orientation') === null ? 'Not assessed' : `${scoreFor(selectedResult, 'orientation')} pts`}</dd></div><div className="is-total"><dt>{selectedResult.calculation === null ? 'RMR76 · not calculated' : selectedResult.calculation.ratingBasis === 'basic' ? 'Basic RMR76' : 'Adjusted RMR76'}</dt><dd>{selectedResult.calculation?.total ?? '—'}</dd></div><div className="is-class"><dt>Class</dt><dd>{selectedResult.calculation?.classification ?? '—'}</dd></div></dl>
+            <div className="geotech-lineage"><h3>Source lineage</h3>{selectedResult.lineage.map((lineage) => <div key={`${lineage.canonicalKey}-${lineage.observationId}`}><CircleDot size={11} /><span><strong>{lineage.canonicalKey}</strong><small>{lineage.sourceLabel} · {lineage.sourceFieldId}</small></span><b>{availabilityDisplay[lineage.availability].symbol}</b></div>)}</div></>}</aside></details>
         </div>
 
-        {!isSaved && !stale && run.summary.valid > 0 ? <section className="panel geotech-save-strip"><div><Save size={17} /><span><strong>Save RMR76 analysis</strong><small>Updates template v{templateVersion} with GeoEye-owned derived fields, its analysis file, and graph images.</small></span></div><label><input checked={includeComponents} onChange={(event) => setIncludeComponents(event.target.checked)} type="checkbox" /> Component ratings</label><button className="button button-secondary" onClick={() => setSaveAsOpen(true)} type="button">Save As…</button><button className="button button-accent" onClick={() => save(false)} type="button"><Save size={14} /> Save</button></section> : null}
-        {isSaved ? <section className="panel geotech-saved-strip"><CheckCircle2 size={17} /><span><strong>Saved · {savedScenarioName}</strong><small>Derived fields, the RMR76 analysis file, and graph images were saved together.</small></span><div className="geotech-after-save-actions"><button className="button button-secondary" onClick={() => onNavigate('explore')} type="button"><BarChart3 size={14} /> Open in Statistics</button><button className="button button-secondary" onClick={() => onNavigate('domain')} type="button"><Layers3 size={14} /> Open in Domain</button><button className="button button-secondary" onClick={() => openSpatial('plan')} type="button"><MapIcon size={14} /> View in 2D</button><button className="button button-secondary" onClick={() => openSpatial('isometric')} type="button"><Box size={14} /> View in 3D</button><button className="button button-secondary" onClick={() => setSaveAsOpen(true)} type="button">Save As…</button><button className="button button-accent" onClick={() => save(false)} type="button"><Save size={14} /> Save</button></div></section> : null}
+        {!isSaved && !stale && run.summary.valid > 0 ? <section className="panel geotech-save-strip"><div><Save size={17} /><span><strong>Save RMR76 analysis</strong></span></div><label><input checked={includeComponents} onChange={(event) => setIncludeComponents(event.target.checked)} type="checkbox" /> Component ratings</label><button className="button button-secondary" onClick={() => setSaveAsOpen(true)} type="button">Save As…</button><button className="button button-accent" onClick={() => save(false)} type="button"><Save size={14} /> Save</button></section> : null}
+        {isSaved ? <section className="panel geotech-saved-strip"><CheckCircle2 size={17} /><span><strong>Saved · {savedScenarioName}</strong></span><div className="geotech-after-save-actions"><button className="button button-secondary" onClick={() => onNavigate('explore')} type="button"><BarChart3 size={14} /> Open in Statistics</button><button className="button button-secondary" onClick={() => onNavigate('domain')} type="button"><Layers3 size={14} /> Open in Domain</button><button className="button button-secondary" onClick={() => openSpatial('plan')} type="button"><MapIcon size={14} /> View in 2D</button><button className="button button-secondary" onClick={() => openSpatial('isometric')} type="button"><Box size={14} /> View in 3D</button><button className="button button-secondary" onClick={() => setSaveAsOpen(true)} type="button">Save As…</button><button className="button button-accent" onClick={() => save(false)} type="button"><Save size={14} /> Save</button></div></section> : null}
       </>}
+      </div>
 
-      <section className="panel geotech-details-panel"><div className="geotech-detail-tabs" role="tablist" aria-label="Geotechnical details">{([['method', 'Method details'], ['mapping', 'Source mapping'], ['references', 'References'], ['history', 'Run history']] as const).map(([id, label]) => <button aria-selected={detailTab === id} className={detailTab === id ? 'is-active' : ''} key={id} onClick={() => setDetailTab(id)} role="tab" type="button">{id === 'history' ? <History size={13} /> : null}{label}</button>)}</div>
+      <details hidden={activeTab !== 'input'} className="panel rmr-method-disclosure"><summary>Method, source mapping and run history<ChevronDown size={14} /></summary><section className="geotech-details-panel"><div className="geotech-detail-tabs" role="tablist" aria-label="Geotechnical details">{([['method', 'Method details'], ['mapping', 'Source mapping'], ['references', 'References'], ['history', 'Run history']] as const).map(([id, label]) => <button aria-selected={detailTab === id} className={detailTab === id ? 'is-active' : ''} key={id} onClick={() => setDetailTab(id)} role="tab" type="button">{id === 'history' ? <History size={13} /> : null}{label}</button>)}</div>
         {detailTab === 'method' ? <div className="geotech-method-details"><div><span>Method</span><strong>{classification.label} · {classification.method}</strong></div><div><span>Version</span><strong>{classification.ready ? RMR76_METHOD_DEFINITION.version : 'Not installed'}</strong></div><div><span>Execution</span><strong>{classification.ready ? 'Deterministic' : 'Setup required'}</strong></div></div> : null}
         {detailTab === 'mapping' ? <div className="geotech-mapping-list">{classification.ready ? RMR76_METHOD_DEFINITION.requiredInputs.map((definition) => {
           const selection = effectiveMapping[definition.key]
@@ -460,7 +472,7 @@ function GeotechnicalWorkbench({ databaseSources, onNavigate, projectId, tenantI
         }) : <p>Source mapping is method-specific and has not been configured for {classification.label}.</p>}</div> : null}
         {detailTab === 'references' ? <div className="geotech-reference-list"><a href={GEOTECHNICAL_REFERENCES.rmr76.url} rel="noreferrer" target="_blank"><span><strong>Bieniawski 1976</strong><small>Original publication record</small></span><ExternalLink size={14} /></a><a href={GEOTECHNICAL_REFERENCES.rmr76Table.url} rel="noreferrer" target="_blank"><span><strong>RMR76 rating tables</strong><small>Hoek, Kaiser &amp; Bawden · pp. 103–104</small></span><ExternalLink size={14} /></a></div> : null}
         {detailTab === 'history' ? <div className="geotech-run-history">{savedDocument.runs.length === 0 ? <p>No saved classification runs yet.</p> : savedDocument.runs.map((item) => <div key={`${item.scenarioId}-${item.runId}`}><Check size={13} /><span><strong>{item.scenarioName} · {item.runId.slice(0, 8)}</strong><small>{item.classificationId.toUpperCase()} · snapshot #{item.snapshotId} · {new Date(item.savedAt).toLocaleString()} · {item.includeComponentRatings ? 'with components' : 'final fields only'}</small></span></div>)}</div> : null}
-      </section>
+      </section></details>
 
       {saveAsOpen ? <div className="dialog-backdrop geotech-save-as-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setSaveAsOpen(false) }} role="presentation"><form aria-labelledby="geotech-save-as-title" aria-modal="true" className="geotech-save-as-dialog" onSubmit={(event) => { event.preventDefault(); save(true) }} role="dialog"><header><div><p className="eyebrow">New template revision</p><h2 id="geotech-save-as-title">Save As v{templateVersion + 1}</h2></div><button aria-label="Close Save As" className="icon-button" onClick={() => setSaveAsOpen(false)} type="button"><X size={17} /></button></header><div><p>Template v{templateVersion} remains unchanged. The new version receives the derived RMR fields and its own analysis file, run lineage, snapshot, and timestamp.</p></div><footer><button className="button button-secondary" onClick={() => setSaveAsOpen(false)} type="button">Cancel</button><button className="button button-accent" type="submit"><Save size={14} /> Save As v{templateVersion + 1}</button></footer></form></div> : null}
     </div>

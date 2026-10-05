@@ -6976,3 +6976,82 @@ span.profile-button { cursor: default; }
     background-image: none !important;
   }
 }
+.geotech-calculator.geotechnical-page {
+  height: auto;
+  min-height: calc(100dvh - 84px);
+  overflow: visible;
+  gap: 12px;
+}
+.rmr-workbench-tabs { display: flex; flex: none; gap: 24px; border-bottom: 1px solid var(--border); }
+.rmr-workbench-tabs button { padding: 12px 6px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted-foreground); font: inherit; font-size: 14px; cursor: pointer; }
+.rmr-workbench-tabs button[aria-selected="true"] { border-bottom-color: var(--primary); color: var(--primary); font-weight: 650; }
+.geotech-calculator > [role="tabpanel"] { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.geotech-calculator [hidden] { display: none !important; }
+.rmr-empty-result { display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 18px; min-height: 280px; }
+.geotech-calculator .geotech-summary-grid > :is(div, button) { min-height: 64px; }
+.geotech-calculator .rmr-table-workspace .geotech-results-heading .eyebrow { display: none; }
+.geotech-calculator .rmr-table-workspace {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  min-height: 0;
+}
+.geotech-calculator .rmr-table-workspace .geotech-results-panel { height: auto; overflow: hidden; }
+.geotech-calculator .geotech-results-heading { flex-wrap: wrap; gap: 8px; padding: 16px; }
+.geotech-calculator .geotech-results-heading h2 { font-size: 17px; }
+.geotech-calculator .geotech-run-id { font-family: inherit; overflow-wrap: anywhere; }
+.geotech-calculator .geotech-result-tabs { flex-shrink: 0; }
+.geotech-calculator :is(.geotech-input-disclosure, .rmr-interval-disclosure, .rmr-method-disclosure) > summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 13px 16px;
+  cursor: pointer;
+  color: var(--foreground);
+  font-size: 12px;
+  font-weight: 650;
+  list-style: none;
+  background: var(--workspace-chrome);
+}
+.geotech-calculator summary::-webkit-details-marker { display: none; }
+.geotech-calculator summary > span { color: var(--muted-foreground); font-weight: 400; }
+.geotech-calculator summary > svg { margin-left: auto; }
+.geotech-calculator details[open] > summary > svg { transform: rotate(180deg); }
+.geotech-calculator .rmr-interval-disclosure { flex: none; overflow: hidden; }
+.geotech-calculator .rmr-interval-disclosure .geotech-detail-panel { height: auto; max-height: 460px; }
+.geotech-calculator .rmr-method-disclosure { flex: none; }
+.geotech-calculator .rmr-method-disclosure .geotech-details-panel { height: auto; max-height: 320px; }
+.geotech-calculator .geotech-downhole-groups { max-height: 560px; min-height: 320px; }
+.rmr-results-list { min-width: 0; }
+.rmr-table-toolbar { display: flex; align-items: end; flex-wrap: wrap; gap: 14px; padding: 14px 16px 10px; }
+.rmr-table-toolbar label { display: flex; flex-direction: column; gap: 5px; font-size: 11px; color: var(--muted-foreground); }
+.rmr-table-toolbar :is(input, select) { min-width: 190px; height: 34px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 5px; background: var(--card); color: var(--foreground); font-size: 12px; }
+.rmr-table-toolbar p { margin: 0 0 8px auto; color: var(--muted-foreground); font-size: 12px; }
+.rmr-table-scroll { max-height: 520px; min-height: 240px; overflow: auto; border-block: 1px solid var(--border); }
+.rmr-values-table { width: 100%; min-width: 1590px; border-spacing: 0; border-collapse: separate; color: var(--foreground); font-size: 12px; font-variant-numeric: tabular-nums; }
+.rmr-values-table :is(th, td) { padding: 12px 14px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+.rmr-values-table thead th { position: sticky; top: 0; z-index: 2; background: var(--workspace-chrome); font-size: 11px; white-space: nowrap; }
+.rmr-values-table :is(th, td) small { display: block; margin-top: 5px; color: var(--muted-foreground); font-size: 10px; font-weight: 400; line-height: 1.45; }
+.rmr-values-table tbody tr { background: var(--card); }
+.rmr-values-table tbody tr:nth-child(even) { background: var(--workspace-chrome); }
+.rmr-values-table tbody tr:is(:hover, .is-selected) { background: var(--focus-tint); }
+.rmr-values-table tr > :first-child { position: sticky; left: 0; z-index: 1; min-width: 170px; background: inherit; border-right: 1px solid var(--border); }
+.rmr-values-table thead tr > :first-child { z-index: 3; background: var(--workspace-chrome); }
+.rmr-values-table th button { border: 0; background: transparent; color: var(--primary); font: inherit; font-weight: 650; cursor: pointer; text-align: left; padding: 0; white-space: nowrap; }
+.rmr-values-table .rmr-final-value { min-width: 90px; }
+.rmr-final-value strong { font-size: 18px; }
+.rmr-values-table .rmr-row-reason { min-width: 190px; max-width: 230px; }
+.rmr-values-table .rmr-value-missing { color: var(--muted-foreground); }
+.rmr-values-table .rmr-estimate { display: block; color: #976126; font-size: 10px; font-weight: 500; }
+.rmr-values-table .rmr-derived { display: block; color: var(--muted-foreground); }
+.rmr-no-results { padding: 28px 16px; color: var(--muted-foreground); }
+.rmr-table-pagination { display: flex; align-items: center; gap: 12px; padding: 12px 16px; font-size: 12px; }
+.rmr-table-pagination > span:first-child { margin-right: auto; }
+.rmr-table-pagination .button { min-height: 32px; font-size: 12px; }
+.geotech-calculator .geotech-summary-grid { grid-template-columns: repeat(5, minmax(110px, 1fr)) minmax(180px, 2fr); }
+@media (max-width: 1000px) {
+  .geotech-calculator .geotech-summary-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .rmr-table-toolbar p { margin-left: 0; }
+  .rmr-table-pagination { flex-wrap: wrap; }
+}
