@@ -14,6 +14,7 @@ import type {
 } from '@geoeye/datapool-client'
 import type { DrillholeImportResult, ImportedCollarRecord } from '../components/DrillholeImportDialog.js'
 import { desktopBridge, type ProjectStorageAddress } from '../desktop/bridge.js'
+import { liveFieldLoggingDatasets } from './fieldLoggingSources.js'
 
 const DATABASE_NAME = 'geoeye-analytics-local'
 const DATABASE_VERSION = 1
@@ -245,7 +246,7 @@ export async function loadLocalProjectSnapshot(
   return {
     datasets,
     drillholes,
-    fieldLogging,
+    fieldLogging: { ...fieldLogging, datasets: liveFieldLoggingDatasets(fieldLogging.datasets ?? []) },
     fieldStructures,
     observations,
     project,

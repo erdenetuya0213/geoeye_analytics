@@ -12,6 +12,7 @@ import {
   type Rmr76CanonicalInputKey,
 } from '../analysis/geotechnicalWorkflow.js'
 import type { GeotechnicalSource, RmrDataset } from './geotechnicalTypes.js'
+import { liveFieldLoggingDatasets } from './fieldLoggingSources.js'
 
 export type Rmr76ColumnMapping = Partial<Record<Rmr76CanonicalInputKey, string>>
 
@@ -392,7 +393,7 @@ export function buildFieldLoggingRmrSources(
   holeNames: ReadonlyMap<string, string>,
 ): DatabaseRmrSource[] {
   const sourceRank = (name: string) => /^geotechnical\b/i.test(name) ? 0 : /\brqd\b/i.test(name) ? 1 : /\bstructure\b/i.test(name) ? 2 : 3
-  return datasets.flatMap((dataset): DatabaseRmrSource[] => {
+  return liveFieldLoggingDatasets(datasets).flatMap((dataset): DatabaseRmrSource[] => {
     const columns = dataset.columns.map((column): DatabaseRmrColumn => ({
       canonicalUnit: column.unit,
       dataType: column.dataType,

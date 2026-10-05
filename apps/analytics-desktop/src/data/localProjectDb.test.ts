@@ -1,9 +1,11 @@
-import { describe, expect, it } from 'vitest'
+import { DataPoolClient, type FieldLoggingDataset } from '@geoeye/datapool-client'
+import { describe, expect, it, vi } from 'vitest'
 import {
   createLocalDrillholeDraft,
   createLocalTabularDraft,
   effectiveDrillholes,
   effectiveSurveysByHoleId,
+  loadLocalProjectSnapshot,
   readLocalProjectRecord,
   writeLocalProjectRecord,
   type LocalProjectSnapshot,
@@ -39,6 +41,46 @@ const snapshot: LocalProjectSnapshot = {
 }
 
 describe('local project database', () => {
+  it('refreshes the current filled templates across all holes without keeping completed CSV copies', async () => {
+    const client = new DataPoolClient({ endpoint: 'https://example.invalid', fetch: vi.fn() })
+    const live: FieldLoggingDataset = {
+      id: 'structure-template', name: 'Structure auto', category: 'structure', version: 35,
+      updatedAt: '2026-10-05T00:00:00.000Z',
+      columns: [{ key: 'joint_spacing_m', label: 'Joint spacing', dataType: 'numeric', unit: 'm' }],
+      records: ['hole-1', 'hole-2', 'hole-3'].map((holeId, index) => ({
+        id: `row-${index}`, holeId, depthFrom: 0, depthTo: 3, values: { joint_spacing_m: 0.2 },
+      })),
+    }
+    const completed = { ...live, id: 'structure-template:generated:v34', version: 34, records: live.records.slice(0, 1) }
+    vi.spyOn(client, 'variables').mockResolvedValue([])
+    vi.spyOn(client, 'datasets').mockResolvedValue([])
+    vi.spyOn(client, 'drillholes').mockResolvedValue(snapshot.drillholes)
+    vi.spyOn(client, 'projectionStatus').mockResolvedValue([])
+    vi.spyOn(client, 'fieldLoggingStructures').mockResolvedValue([])
+    const logging = vi.spyOn(client, 'fieldLogging').mockResolvedValue({
+      ...snapshot.fieldLogging, datasets: [live, completed],
+      templates: [{ id: live.id, name: live.name, version: live.version }],
+    })
+    const first = await loadLocalProjectSnapshot(client, snapshot.project)
+    expect(first.fieldLogging.datasets).toEqual([live])
+    expect(first.fieldLogging.datasets![0]!.records.map(row => row.holeId)).toEqual(['hole-1', 'hole-2', 'hole-3'])
+
+    // The next refresh replaces old values, removed rows and schema versions.
+    const updated = { ...live, version: 36, records: [
+      { ...live.records[0]!, values: { joint_spacing_m: 0.8 } },
+      ...live.records.slice(2),
+    ] }
+    logging.mockResolvedValue({ ...snapshot.fieldLogging, datasets: [updated, completed],
+      templates: [{ id: live.id, name: live.name, version: updated.version }],
+    })
+    const second = await loadLocalProjectSnapshot(client, snapshot.project)
+    expect(second.fieldLogging.datasets).toEqual([updated])
+    expect(second.fieldLogging.templates[0]?.version).toBe(36)
+    expect(first.fieldLogging.datasets![0]!.records[0]!.values.joint_spacing_m).toBe(0.2)
+    expect(logging).toHaveBeenCalledTimes(2)
+    expect(logging).toHaveBeenLastCalledWith(snapshot.project.id)
+  })
+
   it('layers an unsent drillhole import over the saved cloud snapshot', () => {
     const draft = createLocalDrillholeDraft({
       collar: [{ crs: 'EPSG:32648', easting: 501_000, elevation: 1_420, holeId: 'dh-001', northing: 5_301_000 }],

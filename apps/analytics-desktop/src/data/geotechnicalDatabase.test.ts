@@ -221,7 +221,7 @@ describe('database RMR column mapping', () => {
     expect(source?.records[0]?.values).toEqual({ field_strength: 'R4', groundwater_condition: 'Damp' })
   })
 
-  it('links completed CSV versions to their live parent and reports export coverage honestly', () => {
+  it('offers the full live template and excludes historical exports from older local copies', () => {
     const templateId = '55555555-5555-4555-8555-555555555555'
     const makeRecord = (id: string, sourceHoleId: string): FieldLoggingDataset['records'][number] => ({
       depthFrom: 10,
@@ -247,10 +247,14 @@ describe('database RMR column mapping', () => {
       updatedAt: '2026-10-02T00:00:00.000Z',
       version: 34,
     }]
-    const sources = buildFieldLoggingRmrSources(datasets, new Map())
-    expect(sources.map((source) => source.sourceKind)).toEqual(['field-template', 'generated-csv'])
-    expect(sources[1]).toMatchObject({ coveredHoleCount: 1, parentTemplateId: templateId })
-    expect(rmrSourceOptionLabel(sources[1]!, sources)).toBe('↳ Structure auto · completed CSV v34 · 1 exported rows · 1/2 holes')
+    const sources = buildFieldLoggingRmrSources([
+      ...datasets,
+      { ...datasets[1]!, id: `${templateId}:generated:v35`, version: 35 },
+      { ...datasets[1]!, id: `${templateId}:generated` },
+    ], new Map())
+    expect(sources.map((source) => source.sourceKind)).toEqual(['field-template'])
+    expect(sources[0]).toMatchObject({ coveredHoleCount: 2, recordCount: 2, parentTemplateId: null })
+    expect(rmrSourceOptionLabel(sources[0]!, sources)).toBe('Structure auto · live template v35 · 2 records · 2 holes')
   })
 
   it('retains empty templates and unpopulated fields regardless of template category', () => {

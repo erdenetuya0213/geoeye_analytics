@@ -35,6 +35,7 @@ import {
   generatedLoggingDatasetId,
   generatedLoggingTemplateVersion,
 } from './generated-logging.js'
+import { liveLoggingColumn, mergeLiveLoggingColumn } from './live-logging.js'
 import { runProjectProjection } from './projection.js'
 import type { CreateAnalysisRunInput } from './schemas.js'
 import type { DataPoolStore } from './store.js'
@@ -1357,14 +1358,11 @@ export class PostgresDataPoolStore implements DataPoolStore {
         const observedColumns = columnsByTemplate.get(row.template_id) ?? new Map<string, Column>()
         for (const [key, rawValue] of Object.entries(values)) {
           if (key.startsWith('_') || rawValue === undefined || (typeof rawValue === 'object' && rawValue !== null)) continue
-          const definition = definitions.get(key)
-          // Generated calculation internals are intentionally not exposed as
-          // selectable user columns. Only fields declared by the template are
-          // stable enough for an exact saved mapping.
+          const definition = definitions.get(key) ?? liveLoggingColumn(key, rawValue)
           if (definition === undefined) continue
           const value: Cell = typeof rawValue === 'string' ? dictionaryById.get(rawValue) ?? rawValue : rawValue as Cell
           record.values[key] = value
-          observedColumns.set(key, definition)
+          observedColumns.set(key, definitions.has(key) ? definition : mergeLiveLoggingColumn(observedColumns.get(key), definition))
         }
         groups.set(groupId, record)
         groupedByTemplate.set(row.template_id, groups)
@@ -1404,11 +1402,11 @@ export class PostgresDataPoolStore implements DataPoolStore {
           const observedColumns = columnsByTemplate.get(row.template_id) ?? new Map<string, Column>()
           for (const [key, rawValue] of Object.entries(values)) {
             if (key.startsWith('_') || rawValue === undefined || (typeof rawValue === 'object' && rawValue !== null)) continue
-            const definition = definitions.get(key)
+            const definition = definitions.get(key) ?? liveLoggingColumn(key, rawValue)
             if (definition === undefined) continue
             const value: Cell = typeof rawValue === 'string' ? dictionaryById.get(rawValue) ?? rawValue : rawValue as Cell
             record.values[key] = value
-            observedColumns.set(key, definition)
+            observedColumns.set(key, definitions.has(key) ? definition : mergeLiveLoggingColumn(observedColumns.get(key), definition))
           }
           groups.set(record.id, record)
           groupedByTemplate.set(row.template_id, groups)
@@ -1423,7 +1421,7 @@ export class PostgresDataPoolStore implements DataPoolStore {
             || (left.depthFrom ?? Number.POSITIVE_INFINITY) - (right.depthFrom ?? Number.POSITIVE_INFINITY)
             || left.id.localeCompare(right.id))
         // Preserve the complete declared schema, including fields with no values yet.
-        const columns = [...(fieldDefinitions.get(templateRow.id)?.values() ?? [])]
+        const columns = [...new Map([...(columnsByTemplate.get(templateRow.id) ?? []), ...(fieldDefinitions.get(templateRow.id) ?? [])]).values()]
           .sort((left, right) => left.label.localeCompare(right.label) || left.key.localeCompare(right.key))
         if (columns.length === 0) continue
         const category = objectValue(templateRow.template_json).category
