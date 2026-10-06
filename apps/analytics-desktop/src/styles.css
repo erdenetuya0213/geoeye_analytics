@@ -7055,3 +7055,106 @@ span.profile-button { cursor: default; }
   .rmr-table-toolbar p { margin-left: 0; }
   .rmr-table-pagination { flex-wrap: wrap; }
 }
+
+.dataset-analysis-launcher { padding: 16px; }
+.dataset-analysis-launcher > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
+.dataset-analysis-launcher h2 { font-size: 16px; }
+.dataset-analysis-launcher p { color: var(--muted-foreground); font-size: 12px; }
+.dataset-analysis-actions { display: flex; gap: 8px; }
+.dataset-analysis-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 8px; }
+.dataset-analysis-choice { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 64px; padding: 12px; text-align: left; color: var(--foreground); background: var(--panel); border: 1px solid var(--border); border-radius: 5px; }
+.dataset-analysis-choice span { min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.dataset-analysis-choice strong { overflow-wrap: anywhere; font-size: 12px; }
+.dataset-analysis-choice small { color: var(--muted-foreground); font-size: 11px; }
+.dataset-analysis-choice:hover, .dataset-analysis-choice.is-selected { background: var(--focus-tint); border-color: var(--primary); }
+
+/* Mineral-system assessment extends the existing analytical tables and controls. */
+.mineral-mode-tabs { margin: 12px 20px 0; }
+.mineral-assessment { display: grid; gap: 12px; min-width: 0; }
+.mineral-assessment h2 { margin: 0; font-size: 14px; }
+.mineral-assessment p { color: var(--muted-foreground); font-size: 12px; line-height: 1.55; }
+.mineral-assessment .panel { min-width: 0; padding: 16px; }
+.mineral-assessment .panel > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
+.mineral-assessment .panel > header p { margin: 5px 0 0; }
+.mineral-assessment .panel > header > span { color: var(--muted-foreground); font-size: 11px; }
+.mineral-toolbar { flex-wrap: wrap; }
+.mineral-toolbar select { max-width: 340px; }
+.mineral-subset { display: flex; gap: 6px; align-items: center; font-size: 12px; }
+.mineral-source-options { display: flex; flex-wrap: wrap; gap: 10px 22px; }
+.mineral-source-options label { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; }
+.mineral-source-options input { margin-top: 3px; accent-color: var(--primary); }
+.mineral-source-options span { display: grid; gap: 4px; }
+.mineral-source-options small { color: var(--muted-foreground); font-size: 10px; }
+.mineral-source-panel > header { font-size: 12px; }
+.mineral-table-scroll { max-width: 100%; overflow: auto; }
+.mineral-table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+.mineral-table th { padding: 9px 10px; border-bottom: 1px solid var(--border); color: var(--muted-foreground); background: var(--workspace-chrome); font-size: 10px; font-weight: 600; text-align: left; white-space: nowrap; }
+.mineral-table td { padding: 9px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.mineral-table tr.is-selected td { background: var(--focus-tint); }
+.mineral-table td > small { display: block; margin-top: 4px; color: var(--muted-foreground); font-size: 10px; }
+.mineral-table td > strong { font-weight: 600; }
+.mineral-assessment select, .mineral-assessment input:not([type=checkbox]) { min-height: 29px; padding: 4px 7px; border: 1px solid var(--border); border-radius: 4px; color: var(--foreground); background: var(--card); font: inherit; }
+.mineral-mapping .mineral-table { min-width: 820px; }
+.mineral-mapping td:nth-child(1) { width: 19%; }
+.mineral-mapping td:nth-child(2) { width: 27%; }
+.mineral-mapping td:nth-child(3) { width: 30%; }
+.mineral-mapping td:nth-child(4) { width: 20%; }
+.mineral-mapping td > select, .mineral-mapping td > input { width: 100%; display: block; margin-bottom: 6px; }
+.mineral-mapping-controls { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; margin-bottom: 14px; }
+.mineral-mapping-controls label { display: grid; gap: 5px; color: var(--muted-foreground); font-size: 11px; }
+.mineral-number-unit { display: grid; grid-template-columns: minmax(60px, 1fr) minmax(90px, 1.4fr); gap: 5px; }
+.mineral-number-unit input, .mineral-number-unit select { width: 100%; min-width: 0; }
+.mineral-reliability { display: flex; justify-content: space-between; align-items: center; gap: 6px; font-size: 10px; color: var(--muted-foreground); }
+.mineral-reliability input { width: 75px; }
+.mineral-system-button { background: none; border: 0; padding: 0; color: var(--foreground); font: inherit; font-weight: 600; text-align: left; cursor: pointer; white-space: nowrap; }
+.mineral-system-button:hover { color: var(--primary); text-decoration: underline; }
+.mineral-coverage { display: inline-block; min-width: 42px; border-bottom: 3px solid transparent; border-image: linear-gradient(to right, var(--primary) var(--coverage), var(--border) var(--coverage)) 1; padding-bottom: 4px; font-size: 11px; }
+.mineral-state { display: inline-block; padding: 3px 6px; border-radius: 3px; font-size: 10px; color: var(--muted-foreground); background: var(--workspace-chrome); }
+.mineral-state.is-supports { color: var(--primary); background: var(--focus-tint); }
+.mineral-state.is-contradicts, .mineral-state.is-conflicting { color: #8c521a; background: var(--amber-soft); }
+.mineral-table details { max-width: 520px; }
+.mineral-table summary { cursor: pointer; font-size: 11px; }
+.mineral-table details > button { margin: 8px 0; }
+.mineral-audit-row { display: grid; gap: 3px; padding: 8px 0; border-top: 1px solid var(--border); overflow-wrap: anywhere; }
+.mineral-audit-row strong { font-size: 11px; }
+.mineral-audit-row span, .mineral-audit-row small { color: var(--muted-foreground); font-size: 10px; }
+.mineral-provenance > div:first-child { display: flex; align-items: center; gap: 8px; }
+.mineral-provenance > div:first-child span { display: grid; gap: 4px; font-size: 12px; }
+.mineral-provenance small { color: var(--muted-foreground); font-size: 10px; overflow-wrap: anywhere; }
+.mineral-provenance > details { margin: 14px 0; font-size: 12px; }
+.mineral-provenance > details summary { cursor: pointer; }
+.mineral-provenance li { margin: 6px 0; color: var(--muted-foreground); overflow-wrap: anywhere; font-size: 11px; }
+.mineral-provenance a { color: var(--primary); }
+.mineral-save-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: flex-end; }
+.mineral-save-actions > span { margin-right: auto; color: var(--primary); font-size: 11px; }
+.scene3d-mineral-panel { border-bottom: 1px solid var(--border); }
+.scene3d-mineral-heading { display: flex; width: 100%; align-items: center; gap: 7px; background: transparent; border: 0; padding: 10px 12px; color: var(--foreground); font: inherit; font-size: 11px; cursor: pointer; }
+.scene3d-mineral-heading > svg:last-child { margin-left: auto; }
+.scene3d-mineral-controls { display: grid; gap: 10px; padding: 0 12px 12px; font-size: 11px; }
+.scene3d-mineral-controls p, .scene3d-mineral-controls small { margin: 0; color: var(--muted-foreground); font-size: 10px; line-height: 1.5; }
+.scene3d-mineral-controls label { font-size: 11px; }
+.scene3d-mineral-controls label > select { width: 100%; margin-top: 5px; padding: 5px; border: 1px solid var(--border); border-radius: 4px; background: var(--card); color: var(--foreground); font: inherit; }
+.scene3d-mineral-metrics { display: flex; justify-content: space-between; gap: 8px; }
+.scene3d-mineral-metrics span { display: grid; gap: 4px; color: var(--muted-foreground); font-size: 10px; }
+.scene3d-mineral-metrics strong { color: var(--foreground); font-size: 16px; font-weight: 600; }
+.scene3d-mineral-actions { display: flex; flex-wrap: wrap; gap: 4px; }
+.scene3d-mineral-actions button { padding: 5px 8px; border: 1px solid var(--border); border-radius: 3px; background: var(--card); color: var(--foreground); font: inherit; font-size: 10px; cursor: pointer; }
+.scene3d-mineral-actions button[aria-pressed=true] { color: var(--primary); border-color: var(--primary); background: var(--focus-tint); }
+.scene3d-mineral-audit summary { cursor: pointer; }
+.scene3d-mineral-audit > div { display: grid; gap: 5px; padding: 9px 0; border-bottom: 1px solid var(--border); }
+@media (max-width: 900px) {
+  .mineral-assessment .panel > header { flex-wrap: wrap; }
+  .mineral-toolbar select { max-width: 220px; }
+  .mineral-ranking .mineral-table { min-width: 980px; }
+}
+
+.scene3d-workspace.is-left-collapsed .scene3d-mineral-panel { display: none; }
+.mineral-ranking .mineral-table-scroll { max-height: 470px; }
+.mineral-ranking .mineral-table th { position: sticky; top: 0; z-index: 1; }
+.mineral-assessment input:focus-visible, .mineral-assessment select:focus-visible, .mineral-system-button:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.scene3d-mineral-scale { display: grid; grid-template-columns: auto 1fr auto; gap: 5px; color: var(--muted-foreground); font-size: 9px; }
+.scene3d-mineral-scale > i { grid-column: 1 / -1; height: 7px; border: 1px solid var(--border); border-radius: 2px; }
+.scene3d-mineral-scale > span:nth-child(3) { text-align: center; }
+.mineral-quality-gate { margin-top: 8px; font-size: 10px; }
+.mineral-quality-gate select, .mineral-quality-gate input { width: 100%; margin-top: 6px; min-width: 0; }
+.mineral-quality-gate label { display: block; color: var(--muted-foreground); margin-top: 6px; }

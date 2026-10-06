@@ -56,6 +56,13 @@ describe('3D scene layer registry', () => {
 })
 
 describe('3D scene viewport views', () => {
+  it('uses a fixed 0–100 range for bounded mineral indices without adding synthetic observations', () => {
+    const scale = buildSceneColorScale({ categorical: false, categoryPalette, classification: 'continuous', customBreaks: [], palette, values: [20, 40, null], range: [0, 100] })
+    expect([scale.minimum, scale.maximum]).toEqual([0, 100])
+    expect(scale.values).toEqual([20, 40])
+    expect(scale.color(40)).toBe('#3')
+    expect(scale.color(null)).toBe('#67756f')
+  })
   it('follows Viewport 1 until a viewport is customised', () => {
     expect(scenePaneView({}, 2, fallback)).toBe(fallback)
     const first = withScenePaneColor({}, 0, fallback, 'assay.au')

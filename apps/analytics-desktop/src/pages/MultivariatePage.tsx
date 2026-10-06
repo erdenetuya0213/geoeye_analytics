@@ -1,3 +1,4 @@
+import { MineralAssessmentWorkspace } from '../components/MineralAssessmentPanel.js'
 import { useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, Box, CheckCircle2, ChevronDown, CopyPlus, Database, GitBranch, Layers3, Play, RefreshCw, Save, ScatterChart, TableProperties, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -95,6 +96,17 @@ interface MultivariatePageProps {
 }
 
 export function MultivariatePage({ onNavigate }: MultivariatePageProps) {
+  const [mode, setMode] = usePersistentState<'population' | 'mineral'>('multivariate.analysisMode', 'population')
+  return <>
+    <div className="eda-view-tabs eda-tool-tabs mineral-mode-tabs" role="tablist" aria-label="Multivariate analysis functions">
+      <button aria-selected={mode === 'population'} aria-controls="multivariate-function" role="tab" type="button" className={mode === 'population' ? 'is-active' : ''} onClick={() => setMode('population')}>Population analysis</button>
+      <button aria-selected={mode === 'mineral'} aria-controls="multivariate-function" role="tab" type="button" className={mode === 'mineral' ? 'is-active' : ''} onClick={() => setMode('mineral')}>Mineral-system assessment</button>
+    </div>
+    <div id="multivariate-function" role="tabpanel">{mode === 'mineral' ? <div className="page multivariate-page"><MineralAssessmentWorkspace onNavigate={onNavigate} /></div> : <MultivariatePopulationPage onNavigate={onNavigate} />}</div>
+  </>
+}
+
+function MultivariatePopulationPage({ onNavigate }: MultivariatePageProps) {
   const storage = useProjectStorage()
   const durable = useDurableAction()
   const workspace = useDataPoolWorkspace()

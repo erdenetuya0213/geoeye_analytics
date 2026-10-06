@@ -1,5 +1,5 @@
 import {
-  Axis3d, ChevronDown, ChevronLeft, ChevronRight, Crosshair, Cuboid, Eye, Hash,
+  Axis3d, ChevronDown, ChevronLeft, ChevronRight, Crosshair, Cuboid, Eye, Hash, GitBranch,
   EyeOff, Filter, Focus, Grid3X3, Image as ImageIcon, Layers3, Maximize2,
   Minimize2, MousePointer2, PanelLeftClose, Pentagon, Rotate3d, Ruler, Save,
   SlidersHorizontal, Sparkles, Spline, Tag, Type, X,
@@ -15,6 +15,9 @@ import { readDrillholeImport } from '../data/drillholeImportStore.js'
 import { readAnalysisResultDocument, type AnalysisResultPackage } from '../data/analysisResultStore.js'
 import { useProjectEdaDatasets } from '../data/liveEda.js'
 import { readSpatialViewRequest } from '../data/spatialViewStore.js'
+import { mineralAssessmentFromPackage, readMineralAssessment } from '../data/mineralAssessmentStore.js'
+import { assessmentIsCurrent, mineralAssessmentDataset } from '../analysis/mineralSystems.js'
+import { MINERAL_CRITERIA, MINERAL_SYSTEM_MODELS } from '../analysis/mineralSystemModels.js'
 import { useGeoEyeSelection } from '../state/SelectionContext.js'
 import { sceneElevation, type SceneBounds, type SceneViewMode } from '../visualization/scene3dProjection.js'
 import { compileSceneQuery } from '../visualization/scene3dQuery.js'
@@ -250,6 +253,11 @@ export function GeologicalAnalysis3DPage({ backgroundColor, onBackgroundColorCha
   const workspace = useDataPoolWorkspace()
   const datasetsQuery = useProjectEdaDatasets()
   const handoff = useMemo(() => readSpatialViewRequest(storage), [storage])
+  const [mineralRun, setMineralRun] = useState(() => readMineralAssessment(storage))
+  const [mineralSystemId, setMineralSystemId] = usePersistentState('mineralAssessment.systemId', 'porphyry')
+  const [mineralEvidenceEnabled, setMineralEvidenceEnabled] = usePersistentState('view3d.mineralEvidenceEnabled', handoff?.colorBy === 'mineral.fit', { scope: handoff?.createdAt ?? '' })
+  const [mineralPanelOpen, setMineralPanelOpen] = usePersistentState('view3d.mineralPanelOpen', handoff?.colorBy === 'mineral.fit')
+  const [mineralNotice, setMineralNotice] = useState<string | null>(null)
   const datasets = datasetsQuery.data ?? []
   const [datasetId] = useState(handoff?.datasetId ?? '')
   // A new handoff from another module wins over the view state saved for the previous one.
@@ -314,7 +322,14 @@ export function GeologicalAnalysis3DPage({ backgroundColor, onBackgroundColorCha
     clip: false, corridor: 80, dip: 90, front: 40, preset: 'north-south', visible: false,
   })
   const { replaceSelection, selectedIds, toggleSelection } = useGeoEyeSelection()
-  const dataset = datasets.find((item) => item.id === datasetId) ?? datasets[0]
+  const mineralCurrent = mineralRun !== null && assessmentIsCurrent(mineralRun, datasets)
+  const ordinaryDataset = datasets.find((item) => item.id === datasetId) ?? datasets[0]
+  const mineralBase = mineralCurrent ? datasets.find(item => item.id === mineralRun.baseDatasetId) : undefined
+  const dataset = useMemo(() => mineralEvidenceEnabled && mineralRun !== null && mineralBase !== undefined
+    ? mineralAssessmentDataset(mineralBase, mineralRun, mineralSystemId) : ordinaryDataset,
+  [mineralEvidenceEnabled, mineralRun, mineralBase, mineralSystemId, ordinaryDataset])
+  const mineralModel = MINERAL_SYSTEM_MODELS.find(model => model.id === mineralSystemId)
+  const mineralAssessment = mineralRun?.systems.find(system => system.systemId === mineralSystemId)
   const importedDrillholes = useMemo(() => {
     if (workspace.project === null) return readDrillholeImport(storage)
     const holes = effectiveDrillholes(workspace.localSnapshot, workspace.localDrillholeDraft)
@@ -421,10 +436,11 @@ export function GeologicalAnalysis3DPage({ backgroundColor, onBackgroundColorCha
       ...buildSceneColorScale({
         categorical: definition?.categorical ?? false,
         categoryPalette,
-        classification,
+        classification: key === 'mineral.fit' || key === 'mineral.coverage' ? 'continuous' : classification,
         customBreaks: customBreaks.split(',').map(Number),
         palette,
         values: filteredRows.map((row) => valueFor(row, key)),
+        ...(key === 'mineral.fit' || key === 'mineral.coverage' ? { range: [0, 100] as const } : {}),
       }),
     }
   }
@@ -558,6 +574,23 @@ export function GeologicalAnalysis3DPage({ backgroundColor, onBackgroundColorCha
   }
 
   const loadAnalysisResult = (result: AnalysisResultPackage) => {
+    const savedMineral = mineralAssessmentFromPackage(result)
+    if (savedMineral !== null) {
+      if (!assessmentIsCurrent(savedMineral.run, datasets)) {
+        setMineralPanelOpen(true)
+        setMineralNotice('This saved mineral assessment belongs to an older dataset snapshot. Re-run it in Multivariate before displaying evidence colours.')
+        return
+      }
+      setMineralRun(savedMineral.run)
+      setMineralNotice(null)
+      setMineralSystemId(savedMineral.systemId)
+      setMineralEvidenceEnabled(true)
+      setMineralPanelOpen(true)
+      setSymbolBy('mineral.fit')
+      replaceSelection([])
+      setFitRequest(value => value + 1)
+      return
+    }
     const resultIds = new Set(result.sourceObservationIds)
     const matchedRows = rows.filter((row) => matchesIds(row, resultIds) || result.boreholeIds.includes(row.holeId))
     replaceSelection(uniqueSourceObservationIds(matchedRows))
@@ -573,7 +606,7 @@ export function GeologicalAnalysis3DPage({ backgroundColor, onBackgroundColorCha
     holeRows.push(row)
     holeRowsById.set(normalizeStructureHoleId(row.holeId), holeRows)
   })
-  const buildSceneHoles = (paneLayers: ReadonlySet<string>, colorOf: (row: EdaObservation) => string): Scene3DHole[] => holes.flatMap((hole) => {
+  const buildSceneHoles = (paneLayers: ReadonlySet<string>, colorOf: (row: EdaObservation) => string, colorBy: string): Scene3DHole[] => holes.flatMap((hole) => {
     const holeRows = [...(holeRowsById.get(normalizeStructureHoleId(hole)) ?? [])].sort((left, right) => left.depthFrom - right.depthFrom)
     const collarRow = holeRows[0]
     const importedCollar = importedCollars.get(normalizeStructureHoleId(hole))
@@ -605,11 +638,12 @@ export function GeologicalAnalysis3DPage({ backgroundColor, onBackgroundColorCha
           from: trace?.pointAt(row.depthFrom) ?? { x: row.easting, y: row.northing, z: sceneElevation(collarZ, row.depthFrom) },
           id: row.id,
           label: `${hole} ${row.depthFrom.toFixed(0)} m`,
-          linked,
+          // Source linkage still controls fading; mineral colours remain free of a uniform orange tint.
+          linked: linked && !colorBy.startsWith('mineral.'),
           queryMatched,
           selected,
           thickness,
-          title: `${hole} · ${row.depthFrom.toFixed(1)}–${row.depthTo.toFixed(1)} m · ${sourceIds(row).join(', ')}`,
+          title: `${hole} · ${row.depthFrom.toFixed(1)}–${row.depthTo.toFixed(1)} m${row.dimensions['mineral.evidence'] === undefined ? '' : ` · ${mineralModel?.label} · ${row.dimensions['mineral.evidence']} · fit ${row.values['mineral.fit']?.toFixed(1) ?? 'unassessed'} / 100 · coverage ${row.values['mineral.coverage']?.toFixed(0) ?? '—'}% · ${row.dimensions['mineral.methods']}`} · ${sourceIds(row).join(', ')}`,
           to: trace?.pointAt(row.depthTo) ?? { x: next?.easting ?? row.easting, y: next?.northing ?? row.northing, z: sceneElevation(collarZ, row.depthTo) },
         }]
       }),
@@ -646,7 +680,7 @@ export function GeologicalAnalysis3DPage({ backgroundColor, onBackgroundColorCha
       const scale = colorScaleFor(view.colorBy)
       scene = {
         colorLabel: scale.definition?.label ?? view.colorBy,
-        holes: buildSceneHoles(paneLayers, (row) => scale.color(valueFor(row, view.colorBy))),
+        holes: buildSceneHoles(paneLayers, (row) => scale.color(valueFor(row, view.colorBy)), view.colorBy),
         layers: paneLayers,
         structures: buildSceneStructures(paneLayers),
       }
@@ -688,6 +722,27 @@ export function GeologicalAnalysis3DPage({ backgroundColor, onBackgroundColorCha
     <div className={`map2d-workspace scene3d-workspace ${leftCollapsed ? 'is-left-collapsed' : ''}`}>
       <aside className="map2d-contents scene3d-contents">
         <div className="map2d-pane-title scene3d-layers-title"><div><Layers3 size={15} /><strong>Layers</strong>{sceneLayout.count > 1 ? <small>{viewportLabel(activePane)}</small> : null}</div><button aria-label={`${leftCollapsed ? 'Expand' : 'Collapse'} Layers`} onClick={() => setLeftCollapsed((value) => !value)} title={`${leftCollapsed ? 'Expand' : 'Collapse'} Layers`} type="button"><PanelLeftClose className={leftCollapsed ? 'is-flipped' : ''} size={15} /></button></div>
+        <section className="scene3d-mineral-panel">
+          <button className="scene3d-mineral-heading" aria-expanded={mineralPanelOpen} onClick={() => setMineralPanelOpen(value => !value)} type="button"><GitBranch size={14} /><strong>Mineral evidence</strong><ChevronDown size={12} /></button>
+          {mineralPanelOpen ? <div className="scene3d-mineral-controls">
+            {mineralNotice === null ? null : <p role="status">{mineralNotice}</p>}
+            {mineralRun === null ? <p>Run mineral-system assessment in Multivariate to inspect linked assay, XRF, and spectral evidence.</p> : <>
+              {!mineralCurrent ? <p role="status">The assessment snapshot has changed. Re-run in Multivariate to display evidence overlays.</p> : null}
+              <label><input type="checkbox" checked={mineralEvidenceEnabled && mineralCurrent} disabled={!mineralCurrent} onChange={event => { setMineralEvidenceEnabled(event.target.checked); setSymbolBy(event.target.checked ? 'mineral.fit' : 'lithology'); setFitRequest(value => value + 1) }} /> Show assessed interval support</label>
+              <label>Mineral system<select aria-label="3D mineral system" value={mineralSystemId} onChange={event => setMineralSystemId(event.target.value)}>{MINERAL_SYSTEM_MODELS.map(model => <option key={model.id} value={model.id}>{model.label}</option>)}</select></label>
+              <div className="scene3d-mineral-metrics"><span><strong>{mineralAssessment?.fit?.toFixed(1) ?? '—'}</strong> fit / 100</span><span><strong>{mineralAssessment?.coverage.toFixed(0) ?? '—'}%</strong> criteria observed</span></div>
+              <small>Project evidence fit is a heuristic index. Interval colours show local support, not an ore envelope.</small>
+              <label><input type="checkbox" checked={labels} onChange={event => setLabels(event.target.checked)} /> Interval labels</label>
+              <div className="scene3d-mineral-actions">{([['mineral.fit', 'Fit'], ['mineral.coverage', 'Coverage'], ['mineral.evidence', 'Status'], ['mineral.methods', 'Sources']] as const).map(([key, label]) => <button key={key} aria-pressed={symbolBy === key} disabled={!mineralEvidenceEnabled || !mineralCurrent} onClick={() => setSymbolBy(key)} type="button">{label}</button>)}</div>
+              {mineralEvidenceEnabled && mineralCurrent && (symbolBy === 'mineral.fit' || symbolBy === 'mineral.coverage') ? <div className="scene3d-mineral-scale" aria-label={`${symbolBy === 'mineral.fit' ? 'Interval evidence fit' : 'Interval evidence coverage'} colour scale from 0 to 100`}><i style={{ background: `linear-gradient(to right, ${palette.join(', ')})` }} /><span>0</span><span>{symbolBy === 'mineral.fit' ? 'Interval fit index' : 'Interval coverage (%)'}</span><span>100</span></div> : null}
+              <button className="button button-secondary" disabled={!mineralCurrent || !mineralEvidenceEnabled} onClick={() => {
+                replaceSelection(mineralRun.intervals.filter(interval => interval.matches.some(match => mineralModel?.criteria.some(criterion => criterion.id === match.criterionId))).flatMap(interval => interval.sourceObservationIds))
+                setFitRequest(value => value + 1)
+              }} type="button">Select evidence intervals</button>
+              {mineralEvidenceEnabled && mineralCurrent && selectedIds.length > 0 ? <details className="scene3d-mineral-audit"><summary>Selected interval evidence</summary>{mineralRun.intervals.filter(interval => interval.sourceObservationIds.some(id => selectedSet.has(id))).slice(0, 5).map(interval => <div key={interval.observationId}><strong>{interval.holeId} · {interval.depthFrom}–{interval.depthTo} m</strong>{interval.matches.filter(match => mineralModel?.criteria.some(criterion => criterion.id === match.criterionId)).map(match => <small key={match.bindingId}>{MINERAL_CRITERIA.find(criterion => criterion.id === match.criterionId)?.label}: {match.value} · {match.polarity} · {mineralRun.snapshots.find(snapshot => snapshot.datasetId === match.datasetId)?.name}</small>)}</div>)}<small>Showing up to five selected supports. Full provenance is available in Multivariate.</small></details> : null}
+            </>}
+          </div> : null}
+        </section>
         <div className="map2d-layer-list scene3d-layer-tree">{groupOrder.map((group) => {
           const groupLayers = layers.filter((layer) => layer.group === group)
           const collapsed = collapsedGroups.has(group)

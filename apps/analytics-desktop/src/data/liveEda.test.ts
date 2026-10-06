@@ -15,6 +15,28 @@ const project: ProjectSummary = {
 }
 
 describe('live EDA adapter', () => {
+  it('preserves concentration units in common underscored import headers for evidence mapping', () => {
+    const result = buildLocalEdaDatasets(null, null, {
+      laboratory: { columns: ['BHID', 'From', 'To', 'Cu_ppm', 'Au_ppb', 'Mo (mg/kg)', 'Ag_g_t'], dirty: true, fileName: 'assay.csv',
+        rows: [['DH-1', '0', '1', '2000', '500', '60', '8']], section: 'laboratory', updatedAt: '2026-10-06T00:00:00Z' },
+    }, project)
+    const variables = result.find(dataset => dataset.id === 'local-csv-laboratory')!.variables
+    expect(variables.find(v => v.label === 'Cu_ppm')?.unit).toBe('ppm')
+    expect(variables.find(v => v.label === 'Au_ppb')?.unit).toBe('ppb')
+    expect(variables.find(v => v.label === 'Mo (mg/kg)')?.unit).toBe('mg/kg')
+    expect(variables.find(v => v.label === 'Ag_g_t')?.unit).toBe('g/t')
+  })
+  it('indexes imported point depths and leaves missing locations unmatched', () => {
+    const result = buildLocalEdaDatasets(null, null, {
+      xrf: { columns: ['BHID', 'Depth (m)', 'Cu ppm'], dirty: true, fileName: 'xrf.csv',
+        rows: [['DH_001', '12.5', '4'], ['DH_001', '', '9']], section: 'xrf', updatedAt: '2026-10-05T00:00:00Z' },
+    }, project)
+    const rows = result.find(dataset => dataset.id === 'local-csv-xrf')!.observations
+    expect(rows[0]).toMatchObject({ depthFrom: 12.5, depthTo: 12.5, locationValid: true })
+    expect(rows[1]?.locationValid).toBe(false)
+    expect(rows[1]?.depthFrom).toBeNaN()
+    expect(rows[1]?.joinKey).not.toBe(rows[0]?.joinKey)
+  })
   it('makes locally imported collars and surveys available to analytical features without a cloud snapshot', () => {
     const result = buildLocalEdaDatasets(null, {
       collar: [{ crs: 'EPSG:32648', easting: 500_100, elevation: 1_420, holeId: 'DH-001', northing: 4_700_200 }],

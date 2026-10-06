@@ -314,7 +314,7 @@ export function App() {
   if (section === 'overview') {
     page = <OverviewPage onNavigate={setSection} />
   } else if (section === 'data-pool') {
-    page = <DataPoolPage connectionSettings={connectionSettings} connectionState={connectionState} />
+    page = <DataPoolPage connectionSettings={connectionSettings} connectionState={connectionState} onNavigate={setSection} />
   } else if (section === 'drillholes') {
     page = <DrillholesPage />
   } else if (section === 'field-logging') {

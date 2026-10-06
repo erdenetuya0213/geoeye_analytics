@@ -1,3 +1,4 @@
+export { importLocationColumns, readImportLocation, normalizedHoleIdentifier } from '@geoeye/types'
 import {
   analysisRunSchema,
   analysisResultPackageQuerySchema,

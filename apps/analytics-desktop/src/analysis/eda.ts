@@ -1,4 +1,5 @@
 export interface EdaObservation {
+  locationValid?: boolean
   depthFrom: number
   depthTo: number
   dimensions: Record<string, string>

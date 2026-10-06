@@ -140,6 +140,12 @@ The SQL migrations expect the existing GeoEye Field tables (`projects`, `drill_h
 
 The consistent Save/Save As behavior and artifact naming rules are documented in the [analysis save contract](./docs/analysis-save-contract.md).
 
+Multivariate also includes a **Mineral-system assessment** function that maps registered assay, XRF,
+spectral, and geological observations into explainable deposit-system evidence. It retains source
+lineage, supports source sensitivity and investigation priorities, and displays interval evidence in
+the existing 3D Analysis workspace. See [mineral-system assessment](./docs/mineral-system-assessment.md)
+for the workflow, scoring assumptions, and scientific limits.
+
 ## Integration rule
 
 Analytics must not query `logging_structures` directly. The Data Pool projection (`services/datapool-api/src/projection.ts`) reads Field-owned rows, applies explicit semantic bindings, and publishes canonical `observation_values` records. Derived values are written through analysis runs and never overwrite primary observations.

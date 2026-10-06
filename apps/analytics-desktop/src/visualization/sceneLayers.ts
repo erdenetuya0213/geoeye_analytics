@@ -52,6 +52,8 @@ export function buildSceneLayers(input: SceneLayerInput): SceneLayer[] {
     { count: structures.filter((item) => item.kind === 'fault').length, geometry: 'discs', group: 'Structure', id: 'faults', label: 'Faults', source: 'Structure interpretation' },
     { colorBy: 'multivariate.pc1', count: countValues('multivariate.pc1'), geometry: 'attribute', group: 'Analytics', id: 'pca', label: 'PCA scores', source: 'Saved multivariate scores' },
     { colorBy: 'multivariate.cluster_id', count: countValues('multivariate.cluster_id'), geometry: 'attribute', group: 'Analytics', id: 'clusters', label: 'Cluster membership', source: 'Saved cluster ID' },
+    ...(['mineral.fit', 'mineral.coverage'] as const).flatMap(key => countValues(key) === 0 ? [] : [{ colorBy: key, count: countValues(key), geometry: 'attribute' as const, group: 'Analytics' as const, id: key, label: key === 'mineral.fit' ? 'Mineral evidence fit' : 'Mineral evidence coverage', source: 'Mineral-system assessment · observed interval support' }]),
+    ...(countDimension('mineral.evidence') === 0 ? [] : [{ colorBy: 'mineral.evidence', count: countDimension('mineral.evidence'), geometry: 'attribute' as const, group: 'Analytics' as const, id: 'mineral.evidence', label: 'Mineral evidence status', source: 'Support / contradiction / unobserved' }]),
     { count: input.selectedCount, geometry: 'highlight', group: 'Analytics', id: 'statistics', label: 'Statistics populations', source: 'Linked selection' },
     ...(input.handoff === null ? [] : [{
       count: input.handoff.count, geometry: 'highlight' as const, group: 'Analytics' as const, id: 'candidate',
@@ -62,7 +64,7 @@ export function buildSceneLayers(input: SceneLayerInput): SceneLayer[] {
       geometry: 'attribute',
       group: 'Analytics',
       id: `result:${result.resultId}`,
-      label: `${result.feature} · v${result.templateVersion}`,
+      label: `${result.inputName === 'Mineral-system assessment' ? result.inputName : result.feature} · v${result.templateVersion}`,
       result,
       source: `${result.sourceFileName} · ${result.inputName} · ${result.graphs.length} graph${result.graphs.length === 1 ? '' : 's'}`,
     })),
@@ -125,6 +127,8 @@ export interface SceneColorScale {
 }
 
 export interface SceneColorScaleInput {
+  /** Fixed scientific scale for bounded indices, rather than stretching each population. */
+  range?: readonly [number, number]
   categorical: boolean
   categoryPalette: readonly string[]
   classification: SceneClassification
@@ -138,8 +142,8 @@ export function buildSceneColorScale(input: SceneColorScaleInput): SceneColorSca
   const values = input.values.filter((value): value is string | number => value !== null)
   const categories = [...new Set(values.filter((value): value is string => typeof value === 'string'))].sort()
   const numbers = values.filter((value): value is number => typeof value === 'number' && Number.isFinite(value)).sort((a, b) => a - b)
-  const minimum = numbers[0] ?? 0
-  const maximum = numbers.at(-1) ?? 1
+  const minimum = input.range?.[0] ?? numbers[0] ?? 0
+  const maximum = input.range?.[1] ?? numbers.at(-1) ?? 1
   const classification: SceneClassification = input.categorical || categories.length > 0 ? 'categorical' : input.classification
   const breaks = numericClassBreaks(numbers, classification === 'categorical' ? 'continuous' : classification, palette.length, [...input.customBreaks])
   const lastClass = palette.length - 1

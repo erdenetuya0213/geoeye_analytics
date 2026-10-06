@@ -1,3 +1,4 @@
+import { importLocationColumns, readImportLocation } from '@geoeye/datapool-client'
 import type {
   DataPoolClient,
   Dataset,
@@ -116,9 +117,12 @@ function csvNumber(value: string | undefined): number | null {
 }
 
 function unitForColumn(column: string): string {
-  const normalized = column.toLocaleLowerCase()
-  if (/g\s*\/\s*t|gpt/.test(normalized)) return 'g/t'
+  const normalized = column.toLocaleLowerCase().replace(/[_()[\]]/g, ' ')
+  if (/\bg\s*(?:\/|\s)\s*t\b|\bgpt\b/.test(normalized)) return 'g/t'
+  if (/\bppb\b/.test(normalized)) return 'ppb'
   if (/\bppm\b/.test(normalized)) return 'ppm'
+  if (/\bmg\s*\/\s*kg\b/.test(normalized)) return 'mg/kg'
+  if (/[µu]g\s*\/\s*kg/.test(normalized)) return 'µg/kg'
   if (/\bmpa\b/.test(normalized)) return 'MPa'
   if (/\bkn\b/.test(normalized)) return 'kN'
   if (/\bmm\b/.test(normalized)) return 'mm'
@@ -132,10 +136,8 @@ function localTabularDataset(
   project: ProjectSummary,
   drillholes: readonly DrillholeSummary[],
 ): EdaDataset {
-  const holeIndex = headerIndex(draft.columns, ['holeid', 'borehole', 'hole', 'drillhole', 'drillholeid', 'bhid'])
-  const fromIndex = headerIndex(draft.columns, ['from', 'fromm', 'depthfrom', 'depthfromm'])
-  const toIndex = headerIndex(draft.columns, ['to', 'tom', 'depthto', 'depthtom'])
-  const depthIndex = headerIndex(draft.columns, ['depth', 'depthm', 'measureddepth', 'md'])
+  const locationColumnsByRole = importLocationColumns(draft.columns)
+  const { hole: holeIndex, from: fromIndex, to: toIndex, depth: depthIndex } = locationColumnsByRole
   const sampleIndex = headerIndex(draft.columns, ['sampleid', 'sample', 'reading', 'readingid', 'scanid', 'recordid'])
   const locationColumns = new Set([holeIndex, fromIndex, toIndex, depthIndex].filter((index) => index >= 0))
   const usedKeys = new Set<string>()
@@ -160,9 +162,9 @@ function localTabularDataset(
   const observations = draft.rows.map((row, rowIndex): EdaObservation => {
     const rawHoleName = holeIndex < 0 ? '' : row[holeIndex]?.trim() ?? ''
     const hole = holesByName.get(normalizedIdentifier(rawHoleName))
-    const pointDepth = depthIndex < 0 ? null : csvNumber(row[depthIndex])
-    const depthFrom = (fromIndex < 0 ? null : csvNumber(row[fromIndex])) ?? pointDepth ?? 0
-    const depthTo = Math.max(depthFrom, (toIndex < 0 ? null : csvNumber(row[toIndex])) ?? pointDepth ?? depthFrom)
+    const location = readImportLocation(row, locationColumnsByRole)
+    const depthFrom = location.depthFrom ?? Number.NaN
+    const depthTo = location.depthTo ?? Number.NaN
     const sourceId = `local:${draft.section}:${draft.updatedAt}:${rowIndex + 2}`
     const dimensions: Record<string, string> = {
       data_source: datasetLabel,
@@ -183,13 +185,14 @@ function localTabularDataset(
       }
     })
     return {
+      locationValid: location.valid,
       depthFrom,
       depthTo,
       dimensions,
       easting: hole?.collar?.easting ?? 0,
       holeId: hole?.name ?? (rawHoleName || 'Project'),
       id: sourceId,
-      joinKey: `${hole?.id ?? (normalizedIdentifier(rawHoleName) || 'project')}:${depthFrom}:${depthTo}`,
+      joinKey: location.key ?? `unmatched:${sourceId}`,
       lithology,
       northing: hole?.collar?.northing ?? 0,
       sampleId: sampleIndex < 0 ? `${draft.fileName}:${rowIndex + 2}` : row[sampleIndex]?.trim() || `${draft.fileName}:${rowIndex + 2}`,
@@ -518,8 +521,9 @@ function observationsForDataset(
     const holeName = hole?.name ?? observation.holeId ?? 'Project'
     const value = typedValue(observation)
     const existing = rows.get(key) ?? {
-      depthFrom: observation.depthFrom ?? 0,
-      depthTo: observation.depthTo ?? observation.depthFrom ?? 0,
+      locationValid: observation.holeId !== null && observation.depthFrom !== null && observation.depthTo !== null,
+      depthFrom: observation.depthFrom ?? Number.NaN,
+      depthTo: observation.depthTo ?? observation.depthFrom ?? Number.NaN,
       dimensions: {
         data_source: dataset.name,
         data_type: dataType,

@@ -1,6 +1,7 @@
 import { FolderOpen, HardDrive } from 'lucide-react'
 import { useDataPoolWorkspace } from '../state/DataPoolWorkspaceContext.js'
-import type { ConnectionSettings, ConnectionState } from '../types.js'
+import type { ConnectionSettings, ConnectionState, SectionId } from '../types.js'
+import { DatasetAnalysisLauncher } from '../components/DatasetAnalysisLauncher.js'
 import { LiveDataPoolPanel } from './LiveDataPoolPanel.js'
 import { useDesktopWorkspace } from '../desktop/DesktopWorkspaceContext.js'
 import { WorkspaceTransfers } from '../components/WorkspaceTransfers.js'
@@ -8,9 +9,10 @@ import { WorkspaceTransfers } from '../components/WorkspaceTransfers.js'
 interface DataPoolPageProps {
   connectionSettings: ConnectionSettings
   connectionState: ConnectionState
+  onNavigate: (section: SectionId) => void
 }
 
-export function DataPoolPage({ connectionState }: DataPoolPageProps) {
+export function DataPoolPage({ connectionState, onNavigate }: DataPoolPageProps) {
   const workspace = useDataPoolWorkspace()
   const desktop = useDesktopWorkspace()
   const variableCount = workspace.localSnapshot?.variables.length ?? null
@@ -38,6 +40,7 @@ export function DataPoolPage({ connectionState }: DataPoolPageProps) {
         </p>
         {filesystemPanel}
         <WorkspaceTransfers />
+        <DatasetAnalysisLauncher onNavigate={onNavigate} />
         {workspace.project === null ? (
           <section className="panel pool-sources-panel">
             <p className="pool-live-note">
