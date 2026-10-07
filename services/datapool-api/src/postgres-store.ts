@@ -1,4 +1,5 @@
 import {
+  normalizeFieldLoggingDataset,
   OBSERVATION_QUERY_DEFAULT_LIMIT,
   type AnalysisResultPackageQuery,
   type AnalysisResultPackageRecord,
@@ -1474,7 +1475,7 @@ export class PostgresDataPoolStore implements DataPoolStore {
       }
       datasets.push(...generated.values())
     }
-    return { datasets, projectId, templates, submissions }
+    return { datasets: datasets.map(normalizeFieldLoggingDataset), projectId, templates, submissions }
   }
 
   async saveCollar(projectId: string, holeId: string, input: CollarInput): Promise<Collar> {
