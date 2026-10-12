@@ -12,6 +12,8 @@ export interface ServerConfig {
   /** Signs user session tokens. Enables sign-in with GeoEye accounts. */
   sessionSecret?: string
   sessionTtlSeconds: number
+  activationPublicKey?: string
+  activationPublicKeyFile?: string
   corsOrigins: ReadonlySet<string>
   database: PoolConfig
   projection: ProjectionConfig
@@ -180,6 +182,11 @@ export function loadServerConfig(environment: NodeJS.ProcessEnv = process.env): 
   const nodeEnvironment = runtimeEnvironment(environment)
   const bearerToken = optionalValue(environment.DATAPOOL_BEARER_TOKEN)
   const sessionSecret = optionalValue(environment.DATAPOOL_SESSION_SECRET)
+  const activationPublicKey = optionalValue(environment.DATAPOOL_ACTIVATION_PUBLIC_KEY)?.replace(/\\n/g, '\n')
+  const activationPublicKeyFile = optionalValue(environment.DATAPOOL_ACTIVATION_PUBLIC_KEY_FILE)
+  if (activationPublicKey !== undefined && activationPublicKeyFile !== undefined) {
+    throw new Error('Set only one of DATAPOOL_ACTIVATION_PUBLIC_KEY and DATAPOOL_ACTIVATION_PUBLIC_KEY_FILE')
+  }
   if (bearerToken !== undefined && nodeEnvironment === 'production' && bearerToken.length < 32) {
     throw new Error('DATAPOOL_BEARER_TOKEN must contain at least 32 characters in production')
   }
@@ -205,6 +212,8 @@ export function loadServerConfig(environment: NodeJS.ProcessEnv = process.env): 
   }
   if (bearerToken !== undefined) config.bearerToken = bearerToken
   if (sessionSecret !== undefined) config.sessionSecret = sessionSecret
+  if (activationPublicKey !== undefined) config.activationPublicKey = activationPublicKey
+  if (activationPublicKeyFile !== undefined) config.activationPublicKeyFile = activationPublicKeyFile
   return config
 }
 

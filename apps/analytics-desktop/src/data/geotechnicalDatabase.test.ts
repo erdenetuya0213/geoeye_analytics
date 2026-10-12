@@ -2,10 +2,12 @@ import type { Dataset, FieldLoggingDataset, ObservationValue, VariableDefinition
 import { describe, expect, it } from 'vitest'
 import {
   buildDatabaseRmrSources,
+  groupRmrSources,
   buildFieldLoggingRmrSources,
   buildJoinedRmrDataset,
   buildMappedRmrDataset,
   isCompleteRmrMapping,
+  isRmrColumnCompatible,
   rmrSourceOptionLabel,
   type DatabaseRmrSource,
   type Rmr76ColumnMapping,
@@ -136,6 +138,15 @@ const joinSources = [
 ]
 
 describe('database RMR column mapping', () => {
+  it('groups exports in their parent Data category beneath the template', () => {
+    const template = { ...joinSource('template', 'rqd', 50), category: 'geotechnical', sourceKind: 'field-template' as const }
+    const child = { ...joinSource('export', 'rqd', 50), category: null, parentTemplateId: 'template', sourceKind: 'generated-csv' as const }
+    const strength = { ...joinSource('strength', 'ucs', 70), category: 'Strength' }
+    const groups = groupRmrSources([child, strength, template])
+    expect(groups.find(group => group.category === 'geotechnical')?.sources.map(source => source.dataset.id)).toEqual(['template', 'export'])
+    expect(groups.find(group => group.category === 'Strength')?.sources).toEqual([strength])
+    expect(groups.flatMap(group => group.sources)).toHaveLength(3)
+  })
   it('uses a scoped interval mean only for missing joint conditions with estimated lineage', () => {
     const sources = joinSources.map(source => ({ ...source, records: [10, 20, 30, 40].map(depthFrom => ({
       ...source.records[0]!, id: `${source.dataset.id}:${depthFrom}`, depthFrom, depthTo: depthFrom + 2,
@@ -221,6 +232,24 @@ describe('database RMR column mapping', () => {
     expect(source?.records[0]?.values).toEqual({ field_strength: 'R4', groundwater_condition: 'Damp' })
   })
 
+  it('allows numeric Schmidt values stored as categories while preserving the source schema', () => {
+    const [source] = buildFieldLoggingRmrSources([{
+      category: 'geotechnical', columns: [
+        { key: 'smidth', label: 'Smidth', dataType: 'category', unit: null },
+        { key: 'field_strength', label: 'Field strength (ISRM)', dataType: 'category', unit: null },
+      ], id: 'schmidt-template', name: 'Geotechnical sheet', version: 88, updatedAt: dataset.updatedAt,
+      records: [
+        { id: '1', holeId, depthFrom: 0, depthTo: 1, values: { smidth: '40' } },
+        { id: '2', holeId, depthFrom: 0, depthTo: 1, values: { field_strength: 'R3', smidth: '' } },
+        { id: '3', holeId, depthFrom: 1, depthTo: 2, values: { smidth: '0' } },
+      ],
+    }], new Map())
+    expect(source!.columns[0]).toMatchObject({ dataType: 'category', numericValues: true })
+    expect(isRmrColumnCompatible('geotech.ucs', source!.columns[0]!)).toBe(true)
+    expect(isRmrColumnCompatible('geotech.ucs', source!.columns[1]!)).toBe(true)
+    expect(source!.records[0]!.values.smidth).toBe('40')
+  })
+
   it('offers the full live template and excludes historical exports from older local copies', () => {
     const templateId = '55555555-5555-4555-8555-555555555555'
     const makeRecord = (id: string, sourceHoleId: string): FieldLoggingDataset['records'][number] => ({
@@ -254,7 +283,7 @@ describe('database RMR column mapping', () => {
     ], new Map())
     expect(sources.map((source) => source.sourceKind)).toEqual(['field-template'])
     expect(sources[0]).toMatchObject({ coveredHoleCount: 2, recordCount: 2, parentTemplateId: null })
-    expect(rmrSourceOptionLabel(sources[0]!, sources)).toBe('Structure auto · live template v35 · 2 records · 2 holes')
+    expect(rmrSourceOptionLabel(sources[0]!, sources)).toBe('Structure auto · Live · 2 records · 2 holes')
   })
 
   it('retains empty templates and unpopulated fields regardless of template category', () => {
@@ -297,4 +326,15 @@ describe('database RMR column mapping', () => {
     expect(joined.diagnostics.parameters['geotech.rqd']).toMatchObject({ sourceIntervalCount: 1, unmatchedIntervalCount: 1 })
     expect(joined.dataset.intervals).toEqual([])
   })
+})
+
+
+it('excludes explicitly invalid point-load tests after database publication', () => {
+  const columns = [variable('strength.is50', 'Is50 MPa', 'numeric'), variable('strength.valid', 'Valid', 'text')]
+  const samples = [observation('strength.is50', 0.17, 1), observation('strength.valid', 'false', 2),
+    { ...observation('strength.is50', 0.18, 3), sourceId: 'lab-row-2' },
+    { ...observation('strength.valid', 'true', 4), sourceId: 'lab-row-2' }]
+  const [source] = buildDatabaseRmrSources([dataset], samples, columns, new Map())
+  expect(source!.records).toHaveLength(1)
+  expect(source!.records[0]!.values['strength.is50']).toBe(0.18)
 })

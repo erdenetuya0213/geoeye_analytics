@@ -1,6 +1,9 @@
+import { VariablePicker } from '../components/VariablePicker.js'
+import { useQuery } from '@tanstack/react-query'
+import { prepareCorrelationMatrix } from '../analysis/correlationWorker.js'
 import { AlertTriangle, BarChart3, ChartSpline, ChevronDown, Grid3X3, LayoutDashboard, Play, RefreshCw, ScatterChart, Settings2, TableProperties, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { analyzeCorrelationMatrix, analyzeRelationship, analyzeSwath, type ScatterAnalysisResult } from '../analysis/chartResults.js'
+import { analyzeRelationship, analyzeSwath, type ScatterAnalysisResult } from '../analysis/chartResults.js'
 import { summarizeVariable, type EdaObservation, type JoinedPair, type SwathAxis } from '../analysis/eda.js'
 import { buildEdaRunRequest, edaConfigurationSignature, type EdaPopulationResult, type EdaRunConfiguration, type EdaRunRequest, type EdaRunResult } from '../analysis/edaRun.js'
 import type { DistributionResult, WeightingMethod } from '../analysis/distributionEngine.js'
@@ -15,7 +18,7 @@ import { useProjectEdaDatasets } from '../data/liveEda.js'
 import { useGeoEyeSelection } from '../state/SelectionContext.js'
 import { buildCdfOption, buildCorrelationOption, buildDistributionBoxPlotOption, buildHistogramOption, buildProbabilityPlotOption, buildScatterOption, buildSwathOption } from '../visualization/chartOptions.js'
 import { DownholeCorrelationWorkspace } from './DownholeCorrelationPage.js'
-import { usePersistentState } from '../state/persistentState.js'
+import { clearPersistedState, readPersistedState, usePersistentState } from '../state/persistentState.js'
 import { useProjectStorage } from '../state/ProjectStorageContext.js'
 
 type ExploreView = 'statistics' | 'distribution' | 'relationships' | 'swath' | 'downhole'
@@ -150,6 +153,30 @@ export function ExplorePage() {
   const draftSignature = draftConfiguration === null ? null : edaConfigurationSignature(draftConfiguration)
   const configurationChanged = activeRun !== null && activeRun.configurationSignature !== draftSignature
 
+  const relationshipDatasets = relationshipDatasetIds.flatMap((id) => { const candidate = datasets.find((item) => item.id === id); return candidate === undefined ? [] : [candidate] })
+  const appliedFilters = activeRun?.configuration ?? draftConfiguration
+  const matrixVariables = (view === 'relationships' && relationshipView === 'matrix' ? relationshipDatasets : []).flatMap((relationshipDataset) => relationshipDataset.variables
+    .filter((variable) => variable.dataType !== 'category')
+    .map((variable) => ({
+      datasetId: relationshipDataset.id,
+      id: `${relationshipDataset.id}::${variable.key}`,
+      label: variable.shortLabel,
+      observations: relationshipDataset.observations,
+      variable,
+      variableKey: variable.key,
+    })))
+  const duplicateMatrixLabels = new Set(matrixVariables.filter((variable, index, items) => items.findIndex((candidate) => candidate.label === variable.label) !== index).map((variable) => variable.label))
+  const labeledMatrixVariables = matrixVariables.map((variable) => ({
+    ...variable,
+    label: duplicateMatrixLabels.has(variable.label) ? `${variable.label} · ${relationshipDatasets.find((candidate) => candidate.id === variable.datasetId)?.name.split(' · ')[0] ?? 'Dataset'}` : variable.label,
+  }))
+  const matrixQuery = useQuery({
+    queryKey: ['correlation-matrix', relationshipDatasets.map(item => [item.id, item.snapshotAt]), appliedFilters?.activeFilterKeys, appliedFilters?.filterValues, correlationMethod],
+    enabled: view === 'relationships' && relationshipView === 'matrix' && labeledMatrixVariables.length > 0,
+    staleTime: Infinity,
+    queryFn: ({ signal }) => prepareCorrelationMatrix({ variables: labeledMatrixVariables, method: correlationMethod, activeFilterKeys: appliedFilters?.activeFilterKeys ?? [], filterValues: appliedFilters?.filterValues ?? {} }, signal),
+  })
+
   useEffect(() => {
     if (dataset === undefined || dataset.source !== 'live') return
     const numericKeys = dataset.variables.filter((variable) => variable.dataType !== 'category').map((variable) => variable.key)
@@ -177,6 +204,10 @@ export function ExplorePage() {
   useEffect(() => {
     if (cacheHydratedRef.current || datasets.length === 0 || typeof window === 'undefined') return
     cacheHydratedRef.current = true
+    if (readPersistedState<boolean>(storage, 'explore.datasetHandoff', false) === true) {
+      clearPersistedState(storage, 'explore.datasetHandoff')
+      return
+    }
     const current = (run: EdaRunResult) => datasets.find((candidate) => candidate.id === run.configuration.datasetId)?.snapshotAt === run.configuration.snapshotAt
     const cachedRuns = readEdaRunCache(storage)
     const restored = cachedRuns.find((run) => run.runId === activeRunId && current(run))
@@ -218,21 +249,19 @@ export function ExplorePage() {
   const selectedSet = new Set(selectedIds)
   const showDeclustered = declusteringEnabled
   const chartData = distributionSeries(activeResult, activeVariable, showDeclustered)
-  const swathResult = activeVariable === undefined ? null : analyzeSwath(populationObservations, activeVariable.key, swathAxis)
+  const swathResult = view !== 'swath' || activeVariable === undefined ? null : analyzeSwath(populationObservations, activeVariable.key, swathAxis)
   const swath = swathResult?.bins ?? []
   const swathOption = activeVariable === undefined || swathResult === null ? null : buildSwathOption(swathResult, {
     x: swathAxis === 'depth' ? 'Downhole depth (m)' : `${swathAxis} (m)`,
     y: `${activeVariable.label} (${activeVariable.unit})`,
   })
 
-  const relationshipDatasets = relationshipDatasetIds.flatMap((id) => { const candidate = datasets.find((item) => item.id === id); return candidate === undefined ? [] : [candidate] })
   const xDataset = datasets.find((candidate) => candidate.id === xDatasetId) ?? relationshipDatasets[0]
   const yDataset = datasets.find((candidate) => candidate.id === yDatasetId) ?? relationshipDatasets[0]
   const xVariable = xDataset?.variables.find((candidate) => candidate.key === xVariableKey) ?? xDataset?.variables[0]
   const yVariable = yDataset?.variables.find((candidate) => candidate.key === yVariableKey) ?? yDataset?.variables[0]
-  const appliedFilters = activeRun?.configuration ?? draftConfiguration
-  const xObservations = filterObservations(xDataset?.observations ?? [], appliedFilters?.activeFilterKeys ?? [], appliedFilters?.filterValues ?? {})
-  const yObservations = filterObservations(yDataset?.observations ?? [], appliedFilters?.activeFilterKeys ?? [], appliedFilters?.filterValues ?? {})
+  const xObservations = view !== 'relationships' || relationshipView === 'matrix' ? [] : filterObservations(xDataset?.observations ?? [], appliedFilters?.activeFilterKeys ?? [], appliedFilters?.filterValues ?? {})
+  const yObservations = view !== 'relationships' || relationshipView === 'matrix' ? [] : filterObservations(yDataset?.observations ?? [], appliedFilters?.activeFilterKeys ?? [], appliedFilters?.filterValues ?? {})
   const relationshipResult = xVariable === undefined || yVariable === undefined
     ? analyzeRelationship([], [], '', '')
     : analyzeRelationship(xObservations, yObservations, xVariable.key, yVariable.key)
@@ -246,23 +275,7 @@ export function ExplorePage() {
     x: `${xVariable?.label ?? 'X'} (${xVariable?.unit ?? ''})`,
     y: `${yVariable?.label ?? 'Y'} (${yVariable?.unit ?? ''})`,
   })
-  const matrixVariables = relationshipDatasets.flatMap((relationshipDataset) => relationshipDataset.variables
-    .filter((variable) => variable.dataType !== 'category')
-    .map((variable) => ({
-      datasetId: relationshipDataset.id,
-      id: `${relationshipDataset.id}::${variable.key}`,
-      label: variable.shortLabel,
-      observations: filterObservations(relationshipDataset.observations, appliedFilters?.activeFilterKeys ?? [], appliedFilters?.filterValues ?? {}),
-      variable,
-      variableKey: variable.key,
-    })))
-  const duplicateMatrixLabels = new Set(matrixVariables.filter((variable, index, items) => items.findIndex((candidate) => candidate.label === variable.label) !== index).map((variable) => variable.label))
-  const labeledMatrixVariables = matrixVariables.map((variable) => ({
-    ...variable,
-    label: duplicateMatrixLabels.has(variable.label) ? `${variable.label} · ${relationshipDatasets.find((candidate) => candidate.id === variable.datasetId)?.name.split(' · ')[0] ?? 'Dataset'}` : variable.label,
-  }))
-  const matrixResult = analyzeCorrelationMatrix(labeledMatrixVariables, correlationMethod)
-  const matrixOption = buildCorrelationOption(matrixResult)
+  const matrixOption = buildCorrelationOption(matrixQuery.data ?? { kind: 'correlation', cells: [], labels: [], method: correlationMethod })
   const detailVariables = (activeDataset?.variables ?? []).filter((variable) => activeRun?.populations.some((population) => population.variableKey === variable.key))
 
   const dimensionValues = (key: string) => Array.from(new Set(dataset.observations.flatMap((observation) => observation.dimensions[key] === undefined ? [] : [observation.dimensions[key]]))).sort()
@@ -398,9 +411,9 @@ export function ExplorePage() {
   return <div className="page explore-page">
     <h1 className="sr-only">Exploratory data analysis</h1>
 
-    <div className="analysis-toolbar eda-toolbar eda-run-toolbar">
+    {view !== 'downhole' ? <div className="analysis-toolbar eda-toolbar eda-run-toolbar">
       <label className="tool-select tool-select-field eda-dataset-select"><span>Dataset</span><select aria-label="EDA dataset" onChange={(event) => selectDataset(event.target.value)} value={dataset.id}><EdaDatasetOptions datasets={datasets} /></select><ChevronDown size={14} /></label>
-      <details className="eda-variable-picker"><summary aria-label="Select EDA variables"><span>Variables</span><strong>{dataset.variables.filter((item) => variableKeys.includes(item.key)).map((item) => item.shortLabel).join(', ')}</strong><ChevronDown size={14} /></summary><div>{dataset.variables.map((item) => <label key={item.key}><input checked={variableKeys.includes(item.key)} onChange={() => toggleVariable(item.key)} type="checkbox" /><span>{item.shortLabel}</span><small>{item.label} · {item.unit}</small></label>)}</div></details>
+      <VariablePicker ariaLabel="Select EDA variables" variables={dataset.variables} selectedKeys={variableKeys} onToggle={toggleVariable} minSelected={1} />
       {activeFilterKeys.map((key) => {
         const dimension = dataset.dimensions.find((candidate) => candidate.key === key)
         if (dimension === undefined) return null
@@ -411,7 +424,7 @@ export function ExplorePage() {
       <label className="tool-select tool-select-field"><span>Second group</span><select aria-label="Second grouping dimension" disabled={compareBy === null} onChange={(event) => setSecondGroup(event.target.value || null)} value={secondGroup ?? ''}><option value="">None</option>{dataset.dimensions.filter((dimension) => dimension.key !== compareBy).map((dimension) => <option key={dimension.key} value={dimension.key}>{dimension.label}</option>)}</select><ChevronDown size={14} /></label>
       <div className="toolbar-spacer" />
       <div className={`eda-run-control ${configurationChanged ? 'is-stale' : ''}`}>{activeRun === null ? null : <span>{configurationChanged ? 'Configuration changed' : `Run #${String(activeRun.runNumber).padStart(2, '0')} · Up to date`}</span>}{activeRun === null || configurationChanged ? <button className="primary-button" disabled={runEngine.pending || variableKeys.length === 0} onClick={startRun} type="button">{runEngine.pending ? <RefreshCw className="is-spinning" size={13} /> : <Play size={13} />}{runEngine.pending ? 'Running…' : activeRun === null ? 'Run analysis' : 'Update analysis'}</button> : null}</div>
-    </div>
+    </div> : null}
 
     <div className="eda-view-tabs eda-tool-tabs" role="tablist" aria-label="EDA views">
       <button aria-selected={view === 'statistics'} className={view === 'statistics' ? 'is-active' : ''} onClick={() => openView('statistics')} role="tab" type="button"><TableProperties aria-hidden="true" size={15} /><strong>Summary</strong></button>
@@ -422,7 +435,7 @@ export function ExplorePage() {
     </div>
     {contextualTools}
 
-    {runEngine.error !== null ? <div className="eda-engine-error" role="alert">{runEngine.error}. The previous cached run remains available.</div> : null}
+    {view !== 'downhole' && runEngine.error !== null ? <div className="eda-engine-error" role="alert">{runEngine.error}. The previous cached run remains available.</div> : null}
 
     {view === 'downhole' ? <DownholeCorrelationWorkspace embedded /> : activeRun === null ? <section className="panel eda-run-empty"><LayoutDashboard size={22} /><div><h2>Configure once, then run the full analysis</h2><p>GeoEye will calculate every requested variable and valid population combination. Results stay interactive until you update the run.</p></div><button className="primary-button" disabled={runEngine.pending} onClick={startRun} type="button"><Play size={13} /> Run analysis</button></section> : <>
       {supportsPopulationModes && resultMode === 'facets' ? <section className="panel eda-facets-panel">
@@ -493,7 +506,8 @@ export function ExplorePage() {
             <div className="eda-chart-grid eda-relationship-detail-grid"><ChartFrame detail={`${detailRelationship.matchMetadata.matchedObservationCount.toLocaleString()} matched observations · ${detailRelationship.matchMetadata.method} match${selectedRelationshipFacet === undefined ? '' : ` · ${selectedRelationshipFacet.title}`}`} title={`${xVariable?.shortLabel ?? 'X'} × ${yVariable?.shortLabel ?? 'Y'} scatter plot`}><GeoEyeChart ariaLabel="Selected X and Y relationship scatter plot" brushSelection="replace" clickSelection="toggle" loading={runEngine.pending} option={scatterOption} /></ChartFrame></div>
           </div> : null}
 
-          {relationshipView === 'matrix' ? <div className="eda-chart-grid eda-relationship-matrix-grid"><ChartFrame detail={`${labeledMatrixVariables.length} numeric variables from selected datasets · each cell shows matched n · click a cell to open Detail`} title={`${correlationMethod === 'pearson' ? 'Pearson' : 'Spearman'} correlation matrix`}><GeoEyeChart ariaLabel={`${correlationMethod} correlation matrix`} clickSelection="replace" loading={runEngine.pending} onDatumClick={openMatrixCell} option={matrixOption} renderer="svg" /></ChartFrame></div> : null}
+          {relationshipView === 'matrix' && matrixQuery.isError ? <p role="alert">The correlation matrix could not be prepared. Change the selection to retry.</p> : null}
+          {relationshipView === 'matrix' ? <div className="eda-chart-grid eda-relationship-matrix-grid"><ChartFrame detail={`${labeledMatrixVariables.length} numeric variables from selected datasets · each cell shows matched n · click a cell to open Detail`} title={`${correlationMethod === 'pearson' ? 'Pearson' : 'Spearman'} correlation matrix`}><GeoEyeChart ariaLabel={`${correlationMethod} correlation matrix`} clickSelection="replace" loading={matrixQuery.isFetching} onDatumClick={openMatrixCell} option={matrixOption} renderer="svg" /></ChartFrame></div> : null}
         </div></section>
         {relationshipView === 'detail' && xVariable !== undefined && yVariable !== undefined ? <RelationshipSourceTable pairs={detailRelationship.points} selectedIds={selectedSet} xVariable={xVariable} yVariable={yVariable} /> : null}
         </div> : null}

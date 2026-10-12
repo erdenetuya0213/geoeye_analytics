@@ -1,6 +1,20 @@
 import type { TabularImportInput, TabularImportSection } from '@geoeye/datapool-client'
 
-function csvRows(text: string): string[][] {
+export function csvRows(text: string): string[][] {
+  const counts = new Map([ [',', 0], [';', 0], ['\t', 0] ])
+  let inQuotes = false
+  const headerText = text.trimStart()
+  for (let index = 0; index < headerText.length; index++) {
+    const character = headerText[index]!
+    if (character === '"') {
+      if (inQuotes && headerText[index + 1] === '"') { index++; continue }
+      inQuotes = !inQuotes
+    } else if (!inQuotes) {
+      if (character === '\r' || character === '\n') break
+      if (counts.has(character)) counts.set(character, counts.get(character)! + 1)
+    }
+  }
+  const delimiter = [...counts].sort((left, right) => right[1] - left[1])[0]![0]
   const rows: string[][] = []
   let row: string[] = []
   let value = ''
@@ -14,7 +28,7 @@ function csvRows(text: string): string[][] {
       } else {
         quoted = !quoted
       }
-    } else if (character === ',' && !quoted) {
+    } else if (character === delimiter && !quoted) {
       row.push(value)
       value = ''
     } else if ((character === '\n' || character === '\r') && !quoted) {

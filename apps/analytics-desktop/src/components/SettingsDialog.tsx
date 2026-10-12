@@ -1,5 +1,6 @@
-import { BarChart3, Check, CircleDot, Cuboid, Palette, RotateCcw, X } from 'lucide-react'
+import { BarChart3, Check, CircleDot, Cuboid, Palette, RotateCcw, X, Cpu } from 'lucide-react'
 import { useEffect, useState, type CSSProperties } from 'react'
+import { EngineStatusPanel } from './EngineStatusPanel.js'
 import { chartDesigns, type ChartDesignId } from '../visualization/chartDesigns.js'
 import { normalizeSceneBackground, sceneBackgroundPresets } from '../visualization/sceneBackgrounds.js'
 import {
@@ -14,7 +15,7 @@ import {
 import { stereonetThemes, type StereonetThemeId } from '../visualization/stereonetThemes.js'
 import { usePersistentState } from '../state/persistentState.js'
 
-type SettingsSection = 'charts' | 'scene3d' | 'stereonet'
+type SettingsSection = 'charts' | 'scene3d' | 'stereonet' | 'engine'
 
 interface SettingsDialogProps {
   chartDesign: ChartDesignId
@@ -134,7 +135,8 @@ export function SettingsDialog({
     <section aria-labelledby="settings-title" aria-modal="true" className="settings-dialog" role="dialog">
       <header className="settings-dialog-header"><div className="settings-dialog-icon"><Palette size={18} /></div><div><p className="eyebrow">Preferences</p><h2 id="settings-title">Settings</h2></div><button aria-label="Close settings" className="icon-button" onClick={onClose} type="button"><X size={18} /></button></header>
       <div className="settings-dialog-body">
-        <nav aria-label="Settings sections"><button aria-current={section === 'charts' ? 'page' : undefined} className={section === 'charts' ? 'is-active' : ''} onClick={() => setSection('charts')} type="button"><BarChart3 size={16} /><span><strong>Charts</strong></span></button><button aria-current={section === 'scene3d' ? 'page' : undefined} className={section === 'scene3d' ? 'is-active' : ''} onClick={() => setSection('scene3d')} type="button"><Cuboid size={16} /><span><strong>3D scene</strong></span></button><button aria-current={section === 'stereonet' ? 'page' : undefined} className={section === 'stereonet' ? 'is-active' : ''} onClick={() => setSection('stereonet')} type="button"><CircleDot size={16} /><span><strong>Stereonet</strong></span></button></nav>
+        <nav aria-label="Settings sections"><button aria-current={section === 'charts' ? 'page' : undefined} className={section === 'charts' ? 'is-active' : ''} onClick={() => setSection('charts')} type="button"><BarChart3 size={16} /><span><strong>Charts</strong></span></button><button aria-current={section === 'scene3d' ? 'page' : undefined} className={section === 'scene3d' ? 'is-active' : ''} onClick={() => setSection('scene3d')} type="button"><Cuboid size={16} /><span><strong>3D scene</strong></span></button><button aria-current={section === 'stereonet' ? 'page' : undefined} className={section === 'stereonet' ? 'is-active' : ''} onClick={() => setSection('stereonet')} type="button"><CircleDot size={16} /><span><strong>Stereonet</strong></span></button><button aria-current={section === 'engine' ? 'page' : undefined} className={section === 'engine' ? 'is-active' : ''} onClick={() => setSection('engine')} type="button"><Cpu size={16} /><span><strong>Engine</strong></span></button></nav>
+        {section === 'engine' ? <EngineStatusPanel /> : null}
         {section === 'charts' ? <div className="settings-content"><div className="settings-section-heading"><div><h3>Chart design</h3></div></div>
           <div aria-label="Chart design" className="chart-design-grid" role="radiogroup">{chartDesigns.map((design) => { const selected = design.id === chartDesign; return <button aria-checked={selected} className={selected ? 'is-selected' : ''} key={design.id} onClick={() => onChartDesignChange(design.id)} role="radio" type="button"><ChartDesignPreview design={design} /><span><strong>{design.label}</strong></span>{selected ? <em><Check size={12} /> Active</em> : null}</button> })}</div>
         </div> : null}

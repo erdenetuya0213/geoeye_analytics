@@ -5,7 +5,7 @@ import {
   DataPoolIcon,
   DomainIcon,
   ExploreIcon,
-  GeotechIcon,
+  CustomIcon, GeotechIcon,
   GradeIcon,
   MultivariateIcon,
   StructureIcon,
@@ -29,6 +29,7 @@ const features: FeatureItem[] = [
   { label: 'Variography', icon: VariogramIcon, target: 'variography' },
   { label: 'Structure', icon: StructureIcon, target: 'structure' },
   { label: 'Geotech', icon: GeotechIcon, target: 'geotechnical' },
+  { label: 'Custom', icon: CustomIcon, target: 'custom' },
   { label: '3D Analysis', icon: View3DIcon, target: 'view-3d' },
 ]
 
@@ -43,11 +44,7 @@ export function Sidebar({ active, onNavigate, onOpenSettings }: SidebarProps) {
     <aside className="sidebar">
       <button aria-label="Open project overview" className="brand" onClick={() => onNavigate('overview')} title="Project overview" type="button">
         <div className="brand-mark" aria-hidden="true">
-          <img className="home-brand-icon" src="/astro-geo-home.png" alt="" />
-        </div>
-        <div className="brand-copy">
-          <strong>GeoEye</strong>
-          <span>Analytics</span>
+          <img className="home-brand-icon" src={`${import.meta.env.BASE_URL}astro-geo-home.png`} alt="" />
         </div>
       </button>
 

@@ -104,8 +104,14 @@ describe('live structure adapter', () => {
           { id: emptyTemplateId, name: 'New structure campaign', version: 1 },
         ],
       }),
-      fieldLoggingStructures: vi.fn().mockResolvedValue([]),
-      queryObservations: vi.fn().mockResolvedValue(observations),
+      fieldLoggingStructures: vi.fn().mockResolvedValue([firstTemplateId, secondTemplateId].map((templateId, index) => ({
+        id: `live-${index}`, templateId, holeId, depthFrom: 10 + index, depthTo: 10 + index,
+        alpha: 35 + index, beta: 120 + index, structureType: index === 0 ? 'Joint' : 'Fault',
+        projectId: project.id, reviewStatus: 'draft', orientationStatus: null,
+      }))),
+      queryObservations: vi.fn().mockResolvedValue([...observations, ...observations.slice(0, 3).map(row => ({
+        ...row, id: `legacy-${row.id}`, sourceId: 'legacy-mixed-export', sourceTemplateId: null,
+      }))]),
       surveys: vi.fn().mockResolvedValue([{ azimuth: 45, dip: -60, measuredDepth: 0 }]),
       variables: vi.fn().mockResolvedValue([alphaKey, betaKey, structureTypeKey]),
     } as unknown as DataPoolClient
@@ -113,9 +119,9 @@ describe('live structure adapter', () => {
     const result = await loadLiveStructureData(client, project)
 
     expect(result.templates).toEqual([
-      { datasetId: structureDatasetId, id: firstTemplateId, label: 'Oriented core structures · v7', observationCount: 1 },
-      { datasetId: structureDatasetId, id: secondTemplateId, label: 'Geotechnical joints · v4', observationCount: 1 },
-      { datasetId: structureDatasetId, id: emptyTemplateId, label: 'New structure campaign · v1', observationCount: 0 },
+      { datasetId: structureDatasetId, id: firstTemplateId, label: 'Oriented core structures · Live', observationCount: 1 },
+      { datasetId: structureDatasetId, id: secondTemplateId, label: 'Geotechnical joints · Live', observationCount: 1 },
+      { datasetId: structureDatasetId, id: emptyTemplateId, label: 'New structure campaign · Live', observationCount: 0 },
     ])
     expect(result.observationsByTemplate[firstTemplateId]).toEqual([
       expect.objectContaining({ alpha: 35, beta: 120, depth: 10, holeId: 'DH-001', structureType: 'Joint' }),
@@ -132,6 +138,12 @@ describe('live structure adapter', () => {
       acceptedOnly: true,
       variableKeys: ['structure.alpha', 'structure.beta', 'structure.type'],
     }))
+    // Removing all live rows must not fall back to the earlier accepted copy.
+    vi.mocked(client.fieldLoggingStructures).mockResolvedValue([])
+    const empty = await loadLiveStructureData(client, project)
+    expect(empty.observationsByTemplate[firstTemplateId]).toEqual([])
+    expect(empty.observationsByTemplate[secondTemplateId]).toEqual([])
+    expect(empty.inventoryByTemplate[firstTemplateId]?.detectedCount).toBe(0)
   })
 
   it('uses complete draft Alpha/Beta rows from the selected source logging template', async () => {
@@ -199,7 +211,7 @@ describe('live structure adapter', () => {
     expect(result.templates).toEqual([{
       datasetId: structureDatasetId,
       id: templateId,
-      label: 'Structure auto · v34',
+      label: 'Structure auto · Live',
       observationCount: 1,
     }])
     expect(result.observationsByTemplate[templateId]).toEqual([{

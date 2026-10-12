@@ -1,4 +1,4 @@
-import { MineralAssessmentWorkspace } from '../components/MineralAssessmentPanel.js'
+import { VariablePicker } from '../components/VariablePicker.js'
 import { useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, Box, CheckCircle2, ChevronDown, CopyPlus, Database, GitBranch, Layers3, Play, RefreshCw, Save, ScatterChart, TableProperties, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -96,14 +96,7 @@ interface MultivariatePageProps {
 }
 
 export function MultivariatePage({ onNavigate }: MultivariatePageProps) {
-  const [mode, setMode] = usePersistentState<'population' | 'mineral'>('multivariate.analysisMode', 'population')
-  return <>
-    <div className="eda-view-tabs eda-tool-tabs mineral-mode-tabs" role="tablist" aria-label="Multivariate analysis functions">
-      <button aria-selected={mode === 'population'} aria-controls="multivariate-function" role="tab" type="button" className={mode === 'population' ? 'is-active' : ''} onClick={() => setMode('population')}>Population analysis</button>
-      <button aria-selected={mode === 'mineral'} aria-controls="multivariate-function" role="tab" type="button" className={mode === 'mineral' ? 'is-active' : ''} onClick={() => setMode('mineral')}>Mineral-system assessment</button>
-    </div>
-    <div id="multivariate-function" role="tabpanel">{mode === 'mineral' ? <div className="page multivariate-page"><MineralAssessmentWorkspace onNavigate={onNavigate} /></div> : <MultivariatePopulationPage onNavigate={onNavigate} />}</div>
-  </>
+  return <MultivariatePopulationPage onNavigate={onNavigate} />
 }
 
 function MultivariatePopulationPage({ onNavigate }: MultivariatePageProps) {
@@ -361,7 +354,7 @@ function MultivariatePopulationPage({ onNavigate }: MultivariatePageProps) {
     <h1 className="sr-only">Multivariate analysis</h1>
     <div className="analysis-toolbar eda-toolbar mv-toolbar">
       <label className="tool-select tool-select-field mv-dataset-select"><span>Dataset snapshot</span><select aria-label="Multivariate dataset" onChange={(event) => changeDataset(event.target.value)} value={dataset.id}><EdaDatasetOptions datasets={datasets} /></select><ChevronDown size={14} /></label>
-      <details className="eda-variable-picker mv-variable-picker"><summary aria-label="Select multivariate variables"><span>Variables</span><strong>{draftVariables.length} selected</strong><ChevronDown size={14} /></summary><div><div className="mv-picker-heading"><span>Numeric inputs</span><small>Choose 2–10</small></div>{dataset.variables.filter((item) => item.dataType !== 'category').map((item) => <label key={item.key}><input checked={variableKeys.includes(item.key)} disabled={!variableKeys.includes(item.key) && variableKeys.length >= 10} onChange={() => toggleVariable(item.key)} type="checkbox" /><span><strong>{item.shortLabel}</strong><small>{item.label} · {item.unit}</small></span>{item.origin === 'derived' ? <em>Derived</em> : null}</label>)}<div className="mv-picker-heading"><span>Categorical context</span><small>Initial comparison</small></div>{dataset.dimensions.map((dimension) => <label key={dimension.key}><input checked={groupBy === dimension.key} onChange={() => { setGroupBy(dimension.key); if (secondGroup === dimension.key) setSecondGroup(null) }} type="radio" /><span><strong>{dimension.label}</strong><small>Retained for population comparison</small></span></label>)}</div></details>
+      <VariablePicker ariaLabel="Select multivariate variables" variables={dataset.variables.filter((item) => item.dataType !== 'category')} selectedKeys={variableKeys} onToggle={toggleVariable} maxSelected={10}><div className="mv-picker-heading"><span>Categorical context</span><small>Initial comparison</small></div>{dataset.dimensions.map((dimension) => <label className="feature-picker-option" key={dimension.key}><input name="multivariate-context" checked={groupBy === dimension.key} onChange={() => { setGroupBy(dimension.key); if (secondGroup === dimension.key) setSecondGroup(null) }} type="radio" /><span><strong>{dimension.label}</strong><small>Retained for population comparison</small></span></label>)}</VariablePicker>
       {activeFilterKeys.map((key) => { const dimension = dataset.dimensions.find((candidate) => candidate.key === key); if (dimension === undefined) return null; return <div className="eda-filter-control" key={key}><label className="tool-select tool-select-field"><span>{dimension.label}</span><select aria-label={`Filter by ${dimension.label}`} onChange={(event) => { setFilterValues((current) => ({ ...current, [key]: event.target.value })); clearSelection() }} value={filterValues[key] ?? 'all'}><option value="all">All</option>{dimensionValues(dataset, key).map((value) => <option key={value} value={value}>{value}</option>)}</select><ChevronDown size={14} /></label><button aria-label={`Remove ${dimension.label} filter`} onClick={() => removeFilter(key)} type="button"><X size={13} /></button></div> })}
       {availableFilters.length > 0 ? <label className="tool-select tool-select-field eda-add-filter"><span>Filters</span><select aria-label="Add multivariate filter" onChange={(event) => { addFilter(event.target.value); event.target.value = '' }} value=""><option value="">Add filter…</option>{availableFilters.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}</select><ChevronDown size={14} /></label> : null}
       <label className="tool-select tool-select-field"><span>Compare by</span><select aria-label="Multivariate primary grouping dimension" onChange={(event) => { const value = event.target.value || null; setGroupBy(value); if (value === null || value === secondGroup) setSecondGroup(null) }} value={groupBy ?? ''}><option value="">None</option>{dataset.dimensions.map((dimension) => <option key={dimension.key} value={dimension.key}>{dimension.label}</option>)}</select><ChevronDown size={14} /></label>

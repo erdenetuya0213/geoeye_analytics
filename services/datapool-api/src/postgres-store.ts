@@ -1,4 +1,7 @@
 import {
+  importLocationColumns,
+  normalizeFieldLoggingDataset,
+  readImportLocation,
   OBSERVATION_QUERY_DEFAULT_LIMIT,
   type AnalysisResultPackageQuery,
   type AnalysisResultPackageRecord,
@@ -30,12 +33,10 @@ import {
 import { Pool, type PoolClient, type PoolConfig } from 'pg'
 import type { LoginAccount, ProjectPermission, UserAccess } from './auth.js'
 import { conflict, notFound } from './errors.js'
-import {
-  generatedLoggingDataset,
-  generatedLoggingDatasetId,
-  generatedLoggingTemplateVersion,
-} from './generated-logging.js'
 import { liveLoggingColumn, mergeLiveLoggingColumn } from './live-logging.js'
+import { appendLiveStructureCalculations, type LiveLoggingInput, type LiveCoreRange } from './live-structure.js'
+import { appendLatestRqd } from './live-rqd.js'
+import { visibleStructure, type StructureVisibility } from './logging-visibility.js'
 import { runProjectProjection } from './projection.js'
 import type { CreateAnalysisRunInput } from './schemas.js'
 import type { DataPoolStore } from './store.js'
@@ -76,6 +77,7 @@ function objectValue(value: unknown): Record<string, unknown> {
 }
 
 const tabularImportLabels = {
+  geotechnical: { name: 'RMR76 analysis results', producerName: 'GeoEye Analytics', producerType: 'analytics' as const, spatialSupport: 'interval' as const },
   laboratory: { name: 'Laboratory CSV imports', producerName: 'Laboratory', producerType: 'laboratory' as const, spatialSupport: 'interval' as const },
   spectral: { name: 'Spectral CSV imports', producerName: 'Core scanner', producerType: 'instrument' as const, spatialSupport: 'point' as const },
   strength: { name: 'Strength CSV imports', producerName: 'Strength laboratory', producerType: 'laboratory' as const, spatialSupport: 'interval' as const },
@@ -425,20 +427,25 @@ export class PostgresDataPoolStore implements DataPoolStore {
       const datasetVersionId = versionResult.rows[0]?.id
       if (datasetVersionId === undefined) throw new Error('PostgreSQL did not return the imported dataset version')
 
-      const holeIndex = importHeaderIndex(input.columns, ['holeid', 'borehole', 'hole', 'drillhole', 'drillholeid'])
-      const fromIndex = importHeaderIndex(input.columns, ['from', 'fromm', 'depthfrom', 'depthfromm'])
-      const toIndex = importHeaderIndex(input.columns, ['to', 'tom', 'depthto', 'depthtom'])
-      const locationColumns = new Set([holeIndex, fromIndex, toIndex].filter((index) => index >= 0))
+      const locationColumnsByRole = importLocationColumns(input.columns)
+      const { hole: holeIndex, from: fromIndex, to: toIndex, depth: depthIndex } = locationColumnsByRole
+      const locationColumns = new Set([holeIndex, fromIndex, toIndex, depthIndex].filter((index) => index >= 0))
       const holeRows = await client.query<{ id: string; name: string }>(`
-        SELECT id, name FROM drill_holes WHERE project_id = $1
+        SELECT hole.id, COALESCE(NULLIF(btrim(to_jsonb(hole) ->> 'hole_name'), ''), NULLIF(btrim(to_jsonb(hole) ->> 'name'), ''), hole.id::text) AS name
+        FROM drill_holes hole WHERE hole.project_id = $1
       `, [projectId])
-      const holesByName = new Map(holeRows.rows.map((hole) => [normalizedImportHeader(hole.name), hole.id]))
+      const exactHoles = new Map(holeRows.rows.map(hole => [hole.name.trim().toLowerCase(), hole.id]))
+      const holesByName = new Map<string, string[]>()
+      for (const hole of holeRows.rows) {
+        const key = normalizedImportHeader(hole.name)
+        holesByName.set(key, [...(holesByName.get(key) ?? []), hole.id])
+      }
       const unmatchedHoles = new Set<string>()
       const usedVariableKeys = new Set<string>()
       const variables: Array<{ columnIndex: number; dataType: 'numeric' | 'text'; id: string }> = []
 
       for (let columnIndex = 0; columnIndex < input.columns.length; columnIndex += 1) {
-        if (locationColumns.has(columnIndex)) continue
+        if (input.rows.length === 0 || locationColumns.has(columnIndex)) continue
         const populated = input.rows.map((row) => (row[columnIndex] ?? '').trim()).filter((value) => value.length > 0)
         if (populated.length === 0) continue
         const dataType = populated.every((value) => Number.isFinite(Number(value))) ? 'numeric' as const : 'text' as const
@@ -454,7 +461,7 @@ export class PostgresDataPoolStore implements DataPoolStore {
           INSERT INTO variable_definitions (
             key, display_name, description, data_type, canonical_unit,
             origin, spatial_support, compatible_analyses, metadata_json
-          ) VALUES ($1, $2, $3, $4, NULL, 'primary', $5, '{}', $6::jsonb)
+          ) VALUES ($1, $2, $3, $4, NULL, $7, $5, '{}', $6::jsonb)
           ON CONFLICT (key) DO UPDATE SET
             display_name = EXCLUDED.display_name,
             description = EXCLUDED.description,
@@ -469,6 +476,7 @@ export class PostgresDataPoolStore implements DataPoolStore {
           dataType,
           config.spatialSupport,
           JSON.stringify({ importSection: input.section, sourceColumn: input.columns[columnIndex] }),
+          input.section === 'geotechnical' ? 'derived' : 'primary',
         ])
         const variableId = variableResult.rows[0]?.id
         if (variableId === undefined) throw new Error(`PostgreSQL did not return variable ${variableKey}`)
@@ -483,12 +491,12 @@ export class PostgresDataPoolStore implements DataPoolStore {
       const observations: Array<Record<string, unknown>> = []
       input.rows.forEach((row, rowIndex) => {
         const rawHoleName = holeIndex < 0 ? '' : (row[holeIndex] ?? '').trim()
-        const holeId = rawHoleName.length === 0 ? null : holesByName.get(normalizedImportHeader(rawHoleName)) ?? null
+        const aliases = holesByName.get(normalizedImportHeader(rawHoleName)) ?? []
+        const holeId = rawHoleName.length === 0 ? null : exactHoles.get(rawHoleName.toLowerCase()) ?? (aliases.length === 1 ? aliases[0]! : null)
         if (rawHoleName.length > 0 && holeId === null) unmatchedHoles.add(rawHoleName)
-        const rawFrom = fromIndex < 0 ? null : finiteNumber(row[fromIndex])
-        const depthFrom = rawFrom !== null && rawFrom >= 0 ? rawFrom : null
-        const rawTo = toIndex < 0 ? null : finiteNumber(row[toIndex])
-        const depthTo = rawTo !== null && rawTo >= 0 && (depthFrom === null || rawTo >= depthFrom) ? rawTo : null
+        const location = readImportLocation(row, locationColumnsByRole)
+        const depthFrom = location.valid ? location.depthFrom : null
+        const depthTo = location.valid ? location.depthTo : null
         variables.forEach((variable) => {
           const rawValue = (row[variable.columnIndex] ?? '').trim()
           if (rawValue.length === 0) return
@@ -1040,7 +1048,7 @@ export class PostgresDataPoolStore implements DataPoolStore {
     await this.#requireProject(this.#pool, projectId)
     if (!await this.#tableReadable('logging_structures')) return []
     const dictionaryReadable = await this.#tableReadable('dictionary_items')
-    const result = await this.#pool.query<{
+    const result = await this.#pool.query<StructureVisibility & {
       alpha_beta: unknown
       depth_from: number | string | null
       depth_to: number | string | null
@@ -1061,8 +1069,11 @@ export class PostgresDataPoolStore implements DataPoolStore {
                NULLIF(btrim(structure.structure_type), ''),
                NULLIF(btrim(structure.selections_json ->> 'discontinuity_type'), '')
              ) AS structure_type,
-             structure.review_status
+             structure.review_status, structure.source,
+             to_jsonb(core_row) -> 'row_bbox_json' AS row_bbox_json,
+             to_jsonb(core_row) -> 'stage3_rqd_json' AS stage3_rqd_json
       FROM logging_structures AS structure
+      LEFT JOIN core_rows AS core_row ON core_row.id = structure.row_id
       ${dictionaryReadable
         ? `LEFT JOIN dictionary_items AS dictionary
              ON dictionary.id::text = COALESCE(
@@ -1074,7 +1085,7 @@ export class PostgresDataPoolStore implements DataPoolStore {
       ORDER BY structure.hole_id NULLS LAST, structure.depth_from NULLS LAST, structure.id
     `, [projectId])
 
-    return result.rows.map((row) => {
+    return result.rows.filter(visibleStructure).map((row) => {
       const selections = objectValue(row.alpha_beta)
       const depthFrom = finiteNumber(row.depth_from)
         ?? firstFinite(selections, ['structure_depth_m', 'depth_m'])
@@ -1274,6 +1285,7 @@ export class PostgresDataPoolStore implements DataPoolStore {
       type Column = FieldLoggingDataset['columns'][number]
       type Cell = FieldLoggingDataset['records'][number]['values'][string]
       interface IntervalRow {
+        class_id: string
         depth_from: number | string | null
         depth_to: number | string | null
         hole_id: string
@@ -1318,17 +1330,21 @@ export class PostgresDataPoolStore implements DataPoolStore {
 
       const dictionaryReadable = await this.#tableReadable('dictionary_items')
       const dictionaryById = new Map<string, string>()
+      const dictionaryCodes = new Map<string, string>()
       if (dictionaryReadable) {
-        const dictionaryResult = await this.#pool.query<{ id: string; label: string }>(`
-          SELECT item.id::text AS id,
+        const dictionaryResult = await this.#pool.query<{ id: string; label: string; code: string | null }>(`
+          SELECT item.id::text AS id, item.code,
                  COALESCE(NULLIF(btrim(item.name), ''), NULLIF(btrim(item.code), ''), item.id::text) AS label
           FROM dictionary_items AS item
         `)
-        for (const item of dictionaryResult.rows) dictionaryById.set(item.id, item.label)
+        for (const item of dictionaryResult.rows) {
+          dictionaryById.set(item.id, item.label)
+          if (item.code !== null) dictionaryCodes.set(item.id, item.code)
+        }
       }
 
       const intervalResult = await this.#pool.query<IntervalRow>(`
-        SELECT interval.id::text AS id, interval.row_id::text AS row_id,
+        SELECT interval.id::text AS id, interval.row_id::text AS row_id, interval.class_id,
                interval.template_id::text AS template_id, row.hole_id::text AS hole_id,
                COALESCE(interval.depth_from, row.depth_from) AS depth_from,
                COALESCE(interval.depth_to, row.depth_to, interval.depth_from, row.depth_from) AS depth_to,
@@ -1340,6 +1356,16 @@ export class PostgresDataPoolStore implements DataPoolStore {
       `, [projectId])
 
       const groupedByTemplate = new Map<string, Map<string, FieldLoggingDataset['records'][number]>>()
+      const loggedValue = (key: string, raw: Cell): Cell => {
+        if (typeof raw !== 'string') return raw
+        const code = dictionaryCodes.get(raw) ?? raw.replace(/^relog-unassigned:/, '')
+        if (key === 'field_strength' && /^R[0-6]$/.test(code)) return `${code} · ${dictionaryById.get(raw) ?? code}`
+        if (key === 'groundwater_condition') {
+          const seepage: Record<string, string> = { '1': 'dry', '2': 'dry', '3': 'dry', '4': 'moist', '5': 'moderate', '6': 'severe', D: 'dry', DP: 'moist', W: 'moderate', DR: 'moderate', F: 'severe' }
+          if (seepage[code]) return seepage[code]!
+        }
+        return dictionaryById.get(raw) ?? raw
+      }
       const columnsByTemplate = new Map<string, Map<string, Column>>()
       for (const row of intervalResult.rows) {
         const definitions = fieldDefinitions.get(row.template_id) ?? new Map<string, Column>()
@@ -1360,7 +1386,7 @@ export class PostgresDataPoolStore implements DataPoolStore {
           if (key.startsWith('_') || rawValue === undefined || (typeof rawValue === 'object' && rawValue !== null)) continue
           const definition = definitions.get(key) ?? liveLoggingColumn(key, rawValue)
           if (definition === undefined) continue
-          const value: Cell = typeof rawValue === 'string' ? dictionaryById.get(rawValue) ?? rawValue : rawValue as Cell
+          const value: Cell = loggedValue(key, rawValue as Cell)
           record.values[key] = value
           observedColumns.set(key, definitions.has(key) ? definition : mergeLiveLoggingColumn(observedColumns.get(key), definition))
         }
@@ -1369,24 +1395,26 @@ export class PostgresDataPoolStore implements DataPoolStore {
         columnsByTemplate.set(row.template_id, observedColumns)
       }
 
+      let liveStructures: LiveLoggingInput[] = []
       if (structuresPresent) {
-        const structureResult = await this.#pool.query<{
-          depth_from: number | string | null
-          depth_to: number | string | null
-          hole_id: string
-          id: string
-          selections_json: unknown
-          template_id: string
-        }>(`
+        const structureResult = await this.#pool.query<LiveLoggingInput & StructureVisibility>(`
           SELECT structure.id::text AS id, structure.template_id::text AS template_id,
                  structure.hole_id::text AS hole_id, structure.depth_from, structure.depth_to,
-                 structure.selections_json
+                 structure.selections_json, structure.class_id, structure.source,
+                 to_jsonb(core_row) -> 'row_bbox_json' AS row_bbox_json,
+                 to_jsonb(core_row) -> 'stage3_rqd_json' AS stage3_rqd_json
           FROM logging_structures AS structure
+          LEFT JOIN core_rows AS core_row ON core_row.id = structure.row_id
           WHERE structure.project_id = $1
             AND structure.template_id IS NOT NULL AND structure.hole_id IS NOT NULL
           ORDER BY structure.updated_at, structure.id
         `, [projectId])
-        for (const row of structureResult.rows) {
+        liveStructures = structureResult.rows.filter(visibleStructure)
+        for (const submission of submissions) {
+          submission.structureCount = liveStructures.filter(row => row.template_id === submission.templateId
+            && row.hole_id === submission.holeId).length
+        }
+        for (const row of liveStructures) {
           const definitions = fieldDefinitions.get(row.template_id) ?? new Map<string, Column>()
           const values = objectValue(row.selections_json)
           const depthFrom = finiteNumber(row.depth_from) ?? firstFinite(values, ['structure_depth_m', 'depth_m'])
@@ -1414,6 +1442,12 @@ export class PostgresDataPoolStore implements DataPoolStore {
         }
       }
 
+      const coreRanges = liveStructures.length === 0 ? [] : (await this.#pool.query<LiveCoreRange>(`
+        SELECT hole_id::text AS hole_id, depth_from, depth_to,
+               to_jsonb(core_rows) -> 'row_bbox_json' AS row_bbox_json,
+               to_jsonb(core_rows) -> 'recovery_json' AS recovery_json
+        FROM core_rows WHERE project_id = $1
+      `, [projectId])).rows
       for (const templateRow of templateResult.rows) {
         const records = [...(groupedByTemplate.get(templateRow.id)?.values() ?? [])]
           .filter((record) => Object.keys(record.values).length > 0)
@@ -1425,56 +1459,25 @@ export class PostgresDataPoolStore implements DataPoolStore {
           .sort((left, right) => left.label.localeCompare(right.label) || left.key.localeCompare(right.key))
         if (columns.length === 0) continue
         const category = objectValue(templateRow.template_json).category
-        datasets.push({
+        const dataset: FieldLoggingDataset = {
           category: typeof category === 'string' && category.trim() !== '' ? category.trim() : null,
           columns,
           id: templateRow.id,
           name: templateRow.name,
           records,
-          updatedAt: iso(templateRow.updated_at),
+          updatedAt: submissions.filter(item => item.templateId === templateRow.id)
+            .reduce((latest, item) => item.updatedAt && item.updatedAt > latest ? item.updatedAt : latest, iso(templateRow.updated_at)),
           version: Number(templateRow.version),
-        })
-      }
-    }
-    if (generatedLogsPresent) {
-      const exports = await this.#pool.query<{
-        id: string; template_id: string; hole_id: string; name: string; payload_json: unknown; updated_at: Date | string
-      }>(`
-        SELECT DISTINCT ON (log.template_id, log.drill_hole_id)
-          log.id::text AS id, log.template_id::text AS template_id,
-          log.drill_hole_id::text AS hole_id, log.name, log.payload_json, log.updated_at
-        FROM generated_logs AS log
-        WHERE log.project_id = $1 AND log.status <> 'archived'
-          AND log.template_id IS NOT NULL AND log.drill_hole_id IS NOT NULL
-          AND jsonb_typeof(log.payload_json -> 'csv') = 'string'
-        ORDER BY log.template_id, log.drill_hole_id, log.updated_at DESC, log.id DESC
-      `, [projectId])
-      const generated = new Map<string, FieldLoggingDataset>()
-      for (const log of exports.rows) {
-        const template = templateById.get(log.template_id)
-        if (template === undefined || !holeById.has(log.hole_id)) continue
-        const payload = objectValue(log.payload_json)
-        const csv = payload.csv
-        if (typeof csv !== 'string') continue
-        const version = generatedLoggingTemplateVersion(payload, template.version)
-        const dataset = generatedLoggingDataset({ csv, holeId: log.hole_id,
-          id: generatedLoggingDatasetId(log.template_id, version), name: `${template.name} · generated CSV`,
-          updatedAt: iso(log.updated_at), version })
-        const existing = generated.get(dataset.id)
-        if (existing === undefined) generated.set(dataset.id, dataset)
-        else {
-          const columns = new Map(existing.columns.map(column => [column.key, column]))
-          for (const column of dataset.columns) {
-            if (columns.get(column.key)?.dataType !== 'numeric') columns.set(column.key, column)
-          }
-          existing.columns = [...columns.values()]
-          existing.records.push(...dataset.records)
-          if (dataset.updatedAt > existing.updatedAt) existing.updatedAt = dataset.updatedAt
         }
+        appendLiveStructureCalculations({ dataset, template: templateRow.template_json,
+          structures: liveStructures, intervals: intervalResult.rows, coreRanges, dictionaryCodes, templates: templateResult.rows })
+        appendLatestRqd(dataset, templateRow.template_json, intervalResult.rows)
+        datasets.push(dataset)
       }
-      datasets.push(...generated.values())
     }
-    return { datasets, projectId, templates, submissions }
+    // Saved CSVs are immutable publication history in Field's Logs, not a
+    // second (possibly stale or historically mixed) live analysis source.
+    return { datasets: datasets.map(normalizeFieldLoggingDataset), projectId, templates, submissions }
   }
 
   async saveCollar(projectId: string, holeId: string, input: CollarInput): Promise<Collar> {

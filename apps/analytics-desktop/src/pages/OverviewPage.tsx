@@ -1,6 +1,7 @@
 import type { ProjectSummary } from '@geoeye/datapool-client'
 import { ArrowRight, Check, CircleAlert, RefreshCw } from 'lucide-react'
 import { effectiveDrillholes, type LocalDrillholeDraft, type LocalProjectSnapshot } from '../data/localProjectDb.js'
+import { datasetStateLabel } from '../data/datasetLabels.js'
 import { useDataPoolWorkspace } from '../state/DataPoolWorkspaceContext.js'
 import type { SectionId } from '../types.js'
 
@@ -73,7 +74,7 @@ function ProjectOverview({ draft, onNavigate, onRefresh, project, refreshing, sn
         <div className="panel-heading"><div><p className="eyebrow">Database</p><h2>Project datasets</h2></div></div>
         <div className="dataset-table">
           <div className="dataset-row dataset-header"><span>Dataset</span><span>Support</span><span>Version</span><span>Status</span><span>Updated</span></div>
-          {datasets.map((dataset) => <button className="dataset-row" key={dataset.id} onClick={() => onNavigate('data-pool')} type="button"><span className="dataset-name-cell"><i /><span><strong>{dataset.name}</strong><small>{dataset.producerName}</small></span></span><span><span className="support-tag">{dataset.spatialSupport}</span></span><span className="tabular">v{dataset.currentVersion}</span><span>{dataset.status}</span><span className="muted-cell">{new Date(dataset.updatedAt).toLocaleString()}</span></button>)}
+          {datasets.map((dataset) => <button className="dataset-row" key={dataset.id} onClick={() => onNavigate('data-pool')} type="button"><span className="dataset-name-cell"><i /><span><strong>{dataset.name}</strong><small>{dataset.producerName}</small></span></span><span><span className="support-tag">{dataset.spatialSupport}</span></span><span className="tabular">{datasetStateLabel(dataset)}</span><span>{dataset.status}</span><span className="muted-cell">{new Date(dataset.updatedAt).toLocaleString()}</span></button>)}
           {datasets.length === 0 ? <p className="pool-live-note">No datasets are registered for this project yet.</p> : null}
         </div>
       </section>

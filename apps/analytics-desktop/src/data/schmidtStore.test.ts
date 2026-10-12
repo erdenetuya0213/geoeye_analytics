@@ -24,12 +24,13 @@ const record: SchmidtRecord = {
 describe('Schmidt strength records', () => {
   it('round-trips imported records', () => {
     const storage = memoryStorage()
-    expect(writeSchmidtRecords(storage, [record])).toBe(true)
-    expect(readSchmidtRecords(storage)).toEqual([record])
+    const rows = [record, { ...record, id: 'zero', reboundValue: 0 }]
+    expect(writeSchmidtRecords(storage, rows)).toBe(true)
+    expect(readSchmidtRecords(storage)).toEqual(rows)
   })
 
   it('drops malformed stored rows', () => {
-    const storage = memoryStorage(JSON.stringify([record, { ...record, reboundValue: 0 }]))
+    const storage = memoryStorage(JSON.stringify([record, { ...record, reboundValue: -1 }]))
     expect(readSchmidtRecords(storage)).toEqual([record])
   })
 })

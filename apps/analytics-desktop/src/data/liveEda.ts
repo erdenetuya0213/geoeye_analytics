@@ -1,4 +1,5 @@
 import { importLocationColumns, readImportLocation } from '@geoeye/datapool-client'
+import { normalizeFieldLoggingDataset } from '@geoeye/datapool-client'
 import type {
   DataPoolClient,
   Dataset,
@@ -9,6 +10,11 @@ import type {
   VariableDefinition,
 } from '@geoeye/datapool-client'
 import { useQuery } from '@tanstack/react-query'
+import { useMemo } from 'react'
+import { useProjectStorage } from '../state/ProjectStorageContext.js'
+import { readSavedRmrDatasets, type SavedRmrDataset } from './savedRmrDatasets.js'
+import { buildLocalEdaInWorker } from './localEdaWorker.js'
+import { datasetDisplayLabel, fieldLoggingDisplayLabel } from './datasetLabels.js'
 import { buildAnalyticalObservations } from '../analysis/analyticalDataset.js'
 import type { EdaObservation } from '../analysis/eda.js'
 import { useDataPoolWorkspace } from '../state/DataPoolWorkspaceContext.js'
@@ -80,6 +86,7 @@ function mergeVariables(...groups: ReadonlyArray<readonly EdaVariableDefinition[
 }
 
 const localImportLabels = {
+  geotechnical: 'RMR76 analysis results',
   laboratory: 'Laboratory CSV imports',
   spectral: 'Spectral CSV imports',
   strength: 'Strength CSV imports',
@@ -87,6 +94,7 @@ const localImportLabels = {
 } as const
 
 const localImportKinds: Record<keyof typeof localImportLabels, EdaDatasetKind> = {
+  geotechnical: 'other',
   laboratory: 'laboratory',
   spectral: 'spectral',
   strength: 'strength',
@@ -135,6 +143,7 @@ function localTabularDataset(
   draft: LocalTabularDraft,
   project: ProjectSummary,
   drillholes: readonly DrillholeSummary[],
+  saved?: { id: string; name: string },
 ): EdaDataset {
   const locationColumnsByRole = importLocationColumns(draft.columns)
   const { hole: holeIndex, from: fromIndex, to: toIndex, depth: depthIndex } = locationColumnsByRole
@@ -156,16 +165,21 @@ function localTabularDataset(
     usedKeys.add(key)
     return [{ columnIndex, dataType, key, label: column, unit: unitForColumn(column) }]
   })
-  const holesByName = new Map(drillholes.map((hole) => [normalizedIdentifier(hole.name), hole]))
-  const datasetLabel = localImportLabels[draft.section]
+  const resolveHole = (value: string) => {
+    const exact = drillholes.filter(hole => hole.id === value || hole.name === value)
+    if (exact.length === 1) return exact[0]
+    const normalized = drillholes.filter(hole => normalizedIdentifier(hole.name) === normalizedIdentifier(value))
+    return normalized.length === 1 ? normalized[0] : undefined
+  }
+  const datasetLabel = saved?.name ?? localImportLabels[draft.section]
   const dataType = dataTypeLabel(localImportKinds[draft.section])
   const observations = draft.rows.map((row, rowIndex): EdaObservation => {
     const rawHoleName = holeIndex < 0 ? '' : row[holeIndex]?.trim() ?? ''
-    const hole = holesByName.get(normalizedIdentifier(rawHoleName))
+    const hole = resolveHole(rawHoleName)
     const location = readImportLocation(row, locationColumnsByRole)
     const depthFrom = location.depthFrom ?? Number.NaN
     const depthTo = location.depthTo ?? Number.NaN
-    const sourceId = `local:${draft.section}:${draft.updatedAt}:${rowIndex + 2}`
+    const sourceId = `local:${saved?.id ?? draft.section}:${draft.updatedAt}:${rowIndex + 2}`
     const dimensions: Record<string, string> = {
       data_source: datasetLabel,
       data_type: dataType,
@@ -206,7 +220,7 @@ function localTabularDataset(
       ...baseDimensions,
       ...columns.filter((column) => column.dataType === 'category').map((column) => ({ key: column.key, label: column.label })),
     ],
-    id: `local-csv-${draft.section}`,
+    id: saved ? `saved-rmr:${saved.id}` : `local-csv-${draft.section}`,
     name: `${datasetLabel} · local`,
     observations,
     producer: 'GeoEye Analytics local database',
@@ -219,7 +233,7 @@ function localTabularDataset(
       decimals: column.unit === '%' || column.unit === 'degree' ? 1 : 3,
       key: column.key,
       label: column.label,
-      origin: 'primary',
+      origin: draft.section === 'geotechnical' ? 'derived' : 'primary',
       shortLabel: column.label,
       unit: column.unit,
     })),
@@ -375,7 +389,7 @@ function fieldLoggingDataset(
       { key: 'logging_category', label: 'Logging category' },
     ], categoryColumns.map((column) => ({ key: column.key, label: column.label }))),
     id: `local-field-logging-${dataset.id}`,
-    name: `${dataset.name} · Logging v${dataset.version}`,
+    name: fieldLoggingDisplayLabel(dataset),
     observations,
     producer: 'GeoEye Field local database',
     project: project.name,
@@ -407,7 +421,7 @@ function datasetWithSourceGroup(dataset: EdaDataset): EdaDataset {
     dimensions: mergeDimensions(dataset.dimensions, [dimension]),
     observations: dataset.observations.map((observation) => ({
       ...observation,
-      dimensions: { ...observation.dimensions, [dimension.key]: dataset.name.replace(/ · (local|v\d+|Logging v\d+)$/, '') },
+      dimensions: { ...observation.dimensions, [dimension.key]: dataset.name.replace(/ · (local|Live|v\d+|Logging v\d+|CSV v\d+)$/, '') },
     })),
   }
 }
@@ -609,7 +623,7 @@ export function buildEdaDatasets(input: {
     return [{
       dimensions: [...baseDimensions, ...categoryDimensions],
       id: dataset.id,
-      name: `${dataset.name} · v${dataset.currentVersion}`,
+      name: datasetDisplayLabel(dataset),
       observations: datasetObservations,
       producer: dataset.producerName,
       project: project.name,
@@ -626,6 +640,7 @@ export function buildLocalEdaDatasets(
   drillholeDraft: LocalDrillholeDraft | null,
   tabularDrafts: LocalTabularDrafts = {},
   activeProject: ProjectSummary | null = null,
+  savedRmrDatasets: readonly SavedRmrDataset[] = [],
 ): EdaDataset[] {
   const project = activeProject ?? snapshot?.project ?? null
   if (project === null) return []
@@ -639,29 +654,35 @@ export function buildLocalEdaDatasets(
     observations: snapshot.observations,
     project: snapshot.project,
     variables: snapshot.variables,
-  }).filter((dataset) => ![...replacedDatasetNames].some((name) => dataset.name.startsWith(`${name} · v`)))
+  }).filter((dataset) => ![...replacedDatasetNames].some((name) => dataset.name === `${name} · Live` || dataset.name.startsWith(`${name} · v`)))
   const loggingDatasets = (snapshot?.fieldLogging.datasets ?? [])
     .flatMap((dataset) => {
-      const converted = fieldLoggingDataset(dataset, project, drillholes)
+      const converted = fieldLoggingDataset(normalizeFieldLoggingDataset(dataset), project, drillholes)
       return converted === null ? [] : [converted]
     })
   const sourceDatasets = [...localDraftDatasets, ...loggingDatasets, ...snapshotDatasets, ...localDrillholeDatasets(snapshot, drillholeDraft, project)]
   const integrated = integratedLocalDataset(sourceDatasets, project)
-  return integrated === null ? sourceDatasets : [integrated, ...sourceDatasets]
+  // Historical scenarios are alternatives, not extra measurements to join
+  // into the project's integrated input population.
+  const saved = savedRmrDatasets.map(item => localTabularDataset(item.draft, project, drillholes, item))
+  return [...(integrated === null ? sourceDatasets : [integrated, ...sourceDatasets]), ...saved]
 }
 
 /** Returns only durable project datasets from the signed-in or offline local workspace. */
 export function useProjectEdaDatasets() {
   const workspace = useDataPoolWorkspace()
+  const storage = useProjectStorage()
   const projectId = workspace.project?.id ?? 'no-project'
   const localDraftSignature = (Object.keys(workspace.localTabularDrafts) as Array<keyof typeof workspace.localTabularDrafts>)
     .sort()
     .map((section) => `${section}:${workspace.localTabularDrafts[section]?.updatedAt ?? 'empty'}`)
     .join('|')
+  const savedRmrDatasets = useMemo(() => readSavedRmrDatasets(storage), [storage, localDraftSignature])
+  const savedSignature = savedRmrDatasets.map(item => `${item.id}:${item.draft.updatedAt}`).join('|')
   return useQuery<EdaDataset[]>({
     enabled: workspace.live && !workspace.projectsLoading && !workspace.localLoading,
-    queryFn: () => Promise.resolve(buildLocalEdaDatasets(workspace.localSnapshot, workspace.localDrillholeDraft, workspace.localTabularDrafts, workspace.project)),
-    queryKey: ['eda-datasets', 'local', projectId, workspace.localSnapshot?.refreshedAt ?? 'empty', workspace.localDrillholeDraft?.updatedAt ?? 'no-draft', localDraftSignature],
+    queryFn: ({ signal }) => buildLocalEdaInWorker([workspace.localSnapshot, workspace.localDrillholeDraft, workspace.localTabularDrafts, workspace.project, savedRmrDatasets], signal),
+    queryKey: ['eda-datasets', 'local', projectId, workspace.localSnapshot?.refreshedAt ?? 'empty', workspace.localDrillholeDraft?.updatedAt ?? 'no-draft', localDraftSignature, savedSignature],
     staleTime: Number.POSITIVE_INFINITY,
   })
 }

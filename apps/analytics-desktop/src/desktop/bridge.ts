@@ -1,4 +1,5 @@
 import type { AnalysisResultPackage } from '../data/analysisResultStore.js'
+import type { ProjectSummary } from '@geoeye/datapool-client'
 import type { LocalProjectRecord } from '../data/localProjectDb.js'
 
 export interface DesktopCredential {
@@ -65,12 +66,15 @@ export interface GeoEyeDesktopBridge {
   clearCredential(): Promise<void>
   requestDataPool(input: DesktopDataPoolRequest): Promise<DesktopDataPoolResponse>
   databaseConfiguration(): Promise<DatabaseConfiguration | null>
+  databaseConnect(): Promise<DatabaseConfiguration | null>
+  listLocalProjects(input: { endpoint: string; accountId: string }): Promise<ProjectSummary[]>
   workspaceStatus(): Promise<DesktopWorkspaceStatus>
   chooseWorkspaceRoot(): Promise<DesktopWorkspaceStatus | null>
   readProjectRecord(address: ProjectStorageAddress): Promise<LocalProjectRecord | null>
   writeProjectRecord(input: { address: ProjectStorageAddress; record: LocalProjectRecord }): Promise<void>
   archiveImportFiles(input: { address: ProjectStorageAddress; files: ImportSourceFile[] }): Promise<string[]>
   exportWorkspaceFile(input: { address: ProjectStorageAddress; name: string; contents: string }): Promise<string>
+  exportChartImages?(input: { images: Array<{ name: string; format: 'png' | 'svg'; dataUrl: string }> }): Promise<{ paths: string[]; canceled: boolean }>
   enqueueSync(input: { address: ProjectStorageAddress; entity: string; version: string; requests: SyncRequest[] }): Promise<SyncOperation[]>
   syncStatus(input: { address: ProjectStorageAddress }): Promise<SyncOperation[]>
   runSync(input: { address: ProjectStorageAddress }): Promise<SyncOperation[]>
@@ -81,7 +85,12 @@ export interface GeoEyeDesktopBridge {
   removeProjectDocument(input: { address: ProjectStorageAddress; key: string }): Promise<void>
   saveAnalysisResultPackage(input: { address: ProjectStorageAddress; result: AnalysisResultPackage }): Promise<void>
   readAnalysisResultPackages(address: ProjectStorageAddress): Promise<AnalysisResultPackage[]>
+  engineStatus(): Promise<EngineStatus>
+  engineCall(input: { method: string; params?: unknown }): Promise<EngineCallResponse>
 }
+
+export interface EngineStatus { running: boolean; version: string | null; source: 'env' | 'bundled' | 'source' | 'path' | null; error: string | null }
+export type EngineCallResponse = { ok: true; result: unknown } | { ok: false; error: string; type: string | null }
 
 export interface ImportSourceFile { name: string; contents: string; base64?: string }
 export interface SyncRequest { path: string; method: 'PUT' | 'POST'; body: string }

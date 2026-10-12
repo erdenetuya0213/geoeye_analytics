@@ -4,7 +4,7 @@ import { RMR76_METHOD_DEFINITION, type ResolvedInput, type Rmr76IntervalResult }
 export type ResultStatusFilter = 'all' | Rmr76IntervalResult['status'] | 'estimated'
 
 const parameters = [
-  { key: 'geotech.ucs', label: 'UCS (MPa)', score: 'strength' },
+  { key: 'geotech.ucs', label: 'UCS (MPa) / field grade', score: 'strength' },
   { key: 'geotech.rqd', label: 'RQD (%)', score: 'rqd' },
   { key: 'structure.joint_spacing', label: 'Spacing (m)', score: 'jointSpacing' },
   { key: 'geotech.joint_condition', label: 'Joint condition', score: 'jointCondition' },
@@ -16,6 +16,7 @@ export function resultValue(value: unknown): string {
   if (typeof value === 'number') return Number.isFinite(value) ? String(Number(value.toFixed(3))) : '—'
   if (typeof value === 'string') return value.replaceAll('-', ' ')
   if (typeof value === 'object' && 'orientation' in value) return resultValue(value.orientation)
+  if (typeof value === 'object' && 'strengthRating' in value && 'label' in value) return String(value.label)
   return '—'
 }
 
@@ -23,9 +24,9 @@ function estimatedLabels(interval: Rmr76IntervalResult) {
   return Object.values(interval.resolvedInputs).filter(input => input.availability === 'fallback').map(input => input.definition.label)
 }
 
-export function filterRmrResults(intervals: readonly Rmr76IntervalResult[], query: string, status: ResultStatusFilter) {
+export function filterRmrResults(intervals: readonly Rmr76IntervalResult[], query: string, status: ResultStatusFilter, holeLabels?: ReadonlyMap<string, string>) {
   const search = query.trim().toLowerCase()
-  return intervals.filter(interval => (!search || interval.holeId.toLowerCase().includes(search))
+  return intervals.filter(interval => (!search || `${interval.holeId} ${holeLabels?.get(interval.holeId) ?? ''}`.toLowerCase().includes(search))
     && (status === 'all' || (status === 'estimated' ? estimatedLabels(interval).length > 0 : interval.status === status)))
 }
 
@@ -40,6 +41,7 @@ function InputValue({ input, score }: { input: ResolvedInput; score: number | nu
 }
 
 interface Props {
+  holeLabels?: ReadonlyMap<string, string>
   intervals: readonly Rmr76IntervalResult[]
   selectedId: string | null
   onSelect: (id: string) => void
@@ -47,12 +49,12 @@ interface Props {
   onStatusChange: (status: ResultStatusFilter) => void
 }
 
-export function GeotechnicalResultsTable({ intervals, selectedId, onSelect, status, onStatusChange }: Props) {
+export function GeotechnicalResultsTable({ intervals, selectedId, onSelect, status, onStatusChange, holeLabels }: Props) {
   const [query, setQuery] = useState('')
   const [pagination, setPagination] = useState({ index: 0, status })
   const page = pagination.status === status ? pagination.index : 0
   const setPage = (index: number) => setPagination({ index, status })
-  const filtered = useMemo(() => filterRmrResults(intervals, query, status), [intervals, query, status])
+  const filtered = useMemo(() => filterRmrResults(intervals, query, status, holeLabels), [intervals, query, status, holeLabels])
   const pageSize = 50
   const lastPage = Math.max(0, Math.ceil(filtered.length / pageSize) - 1)
   const currentPage = Math.min(page, lastPage)
@@ -80,7 +82,7 @@ export function GeotechnicalResultsTable({ intervals, selectedId, onSelect, stat
           const estimated = estimatedLabels(interval)
           const missing = interval.missing.filter(key => key !== 'structure.orientation_rating').map(key => RMR76_METHOD_DEFINITION.requiredInputs.find(input => input.key === key)?.label ?? key)
           return <tr key={interval.id} className={interval.id === selectedId ? 'is-selected' : ''}>
-            <th scope="row"><button type="button" aria-label={`View ${interval.holeId}, ${interval.depthFrom} to ${interval.depthTo} m`} aria-pressed={interval.id === selectedId} onClick={() => onSelect(interval.id)}>{interval.holeId}</button></th>
+            <th scope="row"><button type="button" title={interval.holeId} aria-label={`View ${holeLabels?.get(interval.holeId) ?? interval.holeId}, ${interval.depthFrom} to ${interval.depthTo} m`} aria-pressed={interval.id === selectedId} onClick={() => onSelect(interval.id)}>{holeLabels?.get(interval.holeId) ?? interval.holeId}</button></th>
             <td>{interval.depthFrom}</td><td>{interval.depthTo}</td>
             <td className="rmr-final-value"><strong>{resultValue(calculation?.total)}</strong><small>{calculation?.total == null ? 'Not calculated' : calculation.ratingBasis === 'basic' ? 'Basic' : 'Adjusted'}</small></td>
             <td>{calculation?.classification ?? '—'}</td>

@@ -11,6 +11,7 @@ export interface DerivedFieldDefinition {
 }
 
 export interface SavedRmr76Interval {
+  ratingBasis?: 'basic' | 'adjusted'
   calculationRunId: string
   componentRatings: Record<string, number | null> | null
   depthFrom: number
@@ -84,7 +85,7 @@ export function buildSavedRmr76Run(
       key: 'geotech.rmr76',
       method: 'Bieniawski 1976',
       methodVersion: run.method.version,
-      name: 'RMR76',
+      name: run.method.name,
       origin: 'derived',
       scoreType: 'bounded_ordinal_score',
     },
@@ -115,6 +116,7 @@ export function buildSavedRmr76Run(
     const calculation = interval.calculation
     if (interval.status !== 'valid' || calculation === null || calculation.total === null || calculation.classification === null) return []
     return [{
+      ratingBasis: calculation.ratingBasis ?? 'adjusted',
       calculationRunId: run.runId,
       componentRatings: includeComponentRatings ? {
         groundwater: calculation.scores.groundwater,

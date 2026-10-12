@@ -20,6 +20,7 @@ export interface Rmr76Inputs {
   orientation?: Rmr76Orientation | number
   rqdPercent?: number
   ucsMpa?: number
+  strengthRating?: number
 }
 
 export interface Rmr76Result {
@@ -224,7 +225,8 @@ export function classifyRmr76(total: number) {
 }
 
 export function calculateRmr76(inputs: Rmr76Inputs): Rmr76Result {
-  const strength = inputs.ucsMpa === undefined ? null : scoreRmr76Strength(inputs.ucsMpa)
+  const strength = inputs.strengthRating !== undefined && Number.isFinite(inputs.strengthRating) && inputs.strengthRating >= 0 && inputs.strengthRating <= 15
+    ? inputs.strengthRating : inputs.ucsMpa === undefined ? null : scoreRmr76Strength(inputs.ucsMpa)
   const rqd = inputs.rqdPercent === undefined ? null : scoreRmr76Rqd(inputs.rqdPercent)
   const jointSpacing = inputs.jointSpacingM === undefined ? null : scoreRmr76Spacing(inputs.jointSpacingM)
   const jointCondition = inputs.jointCondition === undefined

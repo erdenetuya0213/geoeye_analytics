@@ -256,3 +256,12 @@ export function View3DIcon({ className, size = 20, strokeWidth = 1.6 }: GeoIconP
     </svg>
   )
 }
+
+export function CustomIcon({ className, size = 20, strokeWidth = 1.6 }: GeoIconProps) {
+  return (
+    <svg {...iconDefaults} aria-hidden="true" className={className} height={size} stroke="currentColor" strokeWidth={strokeWidth} width={size}>
+      <rect height="7" rx="1.5" width="7" x="3.5" y="3.5" /><rect height="7" rx="1.5" width="7" x="13.5" y="3.5" /><rect height="7" rx="1.5" width="7" x="3.5" y="13.5" />
+      <path className="geo-icon-accent" d="M17 13.5v7m-3.5-3.5h7" />
+    </svg>
+  )
+}

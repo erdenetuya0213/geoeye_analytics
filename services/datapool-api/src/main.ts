@@ -1,10 +1,14 @@
 import { Pool } from 'pg'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { loadServerConfig } from './config.js'
 import { createDataPoolServer } from './http-server.js'
 import { PostgresDataPoolStore } from './postgres-store.js'
 import { runAllProjections } from './projection.js'
 
 const config = loadServerConfig()
+const activationPublicKey = config.activationPublicKey
+  ?? (config.activationPublicKeyFile === undefined ? undefined : readFileSync(resolve(config.activationPublicKeyFile), 'utf8'))
 const pool = new Pool(config.database)
 pool.on('error', (error) => console.error('Unexpected idle PostgreSQL client error', error))
 
@@ -39,6 +43,7 @@ const server = createDataPoolServer({
   sessionTtlSeconds: config.sessionTtlSeconds,
   ...(config.bearerToken === undefined ? {} : { bearerToken: config.bearerToken }),
   ...(config.sessionSecret === undefined ? {} : { sessionSecret: config.sessionSecret }),
+  ...(activationPublicKey === undefined ? {} : { activationPublicKey }),
 })
 
 server.headersTimeout = 15_000

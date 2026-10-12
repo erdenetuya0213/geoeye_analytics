@@ -49,6 +49,15 @@ export const fieldLoggingRecordSchema = z.object({
  * kept verbatim so analytical tools can require explicit, exact column maps.
  */
 export const fieldLoggingDatasetSchema = z.object({
+  composite: z.object({
+    intervalLength: z.number().positive(),
+    startDepth: z.number().nonnegative(),
+    boundaryRules: z.array(z.string()),
+    intervals: z.array(z.object({
+      holeId: z.string(), depthFrom: z.number(), depthTo: z.number(),
+      exclusionReason: z.string().optional(),
+    })),
+  }).optional(),
   category: z.string().min(1).nullable(),
   columns: z.array(fieldLoggingColumnSchema),
   id: z.string().min(1),

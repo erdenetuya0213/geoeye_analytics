@@ -2,7 +2,7 @@ import type { FieldLoggingColumn } from '@geoeye/types'
 
 /** Include persisted public calculation outputs without exposing private metadata. */
 export function liveLoggingColumn(key: string, value: unknown): FieldLoggingColumn | undefined {
-  if (key.startsWith('_') || key.trim() === '' || value === undefined
+  if (key.startsWith('_') || key.startsWith('calculation_') || key.trim() === '' || value === undefined
     || (typeof value === 'object' && value !== null)) return undefined
   const label = key.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim()
   const numeric = typeof value === 'number' || (typeof value === 'string' && value.trim() !== ''

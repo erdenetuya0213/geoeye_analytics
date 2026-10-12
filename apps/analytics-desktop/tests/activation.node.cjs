@@ -49,6 +49,11 @@ test('expiry is exclusive; future, malformed, and unsupported licenses are rejec
 test('restores a valid activation across restarts and blocks access after expiry', () => {
   const f = fixture()
   f.service.login(email, issue())
+  assert.deepEqual(f.service.activeCredential(), {
+    email,
+    key: issue(),
+    license: f.service.requireActive(),
+  })
   assert.equal(fixture(f.records).service.status().license.email, email)
   f.advance(3600_000)
   assert.equal(f.service.status().license, null)

@@ -14,6 +14,7 @@ import type {
   VariableDefinition,
 } from '@geoeye/types'
 import { argon2id, bcrypt } from 'hash-wasm'
+import { generateKeyPairSync, sign } from 'node:crypto'
 import type { AddressInfo } from 'node:net'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import {
@@ -38,6 +39,7 @@ const foreignProject = '10000000-0000-4000-8000-0000000000c3'
 const holeId = '10000000-0000-4000-8000-0000000000d1'
 const foreignRun = '10000000-0000-4000-8000-0000000000e1'
 const password = 'correct horse battery staple'
+const activationKeys = generateKeyPairSync('ed25519')
 
 let passwordHash = ''
 let bcryptHash = ''
@@ -144,16 +146,40 @@ function seededStore(): AuthStore {
 
 const servers: ReturnType<typeof createDataPoolServer>[] = []
 
-async function start(store: DataPoolStore): Promise<string> {
+async function start(store: DataPoolStore, options: { activationPublicKey?: string } = {}): Promise<string> {
   const server = createDataPoolServer({
     store,
     sessionSecret: secret,
     bearerToken: serviceToken,
     logger: { error: vi.fn() },
+    ...options,
   })
   servers.push(server)
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   return `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+}
+
+function activationKey(email: string, changes: Record<string, unknown> = {}): string {
+  const now = Math.floor(Date.now() / 1_000)
+  const payload = Buffer.from(JSON.stringify({
+    v: 1,
+    product: 'geoeye-analytics',
+    id: 'activation-test',
+    email,
+    nbf: now - 60,
+    exp: now + 3_600,
+    ...changes,
+  })).toString('base64url')
+  const message = `GEA1.${payload}`
+  return `${message}.${sign(null, Buffer.from(message), activationKeys.privateKey).toString('base64url')}`
+}
+
+async function activate(endpoint: string, email: string, key = activationKey(email)) {
+  return fetch(`${endpoint}/v1/auth/activation`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, activationKey: key }),
+  })
 }
 
 afterEach(async () => {
@@ -216,6 +242,21 @@ describe('session tokens and passwords', () => {
 })
 
 describe('sign-in and tenant isolation', () => {
+  it('exchanges a signed matching activation for a user session', async () => {
+    const publicKey = activationKeys.publicKey.export({ type: 'spki', format: 'pem' }).toString()
+    const endpoint = await start(seededStore(), { activationPublicKey: publicKey })
+    const response = await activate(endpoint, 'editor@astrogeo.test')
+    expect(response.status).toBe(200)
+    const body = await response.json() as { accessToken: string; expiresAt: string }
+    expect(Date.parse(body.expiresAt)).toBeLessThanOrEqual(Date.now() + 3_600_000)
+    expect((await call(endpoint, body.accessToken, '/v1/projects')).status).toBe(200)
+
+    expect((await activate(endpoint, 'editor@astrogeo.test', `${activationKey('editor@astrogeo.test')}changed`)).status).toBe(401)
+    expect((await activate(endpoint, 'admin@astrogeo.test', activationKey('editor@astrogeo.test'))).status).toBe(401)
+    expect((await activate(endpoint, 'left@astrogeo.test')).status).toBe(401)
+    expect((await activate(endpoint, 'editor@astrogeo.test', activationKey('editor@astrogeo.test', { exp: 1 }))).status).toBe(401)
+  })
+
   it('signs a user in and returns their organizations', async () => {
     const endpoint = await start(seededStore())
     const response = await login(endpoint, 'Editor@AstroGeo.test ')

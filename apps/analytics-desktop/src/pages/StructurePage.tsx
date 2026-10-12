@@ -7,6 +7,7 @@ import type { CollarRecord, StructureObservation, StructurePoint, StructureTypeI
 import { isBoundaryComplete, pointInPolygon, projectStructurePoint, Stereonet } from '../components/Stereonet.js'
 import type { BoundaryDrawingMode, DensityDistribution, DensityPalettePreset, DensitySurfaceMode, PlotCoordinate, StereonetPlotMode, StereonetProjection } from '../components/Stereonet.js'
 import { effectiveDrillholes, effectiveSurveysByHoleId } from '../data/localProjectDb.js'
+import { datasetDisplayLabel } from '../data/datasetLabels.js'
 import { recordAnalysisTemplateSave } from '../data/analysisSaveStore.js'
 import { barGraphImage, svgElementPngGraphImage } from '../data/analysisGraphImages.js'
 import { saveAnalysisResultPackage } from '../data/analysisResultStore.js'
@@ -168,15 +169,13 @@ export async function loadLiveStructureData(client: StructureDataSource, project
     if (fallbackName === undefined) return null
     return collarNamesByNormalizedId.get(normalizeStructureHoleId(fallbackName)) ?? null
   }
-  const templateIdsByHole = new Map<string, Set<string>>()
+  const liveTemplateIds = new Set(fieldLogging.templates.map((template) => template.id))
+  const fieldDatasetIds = new Set(datasets.filter(dataset => dataset.sourceSystem === 'field.logging_structure').map(dataset => dataset.id))
   const drillholesByTemplate = new Map<string, Set<string>>()
   fieldLogging.submissions.forEach((submission) => {
     if (submission.structureCount === 0) return
     const collarName = matchedCollarName(submission.holeId, submission.holeName)
     if (collarName === null) return
-    const templateIds = templateIdsByHole.get(submission.holeId) ?? new Set<string>()
-    templateIds.add(submission.templateId)
-    templateIdsByHole.set(submission.holeId, templateIds)
     const templateHoles = drillholesByTemplate.get(submission.templateId) ?? new Set<string>()
     templateHoles.add(collarName)
     drillholesByTemplate.set(submission.templateId, templateHoles)
@@ -184,13 +183,16 @@ export async function loadLiveStructureData(client: StructureDataSource, project
   const grouped = new Map<string, { alpha?: number; beta?: number; datasetId: string; depth: number; holeId: string; ids: string[]; structureType?: string; templateId: string }>()
   const datasetIdsByTemplate = new Map<string, Set<string>>()
   observations.forEach((observation) => {
+    // An old Field aggregate with no template provenance is not another live
+    // source and cannot be attributed to whichever method happens to be open.
+    if (fieldDatasetIds.has(observation.datasetId) && !liveTemplateIds.has(observation.sourceTemplateId ?? '')) return
     if (observation.holeId === null) return
     const collarName = matchedCollarName(observation.holeId, holeNames.get(observation.holeId))
     if (collarName === null) return
     if ((observation.variableKey === 'structure.alpha' || observation.variableKey === 'structure.beta') && observation.numericValue === null) return
-    const holeTemplateIds = [...(templateIdsByHole.get(observation.holeId) ?? [])]
+    // Never infer source ownership from a shared hole/class. Older projections
+    // without provenance remain separate datasets, not Auto or contractor logs.
     const templateId = observation.sourceTemplateId
-      ?? (holeTemplateIds.length === 1 ? holeTemplateIds[0] : undefined)
       ?? observation.datasetId
     const key = `${observation.datasetId}|${observation.sourceId}|${observation.holeId}|${observation.depthFrom ?? 0}`
     const current: { alpha?: number; beta?: number; datasetId: string; depth: number; holeId: string; ids: string[]; structureType?: string; templateId: string } = grouped.get(key) ?? {
@@ -236,7 +238,9 @@ export async function loadLiveStructureData(client: StructureDataSource, project
   const completeSourceStructures = mappableSourceStructures.filter((row) => (
     row.alpha !== null && row.beta !== null
   ))
-  const sourceTemplateIds = new Set(completeSourceStructures.map((row) => row.templateId as string))
+  // An empty live template is authoritative too (including after deleting its
+  // last row). Old accepted projections must not resurrect removed records.
+  const sourceTemplateIds = new Set(liveTemplateIds)
   mappableSourceStructures.forEach((row) => sourceTemplateIds.add(row.templateId as string))
   sourceTemplateIds.forEach((sourceTemplateId) => observationsByTemplate.set(sourceTemplateId, []))
   completeSourceStructures.forEach((row) => {
@@ -310,7 +314,7 @@ export async function loadLiveStructureData(client: StructureDataSource, project
     return [{
       datasetId: [...(datasetIdsByTemplate.get(template.id) ?? [])][0] ?? defaultStructureDataset?.id ?? null,
       id: template.id,
-      label: `${template.name} · v${template.version}`,
+      label: `${template.name} · Live`,
       observationCount,
     }]
   })
@@ -318,7 +322,7 @@ export async function loadLiveStructureData(client: StructureDataSource, project
     observationsByTemplate.has(dataset.id) && !loggingTemplateIds.has(dataset.id) ? [{
       datasetId: dataset.id,
       id: dataset.id,
-      label: `${dataset.name} · v${dataset.currentVersion}`,
+      label: datasetDisplayLabel(dataset),
       observationCount: observationsByTemplate.get(dataset.id)?.length ?? 0,
     }] : []
   ))
@@ -327,7 +331,7 @@ export async function loadLiveStructureData(client: StructureDataSource, project
     : datasets.map((dataset) => ({
         datasetId: dataset.id,
         id: dataset.id,
-        label: `${dataset.name} · v${dataset.currentVersion}`,
+        label: datasetDisplayLabel(dataset),
         observationCount: observationsByTemplate.get(dataset.id)?.length ?? 0,
       }))
   const usedHoleNames = new Set([
@@ -431,7 +435,6 @@ function StructureWorkbench({ data }: { data: StructureWorkspaceData }) {
   const selectedInventory = selectedHoleFilter === 'all'
     ? templateInventory
     : templateInventory.byHole[selectedHoleFilter] ?? emptyStructureInventory()
-  const incompleteOrientationCount = Math.max(0, selectedInventory.detectedCount - selectedInventory.orientedCount)
   const effectiveStructureTypeCategories = Array.from(new Set(templateObservations.map((observation) => observation.structureType)))
         .sort((left, right) => left.localeCompare(right))
         .map((structureType, index) => ({
@@ -902,14 +905,6 @@ function StructureWorkbench({ data }: { data: StructureWorkspaceData }) {
               <button aria-label="Export plot" className="icon-button" onClick={() => void exportPlot()} type="button"><Download size={16} /></button>
             </div>
           </div>
-          {incompleteOrientationCount > 0 ? (
-            <div className="structure-orientation-notice" role="status">
-              <strong>{selectedInventory.detectedCount} detected structures</strong>
-              <span>{selectedInventory.orientedCount} have Alpha and Beta and are plotted.</span>
-              {selectedInventory.missingAlphaCount > 0 ? <span>{selectedInventory.missingAlphaCount} missing Alpha.</span> : null}
-              {selectedInventory.missingBetaCount > 0 ? <span>{selectedInventory.missingBetaCount} missing Beta.</span> : null}
-            </div>
-          ) : null}
           <div className="large-stereonet-wrap">
             <Stereonet
               activeGroup={activeSet}

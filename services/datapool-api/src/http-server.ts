@@ -2,6 +2,7 @@ import { randomUUID, timingSafeEqual } from 'node:crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { observationQuerySchema } from '@geoeye/types'
 import { z, ZodError } from 'zod'
+import { verifyAnalyticsActivation } from './activation.js'
 import {
   issueSessionToken,
   LoginThrottle,
@@ -20,6 +21,7 @@ import {
   collarBodySchema,
   createAnalysisRunSchema,
   derivedValuesBodySchema,
+  activationBodySchema,
   loginBodySchema,
   optionalProjectIdQuerySchema,
   projectIdQuerySchema,
@@ -49,6 +51,8 @@ export interface DataPoolServerOptions {
   /** Enables sign-in with GeoEye accounts and signs the session tokens. */
   sessionSecret?: string
   sessionTtlSeconds?: number
+  /** Ed25519 public key used to exchange signed Analytics activations for sessions. */
+  activationPublicKey?: string
   corsOrigins?: ReadonlySet<string>
   healthCheck?: () => Promise<void>
   logger?: Pick<Console, 'error'>
@@ -288,6 +292,44 @@ export function createDataPoolServer(options: DataPoolServerOptions): Server {
         for (const key of keys) throttle.recordSuccess(key)
         accessCache.set(account.id, { access, expiresAt: Date.now() + accessCacheMs })
         const session = issueSessionToken(account.id, options.sessionSecret, sessionTtlSeconds)
+        sendJson(response, 200, {
+          accessToken: session.token,
+          tokenType: 'bearer',
+          expiresAt: session.expiresAt.toISOString(),
+          user: access.user,
+          organizations: access.organizations,
+        })
+        return
+      }
+
+      if (method === 'POST' && url.pathname === '/v1/auth/activation') {
+        if (options.sessionSecret === undefined || options.activationPublicKey === undefined) {
+          throw new ApiError(404, 'activation_sign_in_unavailable', 'This Data Pool is not configured for activation sign-in')
+        }
+        const { email, activationKey } = activationBodySchema.parse(await readJson(request))
+        const keys = [`activation-email:${email}`, `activation-address:${clientAddress(request)}`]
+        if (keys.some((key) => throttle.blocked(key))) {
+          throw new ApiError(429, 'too_many_attempts', 'Too many activation attempts. Try again in 15 minutes.')
+        }
+        let activation
+        try {
+          activation = verifyAnalyticsActivation(email, activationKey, options.activationPublicKey)
+        } catch {
+          for (const key of keys) throttle.recordFailure(key)
+          throw new ApiError(401, 'invalid_activation', 'The activation is invalid or expired')
+        }
+        const account = await options.store.findLoginAccount(activation.email)
+        const access = account?.isActive === true && account.mustChangePassword === false
+          ? await options.store.loadUserAccess(account.id)
+          : null
+        if (account === null || access === null || access.user.email.trim().toLowerCase() !== activation.email) {
+          for (const key of keys) throttle.recordFailure(key)
+          throw new ApiError(401, 'invalid_activation', 'The activation is invalid or expired')
+        }
+        for (const key of keys) throttle.recordSuccess(key)
+        accessCache.set(account.id, { access, expiresAt: Date.now() + accessCacheMs })
+        const remainingSeconds = Math.max(1, Math.floor((activation.expiresAt.getTime() - Date.now()) / 1_000))
+        const session = issueSessionToken(account.id, options.sessionSecret, Math.min(sessionTtlSeconds, remainingSeconds))
         sendJson(response, 200, {
           accessToken: session.token,
           tokenType: 'bearer',

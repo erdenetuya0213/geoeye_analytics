@@ -63,7 +63,7 @@ export function LiveLoggingPage({ onRefresh, overview, project, refreshing }: Li
           const count = submissions.filter((submission) => submission.templateId === template.id).length
           return (
             <button aria-pressed={activeTemplate?.id === template.id} className={activeTemplate?.id === template.id ? 'is-active' : ''} key={template.id} onClick={() => changeTemplate(template.id)} type="button">
-              <Icon size={17} /><span><strong>{template.name}</strong><small>{count} filled {count === 1 ? 'hole' : 'holes'} · v{template.version}</small></span>
+              <Icon size={17} /><span><strong>{template.name}</strong><small>{count} filled {count === 1 ? 'hole' : 'holes'} · Live</small></span>
             </button>
           )
         })}
@@ -78,7 +78,7 @@ export function LiveLoggingPage({ onRefresh, overview, project, refreshing }: Li
       <div className="drillhole-layout logging-layout">
         <section className="panel drillhole-table-panel">
           <div className="logging-simple-table">
-            <div className="logging-simple-row logging-simple-header"><span>Borehole</span><span>Coverage</span><span>Schema</span><span>Updated</span><span>Filled records</span></div>
+            <div className="logging-simple-row logging-simple-header"><span>Borehole</span><span>Coverage</span><span>Source</span><span>Updated</span><span>Filled records</span></div>
             {overview === null ? <p className="pool-live-note"><CircleAlert size={14} /> No local Field logging snapshot yet. Choose Refresh local copy.</p> : null}
             {overview !== null && templates.length === 0 ? <p className="pool-live-note">{project.name} has no active logging templates.</p> : null}
             {overview !== null && activeTemplate !== null && filtered.length === 0 ? <p className="pool-live-note">No holes contain filled {activeTemplate.name} data.</p> : null}
@@ -88,7 +88,7 @@ export function LiveLoggingPage({ onRefresh, overview, project, refreshing }: Li
                 <button className={`logging-simple-row ${submissionKey === (selected === null ? null : keyFor(selected)) ? 'is-selected' : ''}`} key={submissionKey} onClick={() => setSelectedKey(submissionKey)} type="button">
                   <span className="hole-id"><i />{submission.holeName}</span>
                   <span>{coverage(submission)}</span>
-                  <span className="mono-value">v{submission.templateVersion}</span>
+                  <span className="mono-value">Live</span>
                   <span>{relativeTime(submission.updatedAt)}</span>
                   <span className="mono-value">{filledRecordCount(submission).toLocaleString('en-US')}</span>
                 </button>
@@ -104,7 +104,7 @@ export function LiveLoggingPage({ onRefresh, overview, project, refreshing }: Li
             <div className="hole-detail-heading"><div><p className="eyebrow">Selected logged hole</p><h2>{selected.holeName}</h2></div></div>
             <dl className="logging-record-details">
               <div><dt>Coverage</dt><dd>{coverage(selected)}</dd></div>
-              <div><dt>Template schema</dt><dd>v{selected.templateVersion}</dd></div>
+              <div><dt>Source</dt><dd>Live template</dd></div>
               <div><dt>Filled rows</dt><dd>{selected.selectedRowCount.toLocaleString('en-US')}</dd></div>
               <div><dt>Intervals</dt><dd>{selected.intervalCount.toLocaleString('en-US')}</dd></div>
               <div><dt>Structures</dt><dd>{selected.structureCount.toLocaleString('en-US')}</dd></div>

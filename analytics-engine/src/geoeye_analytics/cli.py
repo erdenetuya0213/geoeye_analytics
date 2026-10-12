@@ -17,6 +17,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=os.environ.get("GEOEYE_GSLIB_BIN"),
         help="Directory containing user-provided GSLIB executables",
     )
+    serve = subcommands.add_parser("serve", help="Serve JSON-lines requests over stdio")
+    serve.add_argument("--gslib-bin-dir", default=os.environ.get("GEOEYE_GSLIB_BIN"))
     return parser
 
 
@@ -30,6 +32,10 @@ def main(arguments: Sequence[str] | None = None) -> int:
             )
         )
         return 0
+    if parsed.command == "serve":
+        from .server import serve
+
+        return serve(gslib_directory=parsed.gslib_bin_dir)
     return 2
 
 

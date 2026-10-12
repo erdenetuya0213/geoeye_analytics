@@ -162,3 +162,20 @@ test('existing parsed imports get a deduplicated recovery archive, never a fake 
   assert.ok(files.every(file => file.name.endsWith('.json')))
   assert.equal(JSON.parse(fs.readFileSync(path.join(f.root, files[0].relative_path))).format, 'geoeye-parsed-import')
 })
+
+
+test('RMR draft remains local until explicitly transferred and retains its database receipt', async t => {
+  let calls = 0
+  const f = fixture(t, async () => { calls++; return { status: 201, body: JSON.stringify({ version: 1, importedRows: 1, unmatchedHoles: [] }) } })
+  const db = new DatabaseSync(f.databasePath)
+  db.prepare('INSERT INTO local_tabular_drafts VALUES (?,?,?)').run('geotechnical', 1, JSON.stringify({ section: 'geotechnical', dirty: true, updatedAt: 'v1', rows: [['TEST-001','75']] }))
+  db.close()
+  f.api.status({ address: f.address })
+  assert.equal(calls, 0)
+  assert.equal(f.query("SELECT dirty FROM local_tabular_drafts WHERE section='geotechnical'")[0].dirty, 1)
+  f.enqueue('geotechnical')
+  const result = await f.api.run({ address: f.address })
+  assert.equal(calls, 1)
+  assert.equal(result.find(row => row.entity === 'geotechnical').state, 'sent')
+  assert.equal(f.query("SELECT dirty FROM local_tabular_drafts WHERE section='geotechnical'")[0].dirty, 0)
+})

@@ -1,6 +1,7 @@
 import type { ProjectSummary } from '@geoeye/datapool-client'
 import { Check, CircleAlert, RefreshCw } from 'lucide-react'
 import { effectiveDrillholes, type LocalDrillholeDraft, type LocalProjectSnapshot } from '../data/localProjectDb.js'
+import { datasetStateLabel } from '../data/datasetLabels.js'
 
 interface LiveDataPoolPanelProps {
   connected?: boolean
@@ -62,7 +63,7 @@ export function LiveDataPoolPanel({ connected = true, draft, error, onRefresh, p
           <div><p className="eyebrow">{connected ? 'Field feed' : 'Local workspace'}</p><h2>{project.name}</h2></div>
           <div className="pool-console-actions">
             <span className="record-pill">{holes.length} drillholes · {withCollar} with collar · {surveyed} surveyed</span>
-            <button className="button button-secondary" disabled={!connected || refreshing} onClick={() => void onRefresh()} title="Copy the latest filled templates and project data for all boreholes to this workspace" type="button">
+            <button className="button button-secondary" disabled={refreshing} onClick={() => void onRefresh()} title="Copy the latest filled templates and project data for all boreholes to this workspace" type="button">
               <RefreshCw className={refreshing ? 'spin' : ''} size={14} /> Refresh local copy
             </button>
           </div>
@@ -104,7 +105,7 @@ export function LiveDataPoolPanel({ connected = true, draft, error, onRefresh, p
               <span>{dataset.name}</span>
               <span className="mono-value">
                 {observationsByDataset.has(dataset.id) ? `${(observationsByDataset.get(dataset.id) ?? 0).toLocaleString('en-US')} · ` : ''}
-                {dataset.spatialSupport} · v{dataset.currentVersion}
+                {dataset.spatialSupport} · {datasetStateLabel(dataset)}
               </span>
               <span>{relativeTime(dataset.updatedAt)}</span>
               <span className="pool-accepted"><Check size={13} /> {dataset.status === 'active' ? 'Active' : 'Archived'}</span>

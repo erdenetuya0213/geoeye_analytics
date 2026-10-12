@@ -160,7 +160,11 @@ function multivariateGroups(
     const rows = evidence.rows.filter((row) => row.clusterId === clusterId)
     const observationIds = new Set(rows.map((row) => row.observationId))
     const linkedIds = new Set(rows.flatMap((row) => row.sourceObservationIds))
-    const observations = scopeObservations.filter((observation) => observationIds.has(observation.id) || sourceIds(observation).some((id) => linkedIds.has(id)))
+    const intervalKey = (holeId: string | undefined, from: number | undefined, to: number | undefined) => holeId === undefined || from === undefined || to === undefined ? null : `${holeId.trim().toUpperCase()}|${from.toFixed(2)}|${to.toFixed(2)}`
+    const intervals = new Set(rows.map((row) => intervalKey(row.holeId, row.depthFrom, row.depthTo)).filter((key): key is string => key !== null))
+    const observations = scopeObservations.filter((observation) => observationIds.has(observation.id)
+      || sourceIds(observation).some((id) => linkedIds.has(id))
+      || (intervals.size > 0 && intervals.has(intervalKey(observation.holeId, observation.depthFrom, observation.depthTo) ?? '')))
     return buildGroup(request, `${prefix}-${String(index + 1).padStart(2, '0')}`, `cluster-${clusterId}`, `Cluster C${clusterId}`, observations, scopeObservations.length)
   })
 }

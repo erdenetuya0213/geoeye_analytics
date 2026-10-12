@@ -105,7 +105,7 @@ function createWorkspaceFiles({ openProject, atomicWrite, requestDataPool, requi
     try {
       // Older versions retained only parsed rows, so recover those honestly as
       // JSON rather than fabricating an original CSV that no longer exists.
-      for (const entity of ['drillholes', 'laboratory', 'strength', 'xrf', 'spectral']) {
+      for (const entity of ['drillholes', 'laboratory', 'strength', 'xrf', 'spectral', 'geotechnical']) {
         const value = draft(project, entity)
         if (!value) continue
         const contents = JSON.stringify({ format: 'geoeye-parsed-import', entity, draft: value }, null, 2)

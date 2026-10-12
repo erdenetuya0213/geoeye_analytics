@@ -1,12 +1,12 @@
 import { z } from 'zod'
 import { datasetSchema } from './dataset.js'
 
-export const tabularImportSectionSchema = z.enum(['laboratory', 'strength', 'xrf', 'spectral'])
+export const tabularImportSectionSchema = z.enum(['laboratory', 'strength', 'xrf', 'spectral', 'geotechnical'])
 
 export const tabularImportInputSchema = z.object({
   columns: z.array(z.string().trim().min(1)).min(1).max(100),
   fileName: z.string().trim().min(1).max(255),
-  rows: z.array(z.array(z.string()).min(1).max(100)).min(1).max(20_000),
+  rows: z.array(z.array(z.string()).min(1).max(100)).max(20_000),
   section: tabularImportSectionSchema,
 }).superRefine((value, context) => {
   const normalized = value.columns.map((column) => column.toLocaleLowerCase())

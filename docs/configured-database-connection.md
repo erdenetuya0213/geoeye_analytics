@@ -6,7 +6,7 @@ No Field authentication code, accounts, passwords, memberships, or API authoriza
 
 ## Staging administrator setup
 
-Build the API dependencies, then start the local API with `.env.staging`. For connection-only verification, set `PROJECTION_INTERVAL_SECONDS=0` in the process environment so the scheduler does not modify analytical projections. The API binds to `127.0.0.1:8080` in this checkout. It is a background process, not an installed Windows service; restart it after a computer reboot.
+Build the API dependencies before provisioning. The configuration helper checks the local API and, when it is not running, starts it as a hidden detached process using `.env.staging`. Composite builds launched from this checkout also restore that local API automatically after a reboot. For connection-only verification, set `PROJECTION_INTERVAL_SECONDS=0` in `.env.staging` so the scheduler does not modify analytical projections. The API binds to `127.0.0.1:8080` in this checkout.
 
 Build the desktop. From the repository root, provision the existing licensed email and launch the new executable:
 
@@ -20,6 +20,6 @@ The one-time launch passes the user-scoped session in a process environment vari
 
 `%LOCALAPPDATA%/GeoEye/Analytics/secrets/configured-database.bin`
 
-The renderer receives only endpoint/account metadata. The native host attaches authorization only to the exact configured origin and `/v1/` API path; redirects are not followed. Remote endpoints require HTTPS; plain HTTP is allowed only for loopback. The encrypted configuration survives app restarts and offline sign-out, but cannot be used by another licensed email or after expiry. Re-run provisioning to renew Database access. Neither the database password nor the signing secret is shipped in the app.
+The renderer receives only endpoint/account metadata. The native host attaches authorization only to the exact configured origin and `/v1/` API path; redirects are not followed. Remote endpoints require HTTPS; plain HTTP is allowed only for loopback. A valid signed activation is exchanged by the native host for a short-lived Database session and is renewed automatically. The API independently verifies its signature, email, validity period, and active Field account before granting project access. Neither the activation key nor the Database session enters the renderer, and neither the database password nor the signing secret is shipped in the app.
 
 Choose a workspace folder in the desktop to persist synced project snapshots and analysis files. Connection itself reads projects and does not import samples, change Field authentication, or automatically write database data.

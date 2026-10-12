@@ -12,6 +12,16 @@ function fixture(overrides = {}) {
   })
   return service
 }
+
+test('local metadata restores the offline account without fetching or renewing expired Database access', () => {
+  let requests = 0
+  const service = fixture({ read: () => value, now: () => Date.parse(value.expiresAt), fetch: async () => { requests++; throw new Error('No network expected') } })
+  assert.equal(service.metadata().accountId, value.accountId)
+  assert.equal(service.metadata().token, undefined)
+  assert.equal(requests, 0)
+  assert.throws(() => service.headers('https://staging.example.test/api/v1/projects', {}), /expired/)
+  assert.throws(() => fixture({ read: () => value, requireLicense: () => ({ email: 'other@example.test' }) }).metadata(), /another/)
+})
 test('provisioning verifies identity, hides tokens, and injects only into the pinned API', async () => {
   const service = fixture()
   const result = await service.provision(value)
@@ -44,4 +54,40 @@ test('allows local HTTP only, rejects URL credentials, query, fragment, and remo
   for (const endpoint of ['http://example.test', 'https://user:pass@example.test', 'https://example.test?token=x', 'https://example.test#fragment']) {
     assert.throws(() => validateConnection({ ...value, endpoint }))
   }
+})
+test('a valid native activation restores and renews the Database session automatically', async () => {
+  let stored = null
+  let requests = 0
+  let prepared = 0
+  const service = createDatabaseConnection({
+    read: () => stored,
+    write: (next) => { stored = next },
+    now: () => now,
+    defaultEndpoint: 'http://127.0.0.1:8080',
+    requireLicense: () => ({ email: value.email, expiresAt: '2026-11-03T00:00:00Z' }),
+    activeCredential: () => ({ email: value.email, key: 'GEA1.payload.signature' }),
+    prepareEndpoint: async (endpoint) => {
+      prepared += 1
+      assert.equal(endpoint, 'http://127.0.0.1:8080')
+    },
+    fetch: async (url, init) => {
+      requests += 1
+      assert.equal(url, 'http://127.0.0.1:8080/v1/auth/activation')
+      assert.deepEqual(JSON.parse(init.body), { email: value.email, activationKey: 'GEA1.payload.signature' })
+      return {
+        ok: true,
+        json: async () => ({
+          accessToken: `session-${requests}`,
+          expiresAt: '2026-10-04T12:00:00Z',
+          user: { id: value.accountId, email: value.email },
+        }),
+      }
+    },
+  })
+  assert.equal((await service.connect()).email, value.email)
+  assert.equal(prepared, 1)
+  assert.equal(service.headers('http://127.0.0.1:8080/v1/projects', {}).authorization, 'Bearer session-1')
+  await service.connect(true)
+  assert.equal(prepared, 2)
+  assert.equal(service.headers('http://127.0.0.1:8080/v1/projects', {}).authorization, 'Bearer session-2')
 })

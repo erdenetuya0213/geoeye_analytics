@@ -122,3 +122,23 @@ describe('RMR76 interval workflow', () => {
     expect(new DeterministicCalculator().calculate(RMR76_METHOD_DEFINITION, resolved)).toBeNull()
   })
 })
+
+describe('optional RMR76 orientation', () => {
+  it('calculates basic RMR from five inputs without assigning a zero orientation adjustment', () => {
+    const interval = completeInterval({ candidates: completeInterval().candidates.filter(input => input.canonicalKey !== 'structure.orientation_rating') })
+    const run = calculateRmr76Intervals([interval], sourceIds, 'basic', '2026-10-05T00:00:00.000Z')
+    expect(run.summary.valid).toBe(1)
+    expect(run.method.name).toContain('Basic RMR76')
+    expect(run.intervals[0]?.calculation).toMatchObject({ ratingBasis: 'basic', orientationAdjustment: null, basic: 84, total: 84 })
+    expect(run.intervals[0]?.missing).toEqual([])
+    expect(run.intervals[0]?.resolvedInputs['structure.orientation_rating'].availability).toBe('missing')
+    expect(run.intervals[0]?.lineage.some(input => input.canonicalKey === 'structure.orientation_rating')).toBe(false)
+  })
+  it('still requires the five basic inputs and keeps an assessed orientation adjustment', () => {
+    const absent = completeInterval({ candidates: completeInterval().candidates.filter(input => input.canonicalKey !== 'geotech.groundwater' && input.canonicalKey !== 'structure.orientation_rating') })
+    expect(calculateRmr76Intervals([absent], sourceIds, 'missing', '2026-10-05T00:00:00.000Z').summary.valid).toBe(0)
+    const adjusted = calculateRmr76Intervals([completeInterval()], sourceIds, 'adjusted', '2026-10-05T00:00:00.000Z')
+    expect(adjusted.intervals[0]?.calculation).toMatchObject({ ratingBasis: 'adjusted', orientationAdjustment: -5, total: 79 })
+  })
+})
+

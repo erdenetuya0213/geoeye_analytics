@@ -419,6 +419,40 @@ describe('Data Pool HTTP server', () => {
     await expect(response.json()).resolves.toMatchObject({ importedRows: 1, observationCount: 1, version: 2 })
   })
 
+  it('accepts the separate geotechnical result table with missing scores left blank', async () => {
+    const store = new FakeStore()
+    const endpoint = await start(store)
+    const input: TabularImportInput = {
+      section: 'geotechnical', fileName: 'rmr76-test.csv',
+      columns: ['Hole ID', 'From', 'To', 'RMR76', 'Status'],
+      rows: [['UDD-103', '0', '3', '75', 'valid'], ['UDD-103', '3', '6', '', 'missing']],
+    }
+    const response = await fetch(`${endpoint}/v1/projects/${projectId}/tabular-imports`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input),
+    })
+    expect(response.status).toBe(201)
+    expect(store.calls.tabularImports).toEqual([{ projectId, input, createdBy: null }])
+  })
+
+  it('accepts saving an empty table after deleting all imported rows', async () => {
+    const store = new FakeStore()
+    const endpoint = await start(store)
+    const input: TabularImportInput = {
+      columns: ['Hole ID', 'Depth (m)', 'Cu ppm'],
+      fileName: 'xrf.csv',
+      rows: [],
+      section: 'xrf',
+    }
+    const response = await fetch(`${endpoint}/v1/projects/${projectId}/tabular-imports`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    })
+    expect(response.status).toBe(201)
+    expect(store.calls.tabularImports).toEqual([{ projectId, input, createdBy: null }])
+    await expect(response.json()).resolves.toMatchObject({ importedRows: 0 })
+  })
+
   it('rejects malformed input before calling the store', async () => {
     const store = new FakeStore()
     const endpoint = await start(store)

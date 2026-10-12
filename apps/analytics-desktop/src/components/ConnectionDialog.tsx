@@ -30,7 +30,7 @@ export function ConnectionDialog({ initialSettings, onClose, onSave, required = 
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const mounted = useRef(true)
-  const configured = settings.managed === true || settings.token !== ''
+  const configured = desktopBridge() !== undefined || settings.managed === true || settings.token !== ''
 
   useEffect(() => {
     mounted.current = true
@@ -58,13 +58,20 @@ export function ConnectionDialog({ initialSettings, onClose, onSave, required = 
     setBusy(true)
     setError('')
     try {
+      let nextSettings = settings
+      const bridge = desktopBridge()
+      if (bridge !== undefined) {
+        const configuration = await bridge.databaseConnect()
+        if (configuration === null) throw new Error('Database access has not been configured.')
+        nextSettings = { version: 1, endpoint: configuration.endpoint, accountId: configuration.accountId, managed: true, token: '' }
+      }
       const [session] = await Promise.all([
-        createDataPoolClient(settings).session(),
-        checkDataPoolConnection(settings),
+        createDataPoolClient(nextSettings).session(),
+        checkDataPoolConnection(nextSettings),
       ])
       if (session === null) throw new Error('The configured API must identify an authorized user.')
       if (!mounted.current) return
-      onSave({ ...settings, accountId: session.user.id }, 'connected')
+      onSave({ ...nextSettings, accountId: session.user.id }, 'connected')
     } catch (failure) {
       if (mounted.current) setError(connectionErrorMessage(failure))
     } finally {
@@ -85,7 +92,7 @@ export function ConnectionDialog({ initialSettings, onClose, onSave, required = 
           <div className="form-field"><span>API server</span><strong>{settings.endpoint || 'Not configured on this computer'}</strong></div>
           {email ? <div className="form-field"><span>Authorized account</span><strong>{email}</strong></div> : null}
           <p>Connect loads only the projects this account is permitted to access. Choose a local workspace folder to keep synchronized data and analysis results on this computer.</p>
-          {!loading && !configured ? <div className="connection-result result-unavailable" role="status">An administrator must provision this computer’s API connection once. Do not enter database passwords or an activation key here.</div> : null}
+          {!loading && !configured ? <div className="connection-result result-unavailable" role="status">Analytics will connect automatically when the signed activation email and expiry are accepted by the Database API.</div> : null}
           {error ? <div className="connection-result result-unavailable" role="alert"><XCircle size={17} /><span>{error}</span></div> : null}
         </div>
         <div className="dialog-footer"><span>{loading ? 'Reading protected configuration…' : 'Credentials stay in Windows-protected storage'}</span><div className="dialog-footer-actions">

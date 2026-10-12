@@ -275,7 +275,9 @@ export function effectiveDrillholes(
   snapshot: LocalProjectSnapshot | null,
   draft: LocalDrillholeDraft | null,
 ): DrillholeSummary[] {
-  const holes = new Map((snapshot?.drillholes ?? []).map((hole) => [normalizedHoleName(hole.name), { ...hole }]))
+  // Names are labels, not primary keys. Two real boreholes may normalize to
+  // the same spelling; retaining both IDs is essential for source lineage.
+  const holes = new Map((snapshot?.drillholes ?? []).map((hole) => [hole.id, { ...hole }]))
   const surveyCounts = new Map<string, number>()
   draft?.survey.forEach((station) => {
     const key = normalizedHoleName(station.holeId)
@@ -287,9 +289,11 @@ export function effectiveDrillholes(
   draft?.collar.forEach((collar) => importedNames.set(normalizedHoleName(collar.holeId), collar.holeId))
 
   importedNames.forEach((name, key) => {
-    const existing = holes.get(key)
+    const matches = [...holes.values()].filter(hole => normalizedHoleName(hole.name) === key)
+    const exact = matches.filter(hole => hole.name.trim().toLowerCase() === name.trim().toLowerCase())
+    const existing = exact.length === 1 ? exact[0] : matches.length === 1 ? matches[0] : undefined
     const collar = draft?.collar.find((item) => normalizedHoleName(item.holeId) === key)
-    holes.set(key, {
+    holes.set(existing?.id ?? `local:${key}`, {
       collar: collar === undefined ? existing?.collar ?? null : {
         accuracy: null,
         crs: importedCrs(collar),
@@ -322,10 +326,12 @@ export function effectiveSurveysByHoleId(
   const result = Object.fromEntries(Object.entries(snapshot?.surveysByHoleId ?? {}).map(([holeId, stations]) => [holeId, [...stations]]))
   if (draft === null) return result
   const holes = effectiveDrillholes(snapshot, draft)
-  const holeIdByName = new Map(holes.map((hole) => [normalizedHoleName(hole.name), hole.id]))
   const grouped = new Map<string, SurveyStation[]>()
   draft.survey.forEach((station, index) => {
-    const holeId = holeIdByName.get(normalizedHoleName(station.holeId)) ?? `local:${normalizedHoleName(station.holeId)}`
+    const exact = holes.filter(hole => hole.id === station.holeId || hole.name.trim().toLowerCase() === station.holeId.trim().toLowerCase())
+    const normalized = holes.filter(hole => normalizedHoleName(hole.name) === normalizedHoleName(station.holeId))
+    const matched = exact.length === 1 ? exact[0] : normalized.length === 1 ? normalized[0] : undefined
+    const holeId = matched?.id ?? `local:${normalizedHoleName(station.holeId)}`
     const rows = grouped.get(holeId) ?? []
     rows.push({
       accuracy: null,

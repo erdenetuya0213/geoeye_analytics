@@ -1,4 +1,5 @@
 export type SectionId =
+  | 'custom'
   | 'overview'
   | 'data-pool'
   | 'drillholes'

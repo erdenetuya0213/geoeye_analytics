@@ -35,6 +35,10 @@ export const projectionRunBodySchema = z.object({
 })
 
 export const loginBodySchema = loginInputSchema
+export const activationBodySchema = z.object({
+  email: z.string().trim().email().max(320).transform((value) => value.toLowerCase()),
+  activationKey: z.string().trim().min(1).max(8_192),
+}).strict()
 export const uuidPathParameterSchema = z.string().uuid()
 export const collarBodySchema = collarInputSchema
 export const surveysBodySchema = replaceSurveysInputSchema

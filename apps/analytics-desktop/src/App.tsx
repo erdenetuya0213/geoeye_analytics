@@ -1,6 +1,6 @@
-import { DataPoolError } from '@geoeye/datapool-client'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { AppShell } from './components/AppShell.js'
+import { LocalWorkspaceBootstrap } from './components/LocalWorkspaceBootstrap.js'
 import { ConnectionDialog } from './components/ConnectionDialog.js'
 import type { ConnectionDialogMode } from './components/ConnectionDialog.js'
 import { LoginPage } from './components/LoginPage.js'
@@ -11,11 +11,17 @@ import { SignOutDialog } from './components/SignOutDialog.js'
 import { themes } from './components/ThemeSwitcher.js'
 import type { ThemeId } from './components/ThemeSwitcher.js'
 import { DataPoolPage } from './pages/DataPoolPage.js'
-import { checkDataPoolConnection } from './data/dataPoolConnection.js'
+import {
+  restoreManagedConnection,
+} from './data/dataPoolConnection.js'
 import { appStorage, clearStoredCredential, readStoredCredential, saveStoredCredential } from './desktop/runtime.js'
 import { DatasetToolPage } from './pages/DatasetToolPage.js'
 import type { DatasetSection } from './pages/DatasetToolPage.js'
 import { DomainPage } from './pages/DomainPage.js'
+import { GradePage } from './pages/GradePage.js'
+import { VariographyPage } from './pages/VariographyPage.js'
+import { CustomPage } from './pages/CustomPage.js'
+import { PageErrorBoundary } from './components/PageErrorBoundary.js'
 import { DrillholesPage } from './pages/DrillholesPage.js'
 import { ExplorePage } from './pages/ExplorePage.js'
 import { GeotechnicalPage } from './pages/GeotechnicalPage.js'
@@ -42,7 +48,7 @@ const configuredEndpoint = import.meta.env.VITE_DATAPOOL_ENDPOINT?.trim()
 const defaultConnection: ConnectionSettings = {
   version: 1,
   endpoint: configuredEndpoint === undefined || configuredEndpoint === ''
-    ? typeof window !== 'undefined' && window.geoeyeDesktop !== undefined ? '' : '/api'
+    ? typeof window !== 'undefined' && window.geoeyeDesktop !== undefined ? 'http://127.0.0.1:8080' : '/api'
     : configuredEndpoint,
   token: '',
 }
@@ -106,7 +112,7 @@ function loadConnection(): ConnectionSettings {
 function loadInitialSection(): SectionId {
   const rawRequested = new URLSearchParams(window.location.search).get('section')
   const requested = (rawRequested === 'view-2d' ? 'view-3d' : rawRequested) as SectionId | null
-  const sections: readonly SectionId[] = ['overview', 'data-pool', 'drillholes', 'field-logging', 'laboratory', 'strength', 'xrf', 'spectral', 'spatial-reference', 'explore', 'domain', 'grade', 'variography', 'structure', 'geotechnical', 'multivariate', 'view-3d']
+  const sections: readonly SectionId[] = ['overview', 'data-pool', 'drillholes', 'field-logging', 'laboratory', 'strength', 'xrf', 'spectral', 'spatial-reference', 'explore', 'domain', 'grade', 'variography', 'structure', 'geotechnical', 'custom', 'multivariate', 'view-3d']
   if (requested !== null && sections.includes(requested)) return requested
   const saved = loadWorkspaceState<SectionId>(sectionStateKey, 'data-pool')
   return saved !== undefined && sections.includes(saved) ? saved : 'data-pool'
@@ -119,7 +125,8 @@ export function App() {
   const activationRequest = useRef(0)
   const [section, setActiveSection] = useState<SectionId>(loadInitialSection)
   const [connectionSettings, setConnectionSettings] = useState<ConnectionSettings>(loadConnection)
-  const [connectionState, setConnectionState] = useState<ConnectionState>('checking')
+  const [connectionState, setConnectionState] = useState<ConnectionState>('unavailable')
+  const [connectionMetadataReady, setConnectionMetadataReady] = useState(() => desktopBridge() === undefined)
   const [theme, setTheme] = useState<ThemeId>(loadTheme)
   const [chartDesign, setChartDesign] = useState<ChartDesignId>(loadChartDesign)
   const [stereonetTheme, setStereonetTheme] = useState<StereonetThemeId>(loadStereonetTheme)
@@ -179,40 +186,18 @@ export function App() {
     return () => window.clearTimeout(timer)
   }, [license])
 
+  // Restore only local connection metadata. Database requests start when the
+  // user connects or explicitly refreshes/syncs data.
   useEffect(() => {
     if (license === null) return
     let active = true
-    void desktopBridge()?.databaseConfiguration().then((configuration) => {
-      if (active && configuration !== null) {
-        setConnectionSettings({ version: 1, endpoint: configuration.endpoint, accountId: configuration.accountId, managed: true, token: '' })
-      }
-    }).catch(() => { if (active) setConnectionState('unavailable') })
+    void desktopBridge()?.databaseConfiguration().then(configuration => {
+      if (!active || configuration === undefined || configuration === null) return
+      appStorage.setItem(connectionStorageKey, JSON.stringify({ version: 1, endpoint: configuration.endpoint }))
+      setConnectionSettings(current => restoreManagedConnection(current, configuration))
+    }).catch(() => { /* Local project files remain available without Database access. */ }).finally(() => { if (active) setConnectionMetadataReady(true) })
     return () => { active = false }
   }, [license?.accountId])
-
-  useEffect(() => {
-    // A Data Pool endpoint is not an authenticated session by itself. In
-    // particular, do not let a public/open endpoint sign the user straight
-    // back in after they explicitly removed their session token.
-    if (license === null || (connectionSettings.token === '' && !connectionSettings.managed)) {
-      setConnectionState('unavailable')
-      return undefined
-    }
-    let active = true
-    setConnectionState('checking')
-    void checkDataPoolConnection(connectionSettings).then(
-      () => { if (active) setConnectionState('connected') },
-      (error) => {
-        if (!active) return
-        if (error instanceof DataPoolError && error.status === 401) {
-          clearStoredCredential()
-          setConnectionSettings((current) => ({ ...current, token: '' }))
-        }
-        setConnectionState('unavailable')
-      },
-    )
-    return () => { active = false }
-  }, [connectionSettings, license?.accountId])
 
   const disconnectDatabase = useCallback(() => {
     setShowSignOutConfirmation(false)
@@ -311,6 +296,7 @@ export function App() {
   }
 
   let page
+  if (!connectionMetadataReady) return <div className="app-bootstrap-state">Opening local workspace…</div>
   if (section === 'overview') {
     page = <OverviewPage onNavigate={setSection} />
   } else if (section === 'data-pool') {
@@ -335,6 +321,12 @@ export function App() {
     page = <MultivariatePage onNavigate={setSection} />
   } else if (section === 'domain') {
     page = <DomainPage onNavigate={setSection} />
+  } else if (section === 'grade') {
+    page = <GradePage />
+  } else if (section === 'variography') {
+    page = <VariographyPage />
+  } else if (section === 'custom') {
+    page = <CustomPage onNavigate={setSection} />
   } else {
     page = <PlaceholderPage section={section} />
   }
@@ -362,7 +354,7 @@ export function App() {
               onThemeChange={changeTheme}
               theme={theme}
             >
-              {page}
+              <LocalWorkspaceBootstrap><PageErrorBoundary resetKey={section}>{page}</PageErrorBoundary></LocalWorkspaceBootstrap>
             </AppShell>
           </ChartDesignProvider>
         </StereonetThemeProvider>

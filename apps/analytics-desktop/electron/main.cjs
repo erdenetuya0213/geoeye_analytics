@@ -1,14 +1,22 @@
 const { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, shell } = require('electron')
 const { DatabaseSync } = require('node:sqlite')
+const { spawn } = require('node:child_process')
 const { createHash, randomUUID } = require('node:crypto')
 const fs = require('node:fs')
 const path = require('node:path')
 const { createActivationService } = require('./activation.cjs')
 const { createDatabaseConnection } = require('./database-connection.cjs')
 const { createWorkspaceFiles } = require('./workspace-files.cjs')
+const { validateChartImages, writeChartImages } = require('./chart-export.cjs')
+const { createAnalyticsEngine, resolveLaunch } = require('./analytics-engine.cjs')
+let lastChartExportDirectory
 // Administrator provisioning is one-shot and never inherited by renderer processes.
 const databaseProvisioning = process.env.GEOEYE_DATABASE_PROVISION
+const databaseSmoke = process.env.GEOEYE_DATABASE_SMOKE === '1'
+const configuredLocalApiRoot = process.env.GEOEYE_LOCAL_API_ROOT
 delete process.env.GEOEYE_DATABASE_PROVISION
+delete process.env.GEOEYE_DATABASE_SMOKE
+delete process.env.GEOEYE_LOCAL_API_ROOT
 
 const localBase = process.env.LOCALAPPDATA || app.getPath('appData')
 const appDataPath = process.env.GEOEYE_APP_DATA_PATH || path.join(localBase, 'GeoEye', 'Analytics')
@@ -67,8 +75,63 @@ function writeSettings(settings) {
 }
 
 const databaseConnectionPath = path.join(appDataPath, 'secrets', 'configured-database.bin')
+let localApiStart
+
+async function apiHealth(endpoint) {
+  try {
+    const response = await fetch(`${endpoint}/health`, { signal: AbortSignal.timeout(1_500) })
+    return response.ok
+  } catch {
+    return false
+  }
+}
+
+function localApiRoot() {
+  const candidates = [
+    configuredLocalApiRoot,
+    path.resolve(__dirname, '../../..'),
+    process.env.PORTABLE_EXECUTABLE_DIR === undefined
+      ? undefined
+      : path.resolve(process.env.PORTABLE_EXECUTABLE_DIR, '../../..'),
+    path.resolve(path.dirname(process.execPath), '../../../..'),
+  ].filter((candidate) => typeof candidate === 'string')
+  return candidates.find((candidate) => fs.existsSync(path.join(candidate, '.env.staging'))
+    && fs.existsSync(path.join(candidate, 'services', 'datapool-api', 'dist', 'main.js')))
+}
+
+async function ensureLocalApi(endpoint) {
+  const url = new URL(endpoint)
+  if (url.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)) return
+  if (await apiHealth(endpoint)) return
+  if (localApiStart !== undefined) return localApiStart
+  localApiStart = (async () => {
+    const root = localApiRoot()
+    if (root === undefined) throw new Error('The local Database API is offline and its runtime could not be found.')
+    const child = spawn(process.execPath, [
+      `--env-file=${path.join(root, '.env.staging')}`,
+      path.join(root, 'services', 'datapool-api', 'dist', 'main.js'),
+    ], {
+      cwd: root,
+      detached: true,
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+      stdio: 'ignore',
+      windowsHide: true,
+    })
+    child.unref()
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      if (await apiHealth(endpoint)) return
+    }
+    throw new Error('The local Database API did not become ready.')
+  })().finally(() => { localApiStart = undefined })
+  return localApiStart
+}
+
 const databaseConnection = createDatabaseConnection({
   requireLicense: () => activationService.requireActive(),
+  activeCredential: () => activationService.activeCredential(),
+  defaultEndpoint: process.env.GEOEYE_DATABASE_ENDPOINT || 'http://127.0.0.1:8080',
+  prepareEndpoint: ensureLocalApi,
   read() {
     if (!fs.existsSync(databaseConnectionPath)) return null
     if (!safeStorage.isEncryptionAvailable()) throw new Error('Windows protected storage is unavailable.')
@@ -117,13 +180,19 @@ async function requestDataPool(input) {
     throw new Error('The Database request body is too large')
   }
 
-  const response = await fetch(url, {
-    method,
-    headers: databaseConnection.headers(url, headers),
-    ...(body === undefined ? {} : { body }),
-    redirect: 'manual',
-    signal: AbortSignal.timeout(30_000),
-  })
+  await databaseConnection.connect()
+  const send = () => fetch(url, {
+      method,
+      headers: databaseConnection.headers(url, headers),
+      ...(body === undefined ? {} : { body }),
+      redirect: 'manual',
+      signal: AbortSignal.timeout(30_000),
+    })
+  let response = await send()
+  if (response.status === 401) {
+    await databaseConnection.connect(true)
+    response = await send()
+  }
   const declaredLength = Number(response.headers.get('content-length') ?? 0)
   if (Number.isFinite(declaredLength) && declaredLength > maximumDataPoolBodyBytes) {
     throw new Error('The Database response is too large')
@@ -519,6 +588,32 @@ function writeProjectRecord(input) {
   writeSettings(opened.settings)
 }
 
+function listLocalProjects(input) {
+  const configured = databaseConnection.metadata()
+  const license = activationService.requireActive()
+  const accountId = configured?.accountId ?? license.accountId
+  const endpoint = configured?.endpoint ?? 'local'
+  if (input?.accountId !== accountId || input?.endpoint !== endpoint) throw new Error('The local project scope does not match this account.')
+  const settings = readSettings()
+  const prefix = `${endpointHash(endpoint)}#${safeSegment(accountId, 'local')}#`
+  const projects = []
+  for (const [key, registered] of Object.entries(settings.projectRegistry)) {
+    if (!key.startsWith(prefix)) continue
+    const address = { endpoint, accountId, projectId: registered.projectId, tenantId: registered.tenantId }
+    const resolved = resolveProject(settings, address, false)
+    if (resolved === null) continue
+    const file = path.join(resolved.projectPath, 'project.sqlite')
+    if (!fs.existsSync(file)) continue
+    const database = new DatabaseSync(file, { readOnly: true })
+    try {
+      if (!database.prepare('SELECT 1 FROM authorized_accounts WHERE account_id = ?').get(accountId)) continue
+      const row = database.prepare('SELECT payload_json FROM projects LIMIT 1').get()
+      if (row) projects.push(parseJson(row.payload_json))
+    } finally { database.close() }
+  }
+  return projects
+}
+
 function readProjectRecord(addressValue) {
   const opened = openProject(addressValue, false)
   if (opened === null) return null
@@ -709,6 +804,12 @@ function readAnalysisResultPackages(address) {
 
 const workspaceFiles = createWorkspaceFiles({ openProject, atomicWrite, requestDataPool, requireActive: () => activationService.requireActive() })
 
+const analyticsEngine = createAnalyticsEngine({
+  launch: () => resolveLaunch({ resourcesPath: app.isPackaged ? process.resourcesPath : null, appRoot: path.join(__dirname, '..') }),
+  log: (line) => console.error(line),
+})
+app.on('will-quit', () => analyticsEngine.stop())
+
 function registerIpc() {
   ipcMain.handle('geoeye:activation:status', () => activationService.status())
   ipcMain.handle('geoeye:activation:login', (_event, input) => {
@@ -719,6 +820,23 @@ function registerIpc() {
   const licensedHandle = (channel, handler) => ipcMain.handle(channel, (event, input) => {
     activationService.requireActive()
     return handler(event, input)
+  })
+  ipcMain.handle('geoeye:engine:status', () => analyticsEngine.status())
+  licensedHandle('geoeye:engine:call', async (_event, input) => {
+    if (typeof input?.method !== 'string') throw new Error('Engine method is required')
+    try { return { ok: true, result: await analyticsEngine.call(input.method, input.params ?? {}) } }
+    catch (error) { return { ok: false, error: error.message, type: error.type ?? null } }
+  })
+  licensedHandle('geoeye:charts:export', async (event, input) => {
+    const images = validateChartImages(input)
+    const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender), {
+      title: 'Choose graph export folder', buttonLabel: 'Export graphs here',
+      defaultPath: lastChartExportDirectory || app.getPath('downloads'),
+      properties: ['openDirectory', 'createDirectory'],
+    })
+    if (result.canceled || !result.filePaths[0]) return { paths: [], canceled: true }
+    lastChartExportDirectory = result.filePaths[0]
+    return { paths: writeChartImages(lastChartExportDirectory, images), canceled: false }
   })
   ipcMain.handle('geoeye:app-storage:read', () => readSettings().values)
   ipcMain.handle('geoeye:app-storage:write', (_event, input) => {
@@ -751,7 +869,13 @@ function registerIpc() {
     try { fs.rmSync(credentialPath) } catch (error) { if (error?.code !== 'ENOENT') throw error }
   })
   licensedHandle('geoeye:datapool:request', (_event, input) => requestDataPool(input))
-  licensedHandle('geoeye:datapool:configuration', () => databaseConnection.status())
+  licensedHandle('geoeye:projects:local', (_event, input) => listLocalProjects(input))
+  licensedHandle('geoeye:datapool:configuration', () => databaseConnection.metadata())
+  licensedHandle('geoeye:datapool:connect', async () => {
+    const configured = databaseConnection.metadata()
+    if (configured !== null) await ensureLocalApi(configured.endpoint)
+    return databaseConnection.connect()
+  })
   ipcMain.handle('geoeye:workspace:status', () => workspaceStatus())
   licensedHandle('geoeye:workspace:choose-root', async () => {
     const result = await dialog.showOpenDialog({
@@ -923,6 +1047,17 @@ app.whenReady().then(async () => {
   if (databaseProvisioning) {
     try { await databaseConnection.provision(JSON.parse(databaseProvisioning)) }
     catch (error) { dialog.showErrorBox('Database connection was not configured', error.message || 'Ask your administrator to check the staging API.') }
+  }
+  if (databaseSmoke) {
+    try {
+      const connection = await databaseConnection.connect(true)
+      console.log(JSON.stringify({ connected: connection !== null, endpoint: connection?.endpoint, email: connection?.email }))
+      app.exit(connection === null ? 1 : 0)
+    } catch (error) {
+      console.error(error)
+      app.exit(1)
+    }
+    return
   }
   const storageSmokeRoot = process.env.GEOEYE_STORAGE_SMOKE_ROOT
   if (storageSmokeRoot) {

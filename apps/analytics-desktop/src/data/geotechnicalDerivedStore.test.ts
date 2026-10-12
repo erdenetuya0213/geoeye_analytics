@@ -113,3 +113,14 @@ describe('saving RMR76 derived fields', () => {
     ]))
   })
 })
+
+it('saves basic RMR with an unassessed orientation and explicit basis', () => {
+  const dataset = rmrDatasets[0]!
+  const intervals = dataset.intervals.map(interval => ({ ...interval, candidates: interval.candidates.filter(input => input.canonicalKey !== 'structure.orientation_rating') }))
+  const run = calculateRmr76Intervals(intervals, new Set(dataset.sources.map(source => source.id)), 'basic-save', '2026-10-05T00:00:00.000Z')
+  const saved = buildSavedRmr76Run(run, dataset.id, '2026-10-05T00:01:00.000Z', true)
+  expect(saved.intervals.length).toBeGreaterThan(0)
+  expect(saved.intervals.every(interval => interval.ratingBasis === 'basic')).toBe(true)
+  expect(saved.intervals.every(interval => interval.componentRatings?.orientation === null)).toBe(true)
+  expect(saved.fieldDefinitions[0]?.name).toContain('Basic RMR76')
+})

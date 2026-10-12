@@ -33,7 +33,7 @@ function parseRecord(candidate: unknown): SchmidtRecord | null {
     || typeof value.id !== 'string'
     || typeof value.reboundValue !== 'number'
     || !Number.isFinite(value.reboundValue)
-    || value.reboundValue <= 0
+    || value.reboundValue < 0
     || typeof value.sampleId !== 'string'
     || typeof value.sourceFile !== 'string'
     || typeof value.sourceRow !== 'number'

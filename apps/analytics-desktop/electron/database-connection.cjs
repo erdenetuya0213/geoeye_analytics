@@ -13,7 +13,25 @@ function validateConnection(value) {
     email: normalizeEmail(value.email), expiresAt: new Date(value.expiresAt).toISOString() }
 }
 
-function createDatabaseConnection({ read, write, requireLicense, fetch: request = globalThis.fetch, now = Date.now }) {
+function validateEndpoint(value) {
+  const url = new URL(value)
+  if (url.username || url.password || url.search || url.hash
+    || (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)))) {
+    throw new Error('Database connections require HTTPS, or a local loopback API.')
+  }
+  return url.toString().replace(/\/+$/, '')
+}
+
+function createDatabaseConnection({
+  read,
+  write,
+  requireLicense,
+  activeCredential,
+  defaultEndpoint = 'http://127.0.0.1:8080',
+  prepareEndpoint,
+  fetch: request = globalThis.fetch,
+  now = Date.now,
+}) {
   function current() {
     const license = requireLicense()
     const value = read()
@@ -28,8 +46,60 @@ function createDatabaseConnection({ read, write, requireLicense, fetch: request 
     const { token, ...metadata } = connection
     return metadata
   }
+  function endpoint() {
+    const value = read()
+    return validateEndpoint(typeof value?.endpoint === 'string' ? value.endpoint : defaultEndpoint)
+  }
+  async function connect(force = false) {
+    if (!force) {
+      try {
+        const existing = current()
+        if (existing !== null) return summary(existing)
+      } catch (error) {
+        if (!/expired/i.test(error instanceof Error ? error.message : '')) throw error
+      }
+    }
+    if (typeof activeCredential !== 'function') return summary(current())
+    const credential = activeCredential()
+    const license = requireLicense()
+    const target = endpoint()
+    if (typeof prepareEndpoint === 'function') await prepareEndpoint(target)
+    const response = await request(`${target}/v1/auth/activation`, {
+      method: 'POST',
+      headers: { accept: 'application/json', 'content-type': 'application/json' },
+      body: JSON.stringify({ email: credential.email, activationKey: credential.key }),
+      redirect: 'manual',
+      signal: AbortSignal.timeout(10_000),
+    })
+    if (!response.ok) throw new Error(response.status === 401 || response.status === 403
+      ? 'The activation is not authorized for Database access.'
+      : 'The Database API could not verify this activation.')
+    const body = await response.json()
+    const connection = validateConnection({
+      endpoint: target,
+      token: body.accessToken,
+      accountId: body.user?.id,
+      email: body.user?.email,
+      expiresAt: body.expiresAt,
+    })
+    if (connection.email !== license.email || connection.email !== credential.email
+      || Date.parse(connection.expiresAt) > Date.parse(license.expiresAt)) {
+      throw new Error('The Database account does not match this activation.')
+    }
+    write(connection)
+    return summary(connection)
+  }
   return {
     status() { return summary(current()) },
+    metadata() {
+      const license = requireLicense()
+      const value = read()
+      if (value === null) return null
+      const connection = validateConnection(value)
+      if (connection.email !== license.email) throw new Error('The configured Database connection belongs to another licensed email.')
+      return summary(connection)
+    },
+    connect,
     headers(urlValue, headers) {
       const connection = current()
       if (connection === null) return headers
@@ -61,4 +131,4 @@ function createDatabaseConnection({ read, write, requireLicense, fetch: request 
   }
 }
 
-module.exports = { createDatabaseConnection, validateConnection }
+module.exports = { createDatabaseConnection, validateConnection, validateEndpoint }

@@ -12,6 +12,7 @@ import {
   type Rmr76CanonicalInputKey,
 } from '../analysis/geotechnicalWorkflow.js'
 import type { GeotechnicalSource, RmrDataset } from './geotechnicalTypes.js'
+import type { LocalTabularDraft } from './localProjectDb.js'
 import { liveFieldLoggingDatasets } from './fieldLoggingSources.js'
 
 export type Rmr76ColumnMapping = Partial<Record<Rmr76CanonicalInputKey, string>>
@@ -19,6 +20,9 @@ export type Rmr76ColumnMapping = Partial<Record<Rmr76CanonicalInputKey, string>>
 export interface Rmr76ParameterSource {
   columnKey: string
   sourceId: string
+  strengthMode?: 'ucs' | 'point-load' | 'field-grade' | 'unconfirmed'
+  ucsFactor?: number | undefined
+  fallback?: { sourceId: string; columnKey: string; strengthMode: 'field-grade' } | undefined
 }
 
 export type Rmr76ParameterSourceMapping = Partial<Record<Rmr76CanonicalInputKey, Rmr76ParameterSource>>
@@ -46,6 +50,7 @@ export interface JoinedRmrDataset {
 }
 
 export interface DatabaseRmrColumn {
+  numericValues?: boolean
   canonicalUnit: string | null
   dataType: VariableDefinition['dataType']
   displayName: string
@@ -63,6 +68,8 @@ export interface DatabaseRmrRecord {
 }
 
 export interface DatabaseRmrSource {
+  composite?: FieldLoggingDataset['composite']
+  category?: string | null
   columns: readonly DatabaseRmrColumn[]
   coveredHoleCount: number
   dataset: Pick<Dataset, 'currentVersion' | 'id' | 'name' | 'updatedAt'>
@@ -70,7 +77,33 @@ export interface DatabaseRmrSource {
   parentTemplateId: string | null
   records: readonly DatabaseRmrRecord[]
   recordCount: number
-  sourceKind: 'database' | 'field-template' | 'generated-csv'
+  sourceKind: 'database' | 'field-template' | 'generated-csv' | 'local-csv'
+}
+
+/** Keep completed exports beneath their template in the Data category. */
+export function groupRmrSources(sources: readonly DatabaseRmrSource[]) {
+  const groups = new Map<string, DatabaseRmrSource[]>()
+  for (const source of sources) {
+    const parent = sources.find(item => item.dataset.id === source.parentTemplateId)
+    const category = parent?.category?.trim() || source.category?.trim()
+      || (source.sourceKind === 'field-template' || source.sourceKind === 'generated-csv' ? 'Logging' : 'Other data')
+    const rows = groups.get(category) ?? []
+    rows.push(source)
+    groups.set(category, rows)
+  }
+  return [...groups].map(([category, rows]) => {
+    const ordered: DatabaseRmrSource[] = []
+    const included = new Set<string>()
+    for (const row of rows) {
+      if (row.parentTemplateId !== null && rows.some(parent => parent.dataset.id === row.parentTemplateId)) continue
+      ordered.push(row); included.add(row.dataset.id)
+      const exports = rows.filter(child => child.parentTemplateId === row.dataset.id)
+        .sort((a, b) => b.dataset.currentVersion - a.dataset.currentVersion)
+      for (const child of exports) { ordered.push(child); included.add(child.dataset.id) }
+    }
+    ordered.push(...rows.filter(row => !included.has(row.dataset.id)))
+    return { category, sources: ordered }
+  })
 }
 
 function generatedParentTemplateId(datasetId: string): string | null {
@@ -87,6 +120,7 @@ export function rmrSourceOptionLabel(
 ): string {
   const rows = source.recordCount.toLocaleString('en-US')
   const holes = source.coveredHoleCount.toLocaleString('en-US')
+  if (source.sourceKind === 'local-csv') return `${source.dataset.name} · local CSV · ${rows} rows · ${holes} matched holes`
   if (source.sourceKind === 'generated-csv') {
     const parent = sources.find((candidate) => candidate.dataset.id === source.parentTemplateId)
     const coverage = parent === undefined ? holes : `${holes}/${parent.coveredHoleCount.toLocaleString('en-US')}`
@@ -94,7 +128,7 @@ export function rmrSourceOptionLabel(
     return `↳ ${parentName} · completed CSV v${source.dataset.currentVersion} · ${rows} exported rows · ${coverage} holes`
   }
   if (source.sourceKind === 'field-template') {
-    return `${source.dataset.name} · live template v${source.dataset.currentVersion} · ${rows} records · ${holes} holes`
+    return `${source.dataset.name} · Live · ${rows} records · ${holes} holes`
   }
   return `${source.dataset.name} · v${source.dataset.currentVersion} · ${rows} rows`
 }
@@ -117,7 +151,18 @@ function normalizedCategory(value: string): string {
   return value.trim().toLocaleLowerCase().replace(/[_\s]+/g, '-').replace(/-+/g, '-')
 }
 
-function mappedValue(key: Rmr76CanonicalInputKey, value: unknown, excavationType: ExcavationType): unknown {
+export function mappedValue(key: Rmr76CanonicalInputKey, value: unknown, excavationType: ExcavationType, selection?: Rmr76ParameterSource): unknown {
+  if (key === 'geotech.ucs' && selection?.strengthMode === 'field-grade') {
+    const grade = typeof value === 'string' ? value.match(/^R([0-6])(?:\b|\s)/i)?.[1] : undefined
+    // The lower RMR rating is retained where an ISRM grade straddles a threshold.
+    return grade === undefined ? null : { strengthRating: [0, 0, 1, 4, 7, 12, 15][Number(grade)], label: String(value), basis: 'ISRM field grade (lower rating)' }
+  }
+  if (numericInputs.has(key)) {
+    const number = numericValue(value)
+    if (key !== 'geotech.ucs' || selection?.strengthMode === undefined || selection.strengthMode === 'ucs') return number
+    if (selection.strengthMode === 'unconfirmed' || !Number.isFinite(selection.ucsFactor) || selection.ucsFactor! <= 0) return null
+    return number === null ? null : number * selection.ucsFactor!
+  }
   if (typeof value !== 'string') return value
   const normalized = normalizedCategory(value)
   return key === 'structure.orientation_rating'
@@ -126,8 +171,36 @@ function mappedValue(key: Rmr76CanonicalInputKey, value: unknown, excavationType
 }
 
 export function isRmrColumnCompatible(key: Rmr76CanonicalInputKey, column: DatabaseRmrColumn): boolean {
-  if (numericInputs.has(key)) return column.dataType === 'numeric'
+  if (key === 'geotech.ucs' && column.key === 'field_strength') return true
+  if (numericInputs.has(key)) return column.dataType === 'numeric' || column.numericValues === true
   return column.dataType === 'numeric' || column.dataType === 'category' || column.dataType === 'text'
+}
+
+function numericValue(value: unknown): number | null {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null
+  if (typeof value !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(value.trim())) return null
+  const number = Number(value.trim())
+  return Number.isFinite(number) ? number : null
+}
+
+function hasNumericValues(values: readonly unknown[]): boolean {
+  const populated = values.filter(value => value !== null && value !== undefined && !(typeof value === 'string' && value.trim() === ''))
+  return populated.length > 0 && populated.every(value => numericValue(value) !== null)
+}
+
+export function isPointLoadColumn(column: DatabaseRmrColumn): boolean {
+  return /\bis\s*\(?50\)?\b|point[ -]?load/i.test(`${column.sourceColumn ?? ''} ${column.displayName}`)
+}
+
+export function rmrStrengthSourceLabel(name: string, selection: Rmr76ParameterSource): string {
+  return selection.strengthMode === 'point-load'
+    ? `${name} · point-load Is(50) · UCS factor ${selection.ucsFactor ?? 'unset'}` : name
+}
+
+function usableStrengthRecords(columns: readonly DatabaseRmrColumn[], records: readonly DatabaseRmrRecord[]): DatabaseRmrRecord[] {
+  if (!columns.some(isPointLoadColumn)) return [...records]
+  const validity = columns.find(column => /^(valid|validbreak)$/i.test((column.sourceColumn ?? column.displayName).replace(/[^a-z]/gi, '')))
+  return validity === undefined ? [...records] : records.filter(record => !['false', 'no', '0', 'invalid'].includes(String(record.values[validity.key] ?? '').trim().toLowerCase()))
 }
 
 export function rmrColumnLabel(column: DatabaseRmrColumn): string {
@@ -202,7 +275,9 @@ export function buildJoinedRmrDataset(
       for (const record of source.records) {
         const intervalKey = exactIntervalKey(record)
         if (intervalKey === null || !(selection.columnKey in record.values)) continue
-        const value = mappedValue(definition.key, record.values[selection.columnKey], excavationType)
+        const rawValue = record.values[selection.columnKey]
+        if (rawValue === null || rawValue === undefined || (typeof rawValue === 'string' && rawValue.trim() === '')) continue
+        const value = mappedValue(definition.key, rawValue, excavationType, selection)
         const existing = index.get(intervalKey)
         if (existing !== undefined && !sameValue(existing.value, value)) ambiguous.add(intervalKey)
         else if (existing === undefined) index.set(intervalKey, { record, source, value })
@@ -264,7 +339,7 @@ export function buildJoinedRmrDataset(
         canonicalKey: definition.key,
         observationId: selected.estimated ? `mean:${jointConditionMean}:n=${sample.length}:${intervalKey}` : selected.record.observationIds[selection.columnKey] ?? `${selected.record.id}:${selection.columnKey}`,
         sourceFieldId: selection.columnKey,
-        sourceLabel: selected.estimated ? `${selected.source.dataset.name} · estimated scoped mean (${sample.length} intervals)` : selected.source.dataset.name,
+        sourceLabel: selected.estimated ? `${selected.source.dataset.name} · estimated scoped mean (${sample.length} intervals)` : definition.key === 'geotech.ucs' ? rmrStrengthSourceLabel(selected.source.dataset.name, selection) : selected.source.dataset.name,
         sourceTemplateId: selected.source.dataset.id,
         value: selected.value,
       })
@@ -305,9 +380,13 @@ export function buildJoinedRmrDataset(
     role: 'geotechnical',
     version: `v${source.dataset.currentVersion}`,
   }))
+  for (const selection of Object.values(mapping)) {
+    const fallback = selection?.fallback && sourceById.get(selection.fallback.sourceId)
+    if (fallback && !sourceDefinitions.some(source => source.id === fallback.dataset.id)) sourceDefinitions.push({ id: fallback.dataset.id, label: fallback.dataset.name, role: 'geotechnical', version: `v${fallback.dataset.currentVersion}` })
+  }
   const signature = RMR76_METHOD_DEFINITION.requiredInputs.map((definition) => {
     const selection = mapping[definition.key]
-    return `${definition.key}=${selection?.sourceId ?? ''}:${selection?.columnKey ?? ''}`
+    return `${definition.key}=${selection?.sourceId ?? ''}:${selection?.columnKey ?? ''}:${selection?.strengthMode ?? ''}:${selection?.ucsFactor ?? ''}:${JSON.stringify(selection?.fallback ?? null)}`
   }).join('|')
   const versions = [...selectedSources.values()].map((source) => source.dataset.currentVersion)
   const version = versions.length === 0 ? 1 : Math.max(...versions)
@@ -316,7 +395,7 @@ export function buildJoinedRmrDataset(
       id: 'local-rmr76-exact-join',
       intervals,
       label: 'Local RMR76 exact interval join',
-      snapshotId: `local-rmr76:${signature}`,
+      snapshotId: `local-rmr76:${signature}:${[...selectedSources.values()].map(source => `${source.dataset.id}@${source.dataset.currentVersion}:${source.dataset.updatedAt}`).sort().join('|')}`,
       snapshotLabel: 'Local sources · exact interval join',
       sources: sourceDefinitions,
       targetTemplateId: 'local-rmr76-exact-join',
@@ -351,6 +430,7 @@ export function buildDatabaseRmrSources(
         return definition === undefined ? [] : [{
           canonicalUnit: definition.canonicalUnit,
           dataType: definition.dataType,
+          numericValues: hasNumericValues(datasetObservations.filter(item => item.variableKey === key).map(observationValue)),
           displayName: definition.displayName,
           key: definition.key,
           sourceColumn: typeof definition.metadata?.sourceColumn === 'string' ? definition.metadata.sourceColumn : null,
@@ -373,18 +453,75 @@ export function buildDatabaseRmrSources(
         ;(record.observationIds as Record<string, string>)[observation.variableKey] = observation.id
         records.set(recordId, record)
       }
+      const usableRecords = usableStrengthRecords(columns, [...records.values()])
       return [{
         columns,
-        coveredHoleCount: coveredHoleCount([...records.values()]),
+        coveredHoleCount: coveredHoleCount(usableRecords),
         dataset,
         holeNames,
         parentTemplateId: null,
-        records: [...records.values()],
-        recordCount: records.size,
+        records: usableRecords,
+        recordCount: usableRecords.length,
         sourceKind: 'database',
+        category: /strength|point.load|schmidt/i.test(`${dataset.name} ${dataset.producerType}`) ? 'Strength'
+          : /xrf/i.test(`${dataset.name} ${dataset.producerType}`) ? 'XRF'
+          : /spectral/i.test(`${dataset.name} ${dataset.producerType}`) ? 'Spectral'
+          : /lab|assay/i.test(`${dataset.name} ${dataset.producerType}`) ? 'Lab' : 'Other data',
       }]
     })
     .sort((left, right) => right.dataset.updatedAt.localeCompare(left.dataset.updatedAt) || left.dataset.name.localeCompare(right.dataset.name))
+}
+
+/** Local imports are usable before publishing; resolve hole names to project IDs. */
+export function buildLocalTabularRmrSources(
+  drafts: readonly LocalTabularDraft[], holeNames: ReadonlyMap<string, string>,
+  activeHoleIds?: ReadonlySet<string>,
+): DatabaseRmrSource[] {
+  const normalized = (value: string) => value.trim().toLowerCase().replace(/[^a-z0-9]/g, '')
+  const identifiers = new Map<string, Set<string>>()
+  for (const [id, name] of holeNames) for (const alias of [id, name]) {
+    const key = normalized(alias), ids = identifiers.get(key) ?? new Set<string>()
+    ids.add(id); identifiers.set(key, ids)
+  }
+  return drafts.flatMap(draft => {
+    const find = (aliases: string[]) => draft.columns.findIndex(column => aliases.includes(normalized(column)))
+    const hole = find(['holeid', 'borehole', 'hole', 'bhid', 'drillholeid'])
+    const from = find(['from', 'fromm', 'depthfrom', 'depthfromm'])
+    const to = find(['to', 'tom', 'depthto', 'depthtom'])
+    const depth = find(['depth', 'depthm', 'md'])
+    const valid = find(['valid', 'validbreak'])
+    const coordinates = new Set([hole, from, to, depth])
+    const columns = draft.columns.flatMap((label, index): DatabaseRmrColumn[] => {
+      if (coordinates.has(index)) return []
+      const values = draft.rows.map(row => row[index])
+      if (!values.some(value => value !== undefined && value.trim() !== '')) return []
+      const numeric = hasNumericValues(values)
+      return [{ key: `csv:${label}`, displayName: label, sourceColumn: label,
+        dataType: numeric ? 'numeric' : 'text', numericValues: numeric,
+        canonicalUnit: /\bmpa\b/i.test(label) ? 'MPa' : /\bkn\b/i.test(label) ? 'kN' : /\bmm\b/i.test(label) ? 'mm' : null }]
+    })
+    const id = `local-csv-${draft.section}`
+    const records = draft.rows.flatMap((row, index): DatabaseRmrRecord[] => {
+      if (draft.section === 'strength' && valid >= 0 && ['false', 'no', '0', 'invalid'].includes((row[valid] ?? '').trim().toLowerCase())) return []
+      const matches = identifiers.get(normalized(row[hole] ?? ''))
+      const activeMatches = matches === undefined ? [] : [...matches].filter(id => activeHoleIds?.has(id))
+      const holeId = matches?.size === 1 ? [...matches][0]! : activeMatches.length === 1 ? activeMatches[0]! : null
+      const depthFrom = numericValue(row[from]) ?? numericValue(row[depth])
+      const depthTo = to < 0 ? depthFrom : numericValue(row[to])
+      if (holeId === null || depthFrom === null || depthFrom < 0 || depthTo === null || depthTo < depthFrom) return []
+      const recordId = `${id}:${index + 2}`
+      const values = Object.fromEntries(columns.flatMap(column => {
+        const raw = row[draft.columns.indexOf(column.sourceColumn!)] ?? ''
+        return raw.trim() === '' ? [] : [[column.key, column.dataType === 'numeric' ? numericValue(raw) : raw]]
+      }))
+      return [{ id: recordId, holeId, depthFrom, depthTo, values,
+        observationIds: Object.fromEntries(Object.keys(values).map(key => [key, `${recordId}:${key}`])) }]
+    })
+    return [{ columns, records, recordCount: records.length, coveredHoleCount: coveredHoleCount(records), holeNames,
+      dataset: { id, name: draft.section === 'strength' ? 'Strength laboratory results' : draft.fileName, currentVersion: 1, updatedAt: draft.updatedAt },
+      sourceKind: 'local-csv' as const, parentTemplateId: null,
+      category: { geotechnical: 'Geotechnical', strength: 'Strength', laboratory: 'Lab', xrf: 'XRF', spectral: 'Spectral' }[draft.section] }]
+  })
 }
 
 /** Converts exact Field template IDs and records into the same explicit mapper used by CSV datasets. */
@@ -397,6 +534,7 @@ export function buildFieldLoggingRmrSources(
     const columns = dataset.columns.map((column): DatabaseRmrColumn => ({
       canonicalUnit: column.unit,
       dataType: column.dataType,
+      numericValues: hasNumericValues(dataset.records.map(record => record.values[column.key])),
       displayName: column.label,
       key: column.key,
       sourceColumn: column.label,
@@ -414,6 +552,7 @@ export function buildFieldLoggingRmrSources(
     return [{
       columns,
       coveredHoleCount: coveredHoleCount(records),
+      ...(dataset.composite === undefined ? {} : { composite: dataset.composite }),
       dataset: {
         currentVersion: dataset.version,
         id: dataset.id,
@@ -425,6 +564,7 @@ export function buildFieldLoggingRmrSources(
       records,
       recordCount: records.length,
       sourceKind: parentTemplateId === null ? 'field-template' : 'generated-csv',
+      category: dataset.category,
     }]
   }).sort((left, right) => {
     const leftName = left.dataset.name.replace(/\s*·\s*generated CSV$/i, '')
@@ -486,7 +626,7 @@ export function buildMappedRmrDataset(
     intervals,
     label: source.dataset.name,
     snapshotId: `${source.dataset.id}:v${source.dataset.currentVersion}:${source.dataset.updatedAt}`,
-    snapshotLabel: `${source.dataset.name} · v${source.dataset.currentVersion}`,
+    snapshotLabel: `${source.dataset.name} · ${source.sourceKind === 'field-template' ? 'Live' : `v${source.dataset.currentVersion}`}`,
     sources: [datasetSource],
     targetTemplateId: source.dataset.id,
     version: source.dataset.currentVersion,

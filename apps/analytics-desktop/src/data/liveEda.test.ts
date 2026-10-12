@@ -15,6 +15,15 @@ const project: ProjectSummary = {
 }
 
 describe('live EDA adapter', () => {
+  it('exposes named RMR scenarios separately without joining historical runs into all data', () => {
+    const draft = { columns: ['Borehole', 'From (m)', 'To (m)', 'RMR76', 'Status'], dirty: false, fileName: 'Auto.csv',
+      rows: [['DH-1', '0', '3', '45', 'valid'], ['DH-1', '3', '6', '', 'missing']], section: 'geotechnical' as const, updatedAt: '2026-10-06' }
+    const result = buildLocalEdaDatasets(null, null, {}, project, [{ id: 'auto-v1', name: 'RMR76 Auto · v1', draft }, { id: 'neguun-v2', name: 'RMR76 Neguun · v2', draft }])
+    expect(result.map(item => item.name)).toEqual(['RMR76 Auto · v1 · local', 'RMR76 Neguun · v2 · local'])
+    expect(result[0]!.observations).toHaveLength(2)
+    expect(result[0]!.observations[1]!.values['geotechnical.rmr76']).toBeNull()
+    expect(result[0]!.observations[0]!.id).not.toBe(result[1]!.observations[0]!.id)
+  })
   it('preserves concentration units in common underscored import headers for evidence mapping', () => {
     const result = buildLocalEdaDatasets(null, null, {
       laboratory: { columns: ['BHID', 'From', 'To', 'Cu_ppm', 'Au_ppb', 'Mo (mg/kg)', 'Ag_g_t'], dirty: true, fileName: 'assay.csv',
@@ -162,8 +171,17 @@ describe('live EDA adapter', () => {
     expect(result.map(edaDatasetKind)).toEqual(['integrated', 'laboratory', 'logging', 'drillholes'])
     expect(result.find((dataset) => edaDatasetKind(dataset) === 'logging')).toMatchObject({
       id: 'local-field-logging-core-log',
+      name: 'Core logging · Live',
       observations: [expect.objectContaining({ lithology: 'Diorite', values: { 'logging.rqd': 88 } })],
     })
+    const changedTemplate = snapshot.fieldLogging.datasets![0]!
+    changedTemplate.version = 3
+    changedTemplate.records[0]!.values['logging.rqd'] = 91
+    const refreshed = buildLocalEdaDatasets(snapshot, null, {}, project)
+      .find(dataset => dataset.id === 'local-field-logging-core-log')
+    expect(refreshed).toMatchObject({ name: 'Core logging · Live',
+      observations: [expect.objectContaining({ values: { 'logging.rqd': 91 } })] })
+    expect(changedTemplate.version).toBe(3)
     expect(result[0]?.variables.map((variable) => variable.key)).toEqual(expect.arrayContaining(['laboratory.au_g_t', 'logging.rqd', 'collar.easting']))
     expect(result[0]?.dimensions.map((dimension) => dimension.key)).toEqual(expect.arrayContaining(['assay_source', 'logging_source', 'logging.lithology']))
     expect(result[0]?.observations[0]).toMatchObject({

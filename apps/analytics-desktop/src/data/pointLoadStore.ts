@@ -14,6 +14,9 @@ export interface PointLoadRecordInput {
 }
 
 export interface PointLoadRecord extends PointLoadRecordInput {
+  sourceFile?: string
+  sourceRow?: number
+  sourceValues?: Record<string, string>
   correctionFactor: number
   createdAt: string
   id: string
@@ -83,6 +86,13 @@ function parseRecord(candidate: unknown): PointLoadRecord | null {
   ) return null
 
   try {
+    // Imported laboratory results may be rounded and must survive reload unchanged.
+    if (typeof value.sourceFile === 'string') {
+      if (value.depthFromM < 0 || value.depthToM < value.depthFromM
+        || ![value.depthFromM, value.depthToM, value.peakLoadKn, value.equivalentDiameterMm, value.isMpa, value.is50Mpa, value.correctionFactor].every(item => typeof item === 'number' && Number.isFinite(item))
+        || value.peakLoadKn <= 0 || value.equivalentDiameterMm <= 0 || value.isMpa! <= 0 || value.is50Mpa! <= 0 || value.correctionFactor! <= 0) return null
+      return value as PointLoadRecord
+    }
     return createPointLoadRecord({
       depthFromM: value.depthFromM,
       depthToM: value.depthToM,

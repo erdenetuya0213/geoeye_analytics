@@ -60,7 +60,7 @@ test('native IPC requires activation, restores offline, writes real local data, 
 
   try {
     let call = await boot()
-    const gated = ['workspace:choose-root', 'datapool:request', 'datapool:configuration', 'project:read', 'project:write', 'project-documents:read', 'project-documents:write', 'project-documents:remove', 'analysis-results:save', 'analysis-results:read', 'files:archive', 'files:export', 'outbox:enqueue', 'outbox:status', 'outbox:run', 'outbox:retry']
+    const gated = ['workspace:choose-root', 'datapool:request', 'datapool:configuration', 'datapool:connect', 'projects:local', 'project:read', 'project:write', 'project-documents:read', 'project-documents:write', 'project-documents:remove', 'analysis-results:save', 'analysis-results:read', 'files:archive', 'files:export', 'outbox:enqueue', 'outbox:status', 'outbox:run', 'outbox:retry']
     for (const name of gated) assert.throws(() => call(`geoeye:${name}`, {}), /Sign in/)
     assert.equal(call('geoeye:activation:login', { email: 'wrong@example.test', key }).license, null)
     const result = call('geoeye:activation:login', { email, key })

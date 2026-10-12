@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { parseEnv } from 'node:util'
 import { spawn } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import { loadServerConfig } from '../services/datapool-api/dist/config.js'
 import { PostgresDataPoolStore } from '../services/datapool-api/dist/postgres-store.js'
 import { issueSessionToken } from '../services/datapool-api/dist/auth.js'
@@ -11,6 +12,37 @@ import { createRequire } from 'node:module'
 const require = createRequire(new URL('../services/datapool-api/package.json', import.meta.url))
 const { Pool } = require('pg')
 const args = process.argv.slice(2)
+const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+
+async function probeApi(endpoint) {
+  try {
+    const response = await fetch(`${endpoint}/health`, { signal: AbortSignal.timeout(2_000) })
+    return response.ok ? 'ready' : 'unavailable'
+  } catch {
+    return 'offline'
+  }
+}
+
+async function ensureStagingApi(endpoint) {
+  const initial = await probeApi(endpoint)
+  if (initial === 'ready') return false
+  if (initial === 'unavailable') throw new Error('The staging API is running, but its Database health check failed.')
+  const envFile = path.join(repositoryRoot, '.env.staging')
+  const child = spawn(process.execPath, [`--env-file=${envFile}`, path.join(repositoryRoot, 'services/datapool-api/dist/main.js')], {
+    cwd: repositoryRoot,
+    detached: true,
+    windowsHide: true,
+    stdio: 'ignore',
+  })
+  child.unref()
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    await new Promise(resolve => setTimeout(resolve, 500))
+    const state = await probeApi(endpoint)
+    if (state === 'ready') return true
+    if (state === 'unavailable') throw new Error('The staging API started, but its Database health check failed.')
+  }
+  throw new Error('The staging API did not start within 15 seconds.')
+}
 function option(name) {
   const index = args.indexOf(`--${name}`)
   if (index < 0 || !args[index + 1] || args[index + 1].startsWith('--')) throw new Error(`--${name} is required`)
@@ -22,7 +54,7 @@ async function run() {
   const now = new Date()
   const ttl = Math.floor(expiration / 1000) - Math.floor(now.getTime() / 1000)
   if (!Number.isFinite(ttl) || ttl <= 0 || ttl > 30 * 86400) throw new Error('Choose a future API expiry within 30 days and no later than the activation expiry.')
-  const environment = parseEnv(fs.readFileSync('.env.staging', 'utf8'))
+  const environment = parseEnv(fs.readFileSync(path.join(repositoryRoot, '.env.staging'), 'utf8'))
   const config = loadServerConfig(environment)
   if (!config.sessionSecret) throw new Error('Staging user sessions are not configured.')
   if (!['127.0.0.1', 'localhost'].includes(config.host)) throw new Error('This staging setup tool requires a loopback API host.')
@@ -43,13 +75,14 @@ async function run() {
     const session = issueSessionToken(account.id, config.sessionSecret, ttl, now)
     connection = { endpoint, email, accountId: account.id, token: session.token, expiresAt: session.expiresAt.toISOString() }
   } finally { await pool.end() }
+  const apiStarted = await ensureStagingApi(endpoint)
   const headers = { authorization: `Bearer ${connection.token}` }
   const identity = await fetch(`${endpoint}/v1/auth/me`, { headers, redirect: 'error', signal: AbortSignal.timeout(10_000) })
   if (!identity.ok || (await identity.json()).user?.id !== connection.accountId) throw new Error('The API did not verify the configured account.')
   const projects = await fetch(`${endpoint}/v1/projects`, { headers, redirect: 'error', signal: AbortSignal.timeout(10_000) })
   if (!projects.ok) throw new Error('The API could not load permitted projects.')
   const projectData = await projects.json()
-  console.log(JSON.stringify({ endpoint, email, expiresAt: connection.expiresAt, projectsResponseVerified: true, projectCount: Array.isArray(projectData) ? projectData.length : projectData.items?.length ?? projectData.projects?.length ?? null }))
+  console.log(JSON.stringify({ apiStarted, endpoint, email, expiresAt: connection.expiresAt, projectsResponseVerified: true, projectCount: Array.isArray(projectData) ? projectData.length : projectData.items?.length ?? projectData.projects?.length ?? null }))
   if (args.includes('--check')) return
   const appPath = path.resolve(option('app'))
   if (!fs.existsSync(appPath) || path.extname(appPath).toLowerCase() !== '.exe') throw new Error('Provide the built Analytics Windows executable.')

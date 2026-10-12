@@ -94,6 +94,13 @@ function createActivationService({ read, write, remove, publicKey, now = Date.no
       if (result.license === null) throw new Error(result.error ?? 'Sign in with your email and activation key.')
       return result.license
     },
+    activeCredential() {
+      const record = session ?? read('activation')
+      if (record === null) throw new Error('Sign in with your email and activation key.')
+      const license = check(record)
+      session = record
+      return { email: record.email, key: record.key, license }
+    },
     logout() {
       remove('activation')
       session = null

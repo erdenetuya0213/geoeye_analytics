@@ -11,7 +11,7 @@ async function start() {
   await initializeDesktopRuntime()
   const root = document.getElementById('root')
   if (root === null) throw new Error('Application root was not found')
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: true } } })
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1, staleTime: Infinity, refetchOnWindowFocus: false, refetchOnReconnect: false } } })
 
   createRoot(root).render(
     <StrictMode>

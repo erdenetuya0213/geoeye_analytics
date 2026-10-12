@@ -1,5 +1,6 @@
 import {
   calculateRmr76,
+  classifyRmr76,
   type ExcavationType,
   type Rmr76Groundwater,
   type Rmr76JointCondition,
@@ -143,6 +144,7 @@ function isFiniteNumber(value: unknown): value is number {
 }
 
 function isValidValue(key: Rmr76CanonicalInputKey, value: unknown) {
+  if (key === 'geotech.ucs' && typeof value === 'object' && value !== null && 'strengthRating' in value) return isFiniteNumber(value.strengthRating) && value.strengthRating >= 0 && value.strengthRating <= 15
   if (key === 'geotech.ucs') return isFiniteNumber(value) && value >= 0
   if (key === 'geotech.rqd') return isFiniteNumber(value) && value >= 0 && value <= 100
   if (key === 'structure.joint_spacing') return isFiniteNumber(value) && value >= 0
@@ -199,23 +201,29 @@ export class InputResolver {
 
 export class DeterministicCalculator {
   calculate(method: MethodDefinition<Rmr76CanonicalInputKey>, resolved: ResolvedInputs): Rmr76Result | null {
-    if (method.id !== 'rmr76' || resolved.missing.length > 0) return null
+    if (method.id !== 'rmr76' || resolved.missing.some(key => key !== 'structure.orientation_rating')) return null
     const input = resolved.inputs
     const orientationValue = input['structure.orientation_rating'].value as {
       excavationType: ExcavationType
       orientation: Rmr76Orientation
-    }
-    return calculateRmr76({
-      excavationType: orientationValue.excavationType,
+    } | null
+    const orientation = typeof input['structure.orientation_rating'].value === 'number'
+      ? input['structure.orientation_rating'].value : orientationValue?.orientation
+    const result = calculateRmr76({
+      ...(orientationValue?.excavationType === undefined ? {} : { excavationType: orientationValue.excavationType }),
+      ...(orientation === undefined ? {} : { orientation }),
       groundwater: input['geotech.groundwater'].value as Rmr76Groundwater | number,
       jointCondition: input['geotech.joint_condition'].value as Rmr76JointCondition | number,
       jointSpacingM: input['structure.joint_spacing'].value as number,
-      orientation: typeof input['structure.orientation_rating'].value === 'number'
-        ? input['structure.orientation_rating'].value
-        : orientationValue.orientation,
       rqdPercent: input['geotech.rqd'].value as number,
-      ucsMpa: input['geotech.ucs'].value as number,
+      ...(typeof input['geotech.ucs'].value === 'number' ? { ucsMpa: input['geotech.ucs'].value }
+        : { strengthRating: (input['geotech.ucs'].value as { strengthRating: number }).strengthRating }),
     })
+    if (result.orientationAdjustment === null && result.basic !== null) {
+      return { ...result, ratingBasis: 'basic', total: result.basic,
+        classification: classifyRmr76(result.basic), missing: result.missing.filter(key => key !== 'orientationAdjustment') }
+    }
+    return { ...result, ratingBasis: 'adjusted' }
   }
 }
 
@@ -316,11 +324,11 @@ export function calculateRmr76Intervals(
       id: interval.id,
       inputValues: {
         rqdPercent: resolved.inputs['geotech.rqd'].availability === 'missing' ? null : resolved.inputs['geotech.rqd'].value as number,
-        ucsMpa: resolved.inputs['geotech.ucs'].availability === 'missing' ? null : resolved.inputs['geotech.ucs'].value as number,
+        ucsMpa: typeof resolved.inputs['geotech.ucs'].value === 'number' ? resolved.inputs['geotech.ucs'].value : null,
       },
       lineage,
       lithology: interval.lithology,
-      missing: resolved.missing,
+      missing: calculation === null ? resolved.missing : resolved.missing.filter(key => key !== 'structure.orientation_rating'),
       resolvedInputs: resolved.inputs,
       status: interval.exclusionReason !== undefined ? 'excluded' : calculation === null ? 'missing' : 'valid',
     }
@@ -328,7 +336,11 @@ export function calculateRmr76Intervals(
   return {
     calculatedAt,
     intervals: results,
-    method: RMR76_METHOD_DEFINITION,
+    method: results.some(result => result.calculation?.ratingBasis === 'basic')
+      ? { ...RMR76_METHOD_DEFINITION,
+        name: results.some(result => result.calculation?.ratingBasis === 'adjusted') ? 'RMR76 · Basic and adjusted results' : 'Basic RMR76 · Orientation not assessed',
+        version: `${RMR76_METHOD_DEFINITION.version}.optional-orientation` }
+      : RMR76_METHOD_DEFINITION,
     runId,
     snapshotId,
     sourceSignature: buildRmr76SourceSignature(intervals, selectedSourceTemplateIds),

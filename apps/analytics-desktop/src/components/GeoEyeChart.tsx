@@ -4,7 +4,11 @@ import {
   BrushComponent,
   GridComponent,
   LegendComponent,
+  MarkLineComponent,
+  MarkPointComponent,
+  PolarComponent,
   ToolboxComponent,
+  TitleComponent,
   TooltipComponent,
   VisualMapComponent,
 } from 'echarts/components'
@@ -15,9 +19,13 @@ import { useChartDesign } from '../state/ChartDesignContext.js'
 import { useGeoEyeSelection } from '../state/SelectionContext.js'
 import { applyChartDesign, chartDesignById, type ChartSurfaceColors } from '../visualization/chartDesigns.js'
 import { geoEyeChartColors, geoEyeThemeName } from '../visualization/geoEyeTheme.js'
+import { desktopBridge } from '../desktop/bridge.js'
 
 use([
   AriaComponent,
+  MarkLineComponent,
+  MarkPointComponent,
+  PolarComponent,
   BarChart,
   BoxplotChart,
   BrushComponent,
@@ -29,6 +37,7 @@ use([
   ScatterChart,
   SVGRenderer,
   ToolboxComponent,
+  TitleComponent,
   TooltipComponent,
   VisualMapComponent,
 ])
@@ -46,6 +55,10 @@ export interface GeoEyeChartProps {
   onObservationSelection?: (sourceObservationIds: readonly string[]) => void
   option: EChartsCoreOption
   renderer?: 'canvas' | 'svg'
+  /** Keep scientific figure styling (flat marks, exact axes) supplied by the author. */
+  publicationStyle?: boolean
+  exportFileName?: string
+  exportSize?: { width: number; height: number }
 }
 
 interface SourceDatum {
@@ -75,6 +88,7 @@ export function sourceObservationIdsFromDatum(value: unknown): string[] {
 }
 
 function selectedOption(option: EChartsCoreOption, selectedIds: readonly string[]): EChartsCoreOption {
+  if (selectedIds.length === 0) return option
   const selected = new Set(selectedIds)
   const optionRecord = option as Record<string, unknown>
   const series = Array.isArray(optionRecord.series) ? optionRecord.series : []
@@ -190,12 +204,18 @@ export function GeoEyeChart({
   onObservationSelection,
   option,
   renderer = 'canvas',
+  publicationStyle = false,
+  exportFileName,
+  exportSize,
 }: GeoEyeChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<EChartsType | null>(null)
+  const [visible, setVisible] = useState(() => typeof IntersectionObserver === 'undefined')
   const designId = useChartDesign()
   const design = chartDesignById(designId)
   const [surfaceColors, setSurfaceColors] = useState<ChartSurfaceColors>()
+  const [exporting, setExporting] = useState(false)
+  const [exportNotice, setExportNotice] = useState('')
   const { addSelection, replaceSelection, selectedIds, toggleSelection } = useGeoEyeSelection()
   const fallbackSurface = useMemo<ChartSurfaceColors>(() => ({
     grid: design.grid,
@@ -205,8 +225,8 @@ export function GeoEyeChart({
     text: design.text,
   }), [design])
   const designedOption = useMemo(
-    () => applyChartDesign(option, designId, surfaceColors ?? fallbackSurface),
-    [designId, fallbackSurface, option, surfaceColors],
+    () => publicationStyle ? option : applyChartDesign(option, designId, surfaceColors ?? fallbackSurface),
+    [designId, fallbackSurface, option, publicationStyle, surfaceColors],
   )
   const effectiveOption = useMemo(() => selectedOption(designedOption, selectedIds), [designedOption, selectedIds])
   const stableOption = useMemo(() => ({
@@ -221,11 +241,28 @@ export function GeoEyeChart({
     if (container === null) return
     const next = readSurfaceColors(container, fallbackSurface)
     setSurfaceColors((current) => sameSurfaceColors(current, next) ? current : next)
-  })
+    const shell = container.closest('.app-shell')
+    const observer = new MutationObserver(() => {
+      const colors = readSurfaceColors(container, fallbackSurface)
+      setSurfaceColors(current => sameSurfaceColors(current, colors) ? current : colors)
+    })
+    if (shell !== null) observer.observe(shell, { attributes: true, attributeFilter: ['class'] })
+    return () => observer.disconnect()
+  }, [fallbackSurface])
 
   useEffect(() => {
     const container = containerRef.current
-    if (container === null) return undefined
+    if (container === null || visible) return
+    const observer = new IntersectionObserver(entries => {
+      if (entries.some(entry => entry.isIntersecting)) { setVisible(true); observer.disconnect() }
+    }, { rootMargin: '120px' })
+    observer.observe(container)
+    return () => observer.disconnect()
+  }, [visible])
+
+  useEffect(() => {
+    const container = containerRef.current
+    if (container === null || !visible) return undefined
     const chart = init(container, geoEyeThemeName(designId), { renderer })
     chartRef.current = chart
     const observer = new ResizeObserver(() => {
@@ -237,7 +274,7 @@ export function GeoEyeChart({
       chart.dispose()
       chartRef.current = null
     }
-  }, [designId, renderer])
+  }, [designId, renderer, visible])
 
   useEffect(() => {
     const chart = chartRef.current
@@ -251,14 +288,14 @@ export function GeoEyeChart({
         type: 'takeGlobalCursor',
       })
     }
-  }, [stableOption])
+  }, [designId, renderer, stableOption, visible])
 
   useEffect(() => {
     const chart = chartRef.current
     if (chart === null) return
     if (loading) chart.showLoading('default', { color: design.palette[0], maskColor: 'transparent', textColor: surfaceColors?.muted ?? design.muted })
     else chart.hideLoading()
-  }, [design.muted, design.palette, loading, surfaceColors?.muted])
+  }, [designId, design.muted, design.palette, loading, renderer, surfaceColors?.muted, visible])
 
   useEffect(() => {
     const chart = chartRef.current
@@ -287,7 +324,51 @@ export function GeoEyeChart({
       chart.off('click', handleClick)
       chart.off('brushselected', handleBrush)
     }
-  }, [addSelection, brushSelection, clickSelection, onDatumClick, onObservationClick, onObservationSelection, replaceSelection, stableOption, toggleSelection])
+  }, [addSelection, brushSelection, clickSelection, designId, onDatumClick, onObservationClick, onObservationSelection, renderer, replaceSelection, stableOption, toggleSelection, visible])
 
-  return <div aria-label={ariaLabel} className={`geoeye-chart geoeye-chart-${designId} ${className}`.trim()} ref={containerRef} role="img" />
+  const exportImages = async (formats: Array<'png' | 'svg'>) => {
+    if (chartRef.current === null || exporting) return
+    setExporting(true); setExportNotice('')
+    try {
+      const name = (exportFileName ?? 'analytics-chart').replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 100).replace(/^-+/, '') || 'analytics-chart'
+      const width = exportSize?.width ?? 1440
+      const height = exportSize?.height ?? 900
+      // Export the actual current option, including legend state and selection.
+      const current = chartRef.current.getOption()
+      const exportOption = { ...current, animation: false, tooltip: { show: false }, toolbox: { show: false } }
+      const images = formats.map(format => {
+        const host = document.createElement('div')
+        Object.assign(host.style, { position: 'fixed', left: '-100000px', width: `${width}px`, height: `${height}px` })
+        document.body.appendChild(host)
+        const chart = init(host, undefined, { width, height, renderer: format === 'svg' ? 'svg' : 'canvas' })
+        try {
+          chart.setOption(exportOption, { notMerge: true, lazyUpdate: false })
+          return { name, format, dataUrl: chart.getDataURL({ type: format, pixelRatio: format === 'png' ? 2 : 1, backgroundColor: String(current.backgroundColor || '#ffffff'), excludeComponents: ['toolbox'] }) }
+        } finally { chart.dispose(); host.remove() }
+      })
+      const native = desktopBridge()
+      if (native?.exportChartImages) {
+        const result = await native.exportChartImages({ images })
+        setExportNotice(result.canceled ? 'Export canceled.' : `Saved: ${result.paths.join(' · ')}`)
+      } else {
+        for (const image of images) {
+          const link = document.createElement('a')
+          link.href = image.dataUrl; link.download = `${image.name}.${image.format}`; link.click()
+        }
+        setExportNotice('Chart downloads requested.')
+      }
+    } catch (error) { setExportNotice(`Export failed: ${error instanceof Error ? error.message : String(error)}`) }
+    finally { setExporting(false) }
+  }
+  if (exportFileName === undefined) return <div aria-label={ariaLabel} className={`geoeye-chart geoeye-chart-${designId} ${className}`.trim()} ref={containerRef} role="img" />
+  return <div className={`geoeye-chart geoeye-export-chart ${className}`.trim()}>
+    <div className="geoeye-export-toolbar" onClick={event => event.stopPropagation()}>
+      <span>Export current figure</span>
+      <button type="button" disabled={exporting || loading} onClick={() => void exportImages(['png'])}>PNG</button>
+      <button type="button" disabled={exporting || loading} onClick={() => void exportImages(['svg'])}>SVG</button>
+      <button type="button" disabled={exporting || loading} onClick={() => void exportImages(['png', 'svg'])}>{exporting ? 'Exporting…' : 'PNG + SVG'}</button>
+      <span className="geoeye-export-notice" role="status">{exportNotice}</span>
+    </div>
+    <div aria-label={ariaLabel} className={`geoeye-chart-canvas geoeye-chart-${designId}`} ref={containerRef} role="img" />
+  </div>
 }

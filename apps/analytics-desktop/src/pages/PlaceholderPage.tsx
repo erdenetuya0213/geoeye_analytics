@@ -1,14 +1,12 @@
 import { Construction } from 'lucide-react'
 import type { SectionId } from '../types.js'
 
-type PlaceholderSection = Exclude<SectionId, 'overview' | 'data-pool' | 'drillholes' | 'field-logging' | 'laboratory' | 'strength' | 'xrf' | 'spectral' | 'structure' | 'view-3d'>
+type PlaceholderSection = Exclude<SectionId, 'overview' | 'data-pool' | 'drillholes' | 'field-logging' | 'laboratory' | 'strength' | 'xrf' | 'spectral' | 'structure' | 'view-3d' | 'grade' | 'variography' | 'custom'>
 
 const details: Record<PlaceholderSection, { title: string; next: string }> = {
   'spatial-reference': { title: 'Spatial reference', next: 'Coordinate systems and project extents' },
   explore: { title: 'Statistics', next: 'Summary, distributions, relationships, spatial trends, and declustering' },
   domain: { title: 'Domain', next: 'Population and boundary analysis' },
-  grade: { title: 'Grade', next: 'Compositing, declustering, and cut-off scenarios' },
-  variography: { title: 'Variography', next: 'Directional continuity and model fitting' },
   geotechnical: { title: 'Geotechnical', next: 'RMR, RQD, and rock-mass domains' },
   multivariate: { title: 'Multivariate', next: 'PCA, clustering, and feature relationships' },
 }

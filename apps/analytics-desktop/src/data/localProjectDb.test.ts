@@ -41,6 +41,18 @@ const snapshot: LocalProjectSnapshot = {
 }
 
 describe('local project database', () => {
+  it('retains distinct borehole IDs with punctuation-equivalent names', () => {
+    const data = { ...snapshot, drillholes: [
+      { ...snapshot.drillholes[0]!, id: 'a', name: 'TT2026-006GT' },
+      { ...snapshot.drillholes[0]!, id: 'b', name: 'TT_2026_006GT' },
+    ] }
+    expect(effectiveDrillholes(data, null).map(hole => hole.id).sort()).toEqual(['a', 'b'])
+    const draft = createLocalDrillholeDraft({ collar: [{ holeId: 'TT_2026_006GT', easting: 1, northing: 2, elevation: 3 }], survey: [] })
+    const holes = effectiveDrillholes(data, draft)
+    expect(holes.find(hole => hole.id === 'a')?.name).toBe('TT2026-006GT')
+    expect(holes.find(hole => hole.id === 'a')?.collar).toBeNull()
+    expect(holes.find(hole => hole.id === 'b')?.collar?.easting).toBe(1)
+  })
   it('refreshes the current filled templates across all holes without keeping completed CSV copies', async () => {
     const client = new DataPoolClient({ endpoint: 'https://example.invalid', fetch: vi.fn() })
     const live: FieldLoggingDataset = {
