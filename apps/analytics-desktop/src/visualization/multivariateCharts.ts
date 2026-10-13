@@ -1,6 +1,8 @@
 import type { EChartsCoreOption } from 'echarts/core'
 import type { MultivariateCorrelationMethod, MultivariateRunResult } from '../analysis/multivariateEngine.js'
 import type { EdaVariableDefinition } from '../data/edaTypes.js'
+import { cartesianBase, valueAxis } from './chartBase.js'
+import { chartSettingsFor, type ChartSettings } from './chartSettings.js'
 import { GEOEYE_LINE_SMOOTHING, geoEyeChartColors } from './geoEyeTheme.js'
 
 const clusterColors = [geoEyeChartColors.primary, geoEyeChartColors.accent, geoEyeChartColors.violet, '#5488a5', '#70a58e', '#b06f7b', '#9d874d', '#537067']
@@ -9,39 +11,21 @@ function uniqueSourceObservationIds(rows: readonly MultivariateRunResult['rows']
   return [...new Set(rows.flatMap((row) => row.sourceObservationIds))]
 }
 
-function cartesian(selectable = true) {
-  return {
-    aria: { enabled: true },
-    brush: selectable ? { brushMode: 'single', xAxisIndex: 'all', yAxisIndex: 'all' } : undefined,
-    grid: { bottom: 30, containLabel: true, left: 24, right: 22, top: 56 },
-    legend: { left: 14, top: 12, type: 'scroll' },
-    tooltip: { axisPointer: { lineStyle: { color: geoEyeChartColors.gridStrong }, type: 'line' }, confine: true, trigger: 'item' },
-  }
-}
-
-function valueAxis(name: string) {
-  return {
-    axisLabel: { hideOverlap: true },
-    axisLine: { show: true },
-    axisTick: { show: false },
-    name,
-    nameGap: 42,
-    nameLocation: 'middle' as const,
-    scale: true,
-    splitLine: { lineStyle: { color: geoEyeChartColors.grid } },
-    splitNumber: 5,
-    type: 'value' as const,
-  }
-}
+const cartesian = cartesianBase
 
 export function buildMultivariateCorrelationOption(
   result: MultivariateRunResult,
   variables: readonly EdaVariableDefinition[],
   method: MultivariateCorrelationMethod,
+  settings: ChartSettings = chartSettingsFor('matrix'),
 ): EChartsCoreOption {
   const labels = variables.map((variable) => variable.shortLabel)
   const matrix = result.correlation[method]
-  const data = labels.flatMap((_, row) => labels.map((__, column) => {
+  const visible = (row: number, column: number) => settings.matrixShape === 'lower'
+    ? row >= column
+    : settings.matrixShape === 'upper' ? row <= column : true
+  const data = labels.flatMap((_, row) => labels.flatMap((__, column) => {
+    if (!visible(row, column)) return []
     const leftKey = variables[column]?.key ?? ''
     const rightKey = variables[row]?.key ?? ''
     const sourceObservationIds = uniqueSourceObservationIds(result.rows.filter((item) => {
@@ -49,18 +33,20 @@ export function buildMultivariateCorrelationOption(
       const right = item.values[rightKey]
       return typeof left === 'number' && Number.isFinite(left) && typeof right === 'number' && Number.isFinite(right)
     }))
-    return {
+    const value = matrix[row]?.[column] ?? 0
+    return [{
       count: result.correlation.counts[row]?.[column] ?? 0,
       sourceObservationIds,
-      value: [column, row, matrix[row]?.[column] ?? 0],
-    }
+      value: [column, row, value],
+      ...(Math.abs(value) < settings.matrixThreshold ? { itemStyle: { opacity: 0.3 } } : {}),
+    }]
   }))
   return {
     aria: { enabled: true },
     grid: { bottom: 28, containLabel: true, left: 22, right: 64, top: 28 },
     series: [{ data, label: { formatter: (params: { data?: { value?: number[] } }) => {
       const value = params.data?.value?.[2]
-      return typeof value === 'number' ? value.toFixed(2) : '—'
+      return typeof value === 'number' ? value.toFixed(settings.decimals) : '—'
     }, fontSize: 12, fontWeight: 700, show: true }, itemStyle: { borderColor: geoEyeChartColors.surface, borderWidth: 2 }, type: 'heatmap' }],
     tooltip: { formatter: (params: { data?: { count?: number; value?: number[] } }) => {
       const column = params.data?.value?.[0] ?? 0

@@ -1,4 +1,5 @@
 import { normalizedHoleIdentifier } from '@geoeye/datapool-client'
+import { shapeStatistics, type ShapeStatistics } from './statistics.js'
 
 export interface EdaObservation {
   locationValid?: boolean
@@ -22,7 +23,7 @@ export interface NumericSample {
   value: number
 }
 
-export interface SummaryStatistics {
+export interface SummaryStatistics extends ShapeStatistics {
   coefficientOfVariation: number | null
   count: number
   maximum: number | null
@@ -34,6 +35,7 @@ export interface SummaryStatistics {
   q1: number | null
   q3: number | null
   standardDeviation: number | null
+  variance: number | null
 }
 
 export interface HistogramBin {
@@ -97,6 +99,10 @@ export function summarizeValues(values: readonly number[], total = values.length
     return {
       coefficientOfVariation: null,
       count: 0,
+      geometricMean: null,
+      kurtosis: null,
+      logMean: null,
+      logVariance: null,
       maximum: null,
       mean: null,
       median: null,
@@ -105,7 +111,9 @@ export function summarizeValues(values: readonly number[], total = values.length
       p95: null,
       q1: null,
       q3: null,
+      skewness: null,
       standardDeviation: null,
+      variance: null,
     }
   }
 
@@ -116,6 +124,7 @@ export function summarizeValues(values: readonly number[], total = values.length
   const standardDeviation = Math.sqrt(variance)
 
   return {
+    ...shapeStatistics(sorted),
     coefficientOfVariation: mean === 0 ? null : standardDeviation / Math.abs(mean),
     count,
     maximum: sorted[count - 1] ?? null,
@@ -127,6 +136,7 @@ export function summarizeValues(values: readonly number[], total = values.length
     q1: quantile(sorted, 0.25),
     q3: quantile(sorted, 0.75),
     standardDeviation,
+    variance,
   }
 }
 
@@ -276,6 +286,9 @@ export function pairedSamples(
 }
 
 export interface JoinedPair {
+  /** Grouping values of the X-axis observation, so a scatter plot can colour by lithology or domain. */
+  dimensions: Record<string, string>
+  holeId: string
   id: string
   joinKey: string
   matchMethod?: 'interval-overlap' | 'row-identity'
@@ -362,6 +375,8 @@ export function pairedDatasetSamples(
       ...(rightObservation.sourceObservationIds ?? [rightObservation.sourceObservationId]),
     ]))
     return [{
+      dimensions: leftObservation.dimensions,
+      holeId: leftObservation.holeId,
       id: sourceObservationIds.join('|'),
       joinKey: located ? leftObservation.joinKey : leftObservation.sampleId,
       matchMethod: located ? 'interval-overlap' as const : 'row-identity' as const,

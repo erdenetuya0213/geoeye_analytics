@@ -1,3 +1,5 @@
+import { shapeStatistics, type ShapeStatistics } from './statistics.js'
+
 export type WeightingMethod = 'equal-hole' | 'cell-declustering' | 'interval-support'
 export type BootstrapMethod = 'hole' | 'group' | 'spatial'
 
@@ -33,7 +35,7 @@ export interface DistributionRequest {
   }
 }
 
-export interface DistributionSummaryResult {
+export interface DistributionSummaryResult extends ShapeStatistics {
   coefficientOfVariation: number | null
   count: number
   effectiveCount: number
@@ -162,6 +164,7 @@ function summarize(observations: readonly DistributionObservation[], weights: re
   const variance = varianceDenominator > 0 ? varianceNumerator / varianceDenominator : 0
   const standardDeviation = Math.sqrt(variance)
   return {
+    ...shapeStatistics(sorted.map((observation) => observation.value), sortedWeights),
     coefficientOfVariation: mean === 0 ? null : standardDeviation / Math.abs(mean),
     count: sorted.length,
     effectiveCount: weightSum ** 2 / weightSquareSum,
@@ -253,7 +256,7 @@ function probabilityPlot(observations: readonly DistributionObservation[], weigh
   })
 }
 
-function recommendedBinCount(values: readonly number[]) {
+export function recommendedBinCount(values: readonly number[]) {
   if (values.length < 2) return 1
   const sorted = [...values].sort((left, right) => left - right)
   const range = (sorted.at(-1) ?? 0) - (sorted[0] ?? 0)

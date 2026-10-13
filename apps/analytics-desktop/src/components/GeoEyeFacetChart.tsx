@@ -12,7 +12,8 @@ export interface GeoEyeChartFacet<TResult> {
 interface GeoEyeFacetChartProps<TResult> {
   ariaLabel: string
   buildOption: (result: TResult) => EChartsCoreOption
-  chartProps?: Pick<GeoEyeChartProps, 'brushSelection' | 'clickSelection' | 'loading' | 'renderer'>
+  /** `settings` reaches the facets without their own toolbar, so a grid stays on one set of axes. */
+  chartProps?: Pick<GeoEyeChartProps, 'brushSelection' | 'clickSelection' | 'loading' | 'renderer' | 'settings'>
   /** Gives every facet a ⤓ button and registers it for the page Save as `<exportPrefix>-<facet title>`. */
   exportFeature?: ExportFeature
   exportPrefix?: string

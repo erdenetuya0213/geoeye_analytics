@@ -32,6 +32,7 @@ import { useGeoEyeSelection } from '../state/SelectionContext.js'
 import { useDataPoolWorkspace } from '../state/DataPoolWorkspaceContext.js'
 import type { SectionId } from '../types.js'
 import { usePersistentState } from '../state/persistentState.js'
+import { useChartSettings } from '../state/useChartSettings.js'
 import { useProjectStorage } from '../state/ProjectStorageContext.js'
 import {
   buildClusterProfilesOption,
@@ -134,6 +135,13 @@ function MultivariatePopulationPage({ onNavigate }: MultivariatePageProps) {
   // True while the automatic run only rebuilds a result whose view state was restored.
   const restoringRunRef = useRef(false)
   const { clearSelection, replaceSelection, selectedIds, toggleSelection } = useGeoEyeSelection()
+  const matrixChart = useChartSettings('matrix', 'multivariate.matrix')
+  const scoresChart = useChartSettings('scatter', 'multivariate.scores')
+  const clusterChart = useChartSettings('scatter', 'multivariate.clusters')
+  const varianceChart = useChartSettings('generic', 'multivariate.variance')
+  const loadingsChart = useChartSettings('generic', 'multivariate.loadings')
+  const profilesChart = useChartSettings('generic', 'multivariate.profiles')
+  const comparisonChart = useChartSettings('generic', 'multivariate.comparison')
   const runEngine = useMultivariateEngine(submittedRequest)
   const datasets = useMemo(() => withClassScopes(datasetsQuery.data ?? []), [datasetsQuery.data])
   const dataset = datasets.find((candidate) => candidate.id === datasetId) ?? datasets[0]
@@ -371,9 +379,9 @@ function MultivariatePopulationPage({ onNavigate }: MultivariatePageProps) {
           <article className={smallClusters.length > 0 ? 'has-warning' : ''}><span>K-means populations</span><strong>{activeRun.clustering.clusterCount}</strong><small>{smallClusters.length > 0 ? `Cluster ${smallClusters.join(', ')} may be unstable` : activeRun.clustering.counts.map((count) => count.toLocaleString()).join(' · ') + ' rows'}</small></article>
         </section>
         <section className="panel mv-overview-grid">
-          <ChartCard actions={<div className="mv-chart-actions"><div className="segmented-control" role="group" aria-label="Correlation coefficient">{(['pearson', 'spearman'] as const).map((item) => <button className={displayCorrelation === item ? 'is-active' : ''} key={item} onClick={() => setDisplayCorrelation(item)} type="button">{item === 'pearson' ? 'Pearson' : 'Spearman'}</button>)}</div></div>} detail="Coefficients shown in every cell · hover for pair count" title="Correlation matrix"><GeoEyeChart ariaLabel="Multivariate correlation matrix" clickSelection="replace" option={buildMultivariateCorrelationOption(activeRun, runVariables, displayCorrelation)} renderer="svg" /></ChartCard>
-          <ChartCard detail="Individual and cumulative explained variance" title="PCA variance"><GeoEyeChart ariaLabel="PCA explained variance" option={buildExplainedVarianceOption(activeRun)} /></ChartCard>
-          <ChartCard actions={<label className="mv-inline-select"><span>Compare by</span><select aria-label="Compare cluster proportions by" onChange={(event) => setComparisonBy(event.target.value)} value={comparisonBy}>{comparisonOptions.map((dimension) => <option key={dimension.key} value={dimension.key}>{dimensionLabel(runDataset, dimension.key)}</option>)}</select></label>} detail={`Do clusters correspond to known ${dimensionLabel(runDataset, comparisonBy).toLowerCase()} populations?`} title="Population comparison"><GeoEyeChart ariaLabel="Cluster population comparison" clickSelection="replace" option={buildGroupComparisonOption(activeRun, comparisonBy)} /></ChartCard>
+          <ChartCard actions={<div className="mv-chart-actions"><div className="segmented-control" role="group" aria-label="Correlation coefficient">{(['pearson', 'spearman'] as const).map((item) => <button className={displayCorrelation === item ? 'is-active' : ''} key={item} onClick={() => setDisplayCorrelation(item)} type="button">{item === 'pearson' ? 'Pearson' : 'Spearman'}</button>)}</div></div>} detail="Coefficients shown in every cell · hover for pair count" title="Correlation matrix"><GeoEyeChart {...matrixChart} ariaLabel="Multivariate correlation matrix" clickSelection="replace" option={buildMultivariateCorrelationOption(activeRun, runVariables, displayCorrelation, matrixChart.settings)} renderer="svg" /></ChartCard>
+          <ChartCard detail="Individual and cumulative explained variance" title="PCA variance"><GeoEyeChart {...varianceChart} ariaLabel="PCA explained variance" option={buildExplainedVarianceOption(activeRun)} /></ChartCard>
+          <ChartCard actions={<label className="mv-inline-select"><span>Compare by</span><select aria-label="Compare cluster proportions by" onChange={(event) => setComparisonBy(event.target.value)} value={comparisonBy}>{comparisonOptions.map((dimension) => <option key={dimension.key} value={dimension.key}>{dimensionLabel(runDataset, dimension.key)}</option>)}</select></label>} detail={`Do clusters correspond to known ${dimensionLabel(runDataset, comparisonBy).toLowerCase()} populations?`} title="Population comparison"><GeoEyeChart {...comparisonChart} ariaLabel="Cluster population comparison" clickSelection="replace" option={buildGroupComparisonOption(activeRun, comparisonBy)} /></ChartCard>
         </section>
       </div> : null}
 
@@ -387,9 +395,9 @@ function MultivariatePopulationPage({ onNavigate }: MultivariatePageProps) {
           {linkedActions}
         </div>
         <div className="mv-pca-grid">
-          <ChartCard className="mv-pca-score-card" detail={`Colored by ${dimensionLabel(runDataset, pcaColorBy)} · brush or click to link observations`} title={showBiplot ? 'PCA biplot' : 'PCA scores'}><GeoEyeChart ariaLabel="PCA scores plot" brushSelection="replace" clickSelection="toggle" option={buildPcaScoresOption(activeRun, { biplot: showBiplot, colorBy: pcaColorBy, variables: runVariables, xComponent: pcaX, yComponent: pcaY })} /></ChartCard>
-          <ChartCard detail="Variance retained by each component" title="Explained variance"><GeoEyeChart ariaLabel="PCA explained variance" option={buildExplainedVarianceOption(activeRun)} /></ChartCard>
-          <ChartCard detail="Signed contribution of each analysis variable" title={`Loadings · PC${pcaX + 1} / PC${pcaY + 1}`}><GeoEyeChart ariaLabel="PCA loadings" option={buildLoadingsOption(activeRun, runVariables, [pcaX, pcaY])} /></ChartCard>
+          <ChartCard className="mv-pca-score-card" detail={`Colored by ${dimensionLabel(runDataset, pcaColorBy)} · brush or click to link observations`} title={showBiplot ? 'PCA biplot' : 'PCA scores'}><GeoEyeChart {...scoresChart} ariaLabel="PCA scores plot" brushSelection="replace" clickSelection="toggle" option={buildPcaScoresOption(activeRun, { biplot: showBiplot, colorBy: pcaColorBy, variables: runVariables, xComponent: pcaX, yComponent: pcaY })} /></ChartCard>
+          <ChartCard detail="Variance retained by each component" title="Explained variance"><GeoEyeChart {...varianceChart} ariaLabel="PCA explained variance" option={buildExplainedVarianceOption(activeRun)} /></ChartCard>
+          <ChartCard detail="Signed contribution of each analysis variable" title={`Loadings · PC${pcaX + 1} / PC${pcaY + 1}`}><GeoEyeChart {...loadingsChart} ariaLabel="PCA loadings" option={buildLoadingsOption(activeRun, runVariables, [pcaX, pcaY])} /></ChartCard>
           <section className="mv-loadings-table"><header><h3>Loading table</h3><p>Magnitude and sign describe component contribution</p></header><div className="mv-table-row is-header"><span>Variable</span>{componentOptions.slice(0, 3).map((component) => <span key={component}>PC{component + 1}</span>)}</div>{runVariables.map((variable, index) => <div className="mv-table-row" key={variable.key}><strong>{variable.shortLabel}<small>{variable.unit}</small></strong>{componentOptions.slice(0, 3).map((component) => <span key={component}>{(activeRun.pca.loadings[index]?.[component] ?? 0).toFixed(3)}</span>)}</div>)}</section>
         </div>
       </div> : null}
@@ -397,7 +405,7 @@ function MultivariatePopulationPage({ onNavigate }: MultivariatePageProps) {
       {view === 'clusters' ? <div className="mv-clusters-view">
         <section className="panel">
           <div className="mv-result-notice"><span><strong>K-means · k = {activeRun.clustering.clusterCount}</strong><small>Centroids use {scalingLabels[activeRun.configuration.scaling].toLowerCase()} · distance and relative membership strength retained</small></span><em>Candidate statistical populations only</em></div>
-          <div className="mv-two-charts"><ChartCard actions={linkedActions} detail="Memberships projected into PC1 / PC2 · brush or click to link" title="Cluster map"><GeoEyeChart ariaLabel="K-means clusters in PCA space" brushSelection="replace" clickSelection="toggle" option={buildClusterScoresOption(activeRun)} /></ChartCard><ChartCard detail="Centroid values in the configured analysis scale" title="Cluster profiles"><GeoEyeChart ariaLabel="Cluster centroid profiles" option={buildClusterProfilesOption(activeRun, runVariables)} /></ChartCard></div>
+          <div className="mv-two-charts"><ChartCard actions={linkedActions} detail="Memberships projected into PC1 / PC2 · brush or click to link" title="Cluster map"><GeoEyeChart {...clusterChart} ariaLabel="K-means clusters in PCA space" brushSelection="replace" clickSelection="toggle" option={buildClusterScoresOption(activeRun)} /></ChartCard><ChartCard detail="Centroid values in the configured analysis scale" title="Cluster profiles"><GeoEyeChart {...profilesChart} ariaLabel="Cluster centroid profiles" option={buildClusterProfilesOption(activeRun, runVariables)} /></ChartCard></div>
           <div className="mv-cluster-cards">{activeRun.clustering.counts.map((count, index) => {
             const cluster = index + 1
             const unstable = clusterIsSmall(count, activeRun.missing.analysisCount)

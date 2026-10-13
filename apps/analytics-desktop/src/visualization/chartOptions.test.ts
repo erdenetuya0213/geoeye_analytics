@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { chartSettingsFor } from './chartSettings.js'
 import type {
   BoxPlotAnalysisResult,
   CorrelationAnalysisResult,
@@ -29,6 +30,10 @@ const summary = {
   coefficientOfVariation: 0.25,
   count: 2,
   effectiveCount: 2,
+  geometricMean: 1.41,
+  kurtosis: null,
+  logMean: 0.35,
+  logVariance: 0.06,
   maximum: 2,
   mean: 1.5,
   median: 1.5,
@@ -37,6 +42,7 @@ const summary = {
   p95: 1.95,
   q1: 1.25,
   q3: 1.75,
+  skewness: 0,
   standardDeviation: 0.71,
   variance: 0.5,
   weightSum: 2,
@@ -156,7 +162,7 @@ describe('GeoEye analytical chart options', () => {
       correlation: 0.8,
       kind: 'scatter',
       matchMetadata: { matchedObservationCount: 1, method: 'interval-overlap' },
-      points: [{ id: 'pair', joinKey: 'join', sourceObservationIds: ['obs-1', 'obs-2'], x: 1, y: 2 }],
+      points: [{ dimensions: { lithology: 'A' }, holeId: 'H1', id: 'pair', joinKey: 'join', sourceObservationIds: ['obs-1', 'obs-2'], x: 1, y: 2 }],
       regression: { intercept: 1, rSquared: 1, slope: 1 },
       sourceObservationIds: ['obs-1', 'obs-2'],
       spearman: 0.8,
@@ -223,13 +229,72 @@ describe('GeoEye analytical chart options', () => {
     const scatter: ScatterAnalysisResult = {
       correlation: 1,
       kind: 'scatter',
-      matchMetadata: { matchedObservationCount: 1, method: 'interval-overlap' },
-      points: [{ id: 'pair', joinKey: 'join', sourceObservationIds: ['obs-1', 'obs-2'], x: 1, y: 2 }],
+      matchMetadata: { matchedObservationCount: 2, method: 'interval-overlap' },
+      points: [
+        { dimensions: { lithology: 'A' }, holeId: 'H1', id: 'pair', joinKey: 'join', sourceObservationIds: ['obs-1', 'obs-2'], x: 1, y: 2 },
+        { dimensions: { lithology: 'A' }, holeId: 'H1', id: 'pair-2', joinKey: 'join-2', sourceObservationIds: ['obs-3'], x: 2, y: 3 },
+      ],
       regression: { intercept: 1, rSquared: 1, slope: 1 },
-      sourceObservationIds: ['obs-1', 'obs-2'],
+      sourceObservationIds: ['obs-1', 'obs-2', 'obs-3'],
       spearman: 1,
     }
     const fittedLine = chartSeries(buildScatterOption(scatter, { x: 'X', y: 'Y' })).find((series) => series.type === 'line')
     expect(fittedLine?.smooth).toBe(false)
+  })
+})
+
+const scatterFixture: ScatterAnalysisResult = {
+  correlation: 0.82,
+  kind: 'scatter',
+  matchMetadata: { matchedObservationCount: 4, method: 'interval-overlap' },
+  points: [
+    { dimensions: {}, holeId: 'H1', id: 'a', joinKey: 'a', sourceObservationIds: ['o1'], x: 1, y: 2 },
+    { dimensions: {}, holeId: 'H1', id: 'b', joinKey: 'b', sourceObservationIds: ['o2'], x: 2, y: 3 },
+    { dimensions: {}, holeId: 'H1', id: 'c', joinKey: 'c', sourceObservationIds: ['o3'], x: 3, y: 5 },
+    { dimensions: {}, holeId: 'H1', id: 'd', joinKey: 'd', sourceObservationIds: ['o4'], x: 4, y: 4 },
+  ],
+  regression: { intercept: 1, rSquared: 0.7, slope: 0.8 },
+  sourceObservationIds: ['o1', 'o2', 'o3', 'o4'],
+  spearman: 0.8,
+}
+
+describe('readability fixes', () => {
+  const settings = chartSettingsFor('cdf')
+
+  it('rounds the CDF tooltip to the variable decimals', () => {
+    const option = buildCdfOption(distribution, distributionConfig, settings) as { tooltip: { formatter: (params: unknown) => string } }
+    const text = option.tooltip.formatter({ data: { value: [1.2345678901, 0.227855833842] }, seriesName: 'Raw' })
+    expect(text).toContain('1.23')
+    expect(text).toContain('22.8% cumulative')
+    expect(text).not.toContain('0.227855')
+  })
+
+  it('reports the CDF at the requested number of bins', () => {
+    const binned = buildCdfOption(distribution, distributionConfig, { ...settings, binCount: 2 }) as { series: Array<{ data: unknown[] }> }
+    expect(binned.series[0]?.data.length).toBeLessThanOrEqual(2)
+  })
+
+  it('puts the scatter stats box in a corner away from the points', () => {
+    // Points climb to the top right, so the box belongs top left.
+    const climbing: ScatterAnalysisResult = {
+      correlation: 1,
+      kind: 'scatter',
+      matchMetadata: { matchedObservationCount: 3, method: 'interval-overlap' },
+      points: Array.from({ length: 12 }, (_, index) => ({ dimensions: {}, holeId: 'H1', id: `p${index}`, joinKey: `j${index}`, sourceObservationIds: [`o${index}`], x: index, y: index })),
+      regression: { intercept: 0, rSquared: 1, slope: 1 },
+      sourceObservationIds: ['o1'],
+      spearman: 1,
+    }
+    const option = buildScatterOption(climbing, { x: 'X', y: 'Y' }, { ...chartSettingsFor('scatter'), statsBox: true }) as { graphic: { elements: Array<Record<string, unknown>> } }
+    const box = option.graphic.elements[0]
+    expect(box?.left).toBe(58)
+    expect(box?.top).toBe(34)
+  })
+
+  it('fills the scatter stats box with relationship diagnostics, not blanks', () => {
+    const option = buildScatterOption(scatterFixture, { x: 'X', y: 'Y' }, { ...chartSettingsFor('scatter'), statsBox: true }) as { graphic: { elements: Array<{ children: Array<{ style: { text?: string } }> }> } }
+    const labels = option.graphic.elements[0]?.children.flatMap((child) => child.style.text === undefined ? [] : [child.style.text]) ?? []
+    expect(labels.join(' ')).toContain('Pearson r')
+    expect(labels.join(' ')).not.toContain('—')
   })
 })

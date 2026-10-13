@@ -653,6 +653,28 @@ function fitGrid(grid: unknown): unknown {
   }
 }
 
+
+/**
+ * Stats boxes and on-plot notes are authored in neutral colours; the active design decides how they
+ * read, so a white panel on a dark theme never appears.
+ */
+function colorGraphic(element: unknown, surface: ChartSurfaceColors): unknown {
+  if (Array.isArray(element)) return element.map((item) => colorGraphic(item, surface))
+  if (typeof element !== 'object' || element === null) return element
+  const record = element as Record<string, unknown>
+  const style = typeof record.style === 'object' && record.style !== null ? record.style as Record<string, unknown> : undefined
+  return {
+    ...record,
+    ...(record.children === undefined ? {} : { children: colorGraphic(record.children, surface) }),
+    ...(record.elements === undefined ? {} : { elements: colorGraphic(record.elements, surface) }),
+    ...(style === undefined ? {} : {
+      style: record.type === 'rect'
+        ? { ...style, fill: withAlpha(surface.surface, 0.9), stroke: surface.gridStrong }
+        : { ...style, fill: record.geoeyeRole === 'muted' ? surface.muted : surface.text },
+    }),
+  }
+}
+
 export function applyChartDesign(
   option: EChartsCoreOption,
   designId: ChartDesignId,
@@ -695,9 +717,13 @@ export function applyChartDesign(
       }
     : record.visualMap
   const hasCartesianAxes = record.xAxis !== undefined || record.yAxis !== undefined
+  const graphic = typeof record.graphic === 'object' && record.graphic !== null
+    ? colorGraphic(record.graphic, surface)
+    : record.graphic
   return {
     ...record,
     backgroundColor: 'transparent',
+    graphic,
     brush: typeof record.brush === 'object' && record.brush !== null
       ? { ...(record.brush as Record<string, unknown>), toolbox: [] }
       : record.brush,
