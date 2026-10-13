@@ -6938,19 +6938,30 @@ select::picker(select) { white-space: normal; }
   text-transform: none;
   letter-spacing: 0;
 }
-.app-shell .tool-select.tool-select-field > select {
-  grid-area: 2 / 1 / 3 / 3;
-  position: static;
+/* The control covers the whole card, so one click anywhere on it -- label,
+   padding or chevron -- opens the list instead of only moving focus. */
+.app-shell .tool-select.tool-select-field > :is(select, input) {
+  grid-area: auto;
+  position: absolute;
+  inset: 0;
   width: 100%;
-  height: 20px;
+  height: 100%;
   min-width: 0;
-  padding: 0 22px 0 0;
+  padding: 22px 32px 4px 10px;
   border: 0;
-  border-radius: 0;
+  border-radius: inherit;
   background: transparent;
   color: var(--foreground);
   font: 600 13px/20px var(--font-ui);
   outline: none;
+  box-shadow: none;
+}
+.app-shell .tool-select.tool-select-field > select { cursor: pointer; }
+.app-shell .tool-select.tool-select-field > input { cursor: text; }
+.app-shell .tool-select.tool-number-field > :is(select, input) { padding-right: 10px; }
+.app-shell .tool-select.tool-select-field > :is(select, input):focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
 }
 .app-shell .tool-select.tool-select-field > svg {
   grid-area: 2 / 2;
@@ -6973,6 +6984,48 @@ select::picker(select) { white-space: normal; }
 .app-shell .analysis-toolbar > .toolbar-spacer { min-width: 0; }
 .app-shell .eda-filter-control { min-width: 0; max-width: 100%; }
 .app-shell .eda-filter-control .tool-select-field { flex: 1; }
+
+/* A filter reads as one control: the field card, its value boxes and the
+   remove button share a frame, and every part of each is clickable. */
+.app-shell .eda-filter-control > :first-child { border-radius: 6px 0 0 6px; }
+.app-shell .eda-filter-control > button { width: 34px; border-radius: 0 6px 6px 0; }
+.app-shell .eda-filter-control .feature-picker { flex: 1 1 200px; min-width: 0; }
+.app-shell .eda-filter-control .feature-picker-trigger { border-radius: 6px 0 0 6px; }
+.app-shell .analysis-toolbar .feature-picker-trigger {
+  grid-template-rows: 14px 20px;
+  gap: 2px;
+  min-height: 48px;
+  padding: 6px 32px 4px 10px;
+  background: var(--input);
+  border-radius: 6px;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+.app-shell .analysis-toolbar .feature-picker-trigger:hover { border-color: var(--muted-foreground); }
+.app-shell .analysis-toolbar .feature-picker-trigger > span {
+  color: var(--muted-foreground);
+  font: 500 11px/14px var(--font-ui);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.app-shell .analysis-toolbar .feature-picker-trigger > strong { max-width: none; font: 600 13px/20px var(--font-ui); }
+.app-shell .analysis-toolbar .feature-picker-trigger > svg { top: 50%; margin-top: -7px; }
+.app-shell .eda-filter-control .tool-number-input {
+  flex: 0 1 92px;
+  width: 92px;
+  min-width: 0;
+  min-height: 48px;
+  padding: 22px 10px 4px;
+  color: var(--foreground);
+  background: var(--input);
+  border: 1px solid var(--border);
+  border-left: 0;
+  border-radius: 0;
+  font: 600 13px/20px var(--font-ui);
+  outline: none;
+}
+.app-shell .eda-filter-control .tool-number-input::placeholder { color: var(--muted-foreground); font-weight: 500; }
+.app-shell .eda-filter-control .tool-number-input:hover { border-color: var(--muted-foreground); }
+.app-shell .eda-filter-control .tool-number-input:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
 @media (max-width: 760px) {
   .app-shell .analysis-toolbar > .tool-select-field { flex: 1 1 160px; }
   .app-shell .analysis-toolbar > .toolbar-spacer { display: none; }
@@ -7223,7 +7276,6 @@ select::picker(select) { white-space: normal; }
 :is(.grade-toolbar, .vg-toolbar) .eda-run-control { margin-left: auto; }
 .app-shell .analysis-toolbar > .tool-number-field { flex: 0 1 100px; width: 100px; grid-template-columns: minmax(0, 1fr); }
 .app-shell .analysis-toolbar > .grade-pick-select { flex: 0 1 270px; width: 270px; }
-.app-shell .tool-select.tool-select-field > input { grid-area: 2 / 1 / 3 / -1; width: 100%; height: 20px; min-width: 0; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--foreground); font: 600 13px/20px var(--font-ui); outline: none; box-shadow: none; }
 :is(.grade-toolbar, .vg-toolbar) > .button { align-self: stretch; }
 .grade-page .domain-population-grid { grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); }
 .grade-scenarios header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
