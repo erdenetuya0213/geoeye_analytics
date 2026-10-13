@@ -14,6 +14,8 @@ import { useQuery } from '@tanstack/react-query'
 import { useMemo } from 'react'
 import type { EdaDatasetKind } from './edaTypes.js'
 import { useProjectStorage } from '../state/ProjectStorageContext.js'
+import type { ClassTable } from './classTables.js'
+import { readClassTables, type ClassSection } from './classTableStore.js'
 import { readOperationTables, type StoredOperationTable } from './operationTableStore.js'
 import { readSavedRmrDatasets, type SavedRmrDataset } from './savedRmrDatasets.js'
 import { buildLocalEdaInWorker } from './localEdaWorker.js'
@@ -671,12 +673,19 @@ export function buildLocalEdaDatasets(
   activeProject: ProjectSummary | null = null,
   savedRmrDatasets: readonly SavedRmrDataset[] = [],
   operationTables: readonly StoredOperationTable[] = [],
+  classTables: readonly { section: ClassSection; table: ClassTable }[] = [],
 ): EdaDataset[] {
   const project = activeProject ?? snapshot?.project ?? null
   if (project === null) return []
   const drillholes = effectiveDrillholes(snapshot, drillholeDraft)
+  // A Lab class or Strength test is a dataset of its own; the merged section import would double its rows.
+  const classSections = new Set(classTables.map((item) => item.section))
+  const classDatasets = classTables.map(({ section, table }) => localTabularDataset(
+    { columns: table.columns, dirty: false, fileName: `${table.name}.csv`, rows: table.rows, section, updatedAt: tabularDrafts[section]?.updatedAt ?? new Date(0).toISOString() },
+    project, drillholes, { id: `${section}:${table.id}`, name: table.name, prefix: 'local-class' },
+  ))
   const localDraftDatasets = (Object.keys(tabularDrafts) as TabularImportSection[])
-    .flatMap((section) => tabularDrafts[section] === undefined ? [] : [localTabularDataset(tabularDrafts[section], project, drillholes)])
+    .flatMap((section) => tabularDrafts[section] === undefined || classSections.has(section as ClassSection) ? [] : [localTabularDataset(tabularDrafts[section], project, drillholes)])
   const replacedDatasetNames = new Set(localDraftDatasets.map((dataset) => dataset.name.replace(/ · local$/, '')))
   const snapshotDatasets = snapshot === null ? [] : buildEdaDatasets({
     datasets: snapshot.datasets,
@@ -690,7 +699,7 @@ export function buildLocalEdaDatasets(
       const converted = fieldLoggingDataset(prepareFieldLoggingDataset(dataset), project, drillholes)
       return converted === null ? [] : [converted]
     })
-  const sourceDatasets = [...localDraftDatasets, ...loggingDatasets, ...snapshotDatasets,
+  const sourceDatasets = [...classDatasets, ...localDraftDatasets, ...loggingDatasets, ...snapshotDatasets,
     ...operationTableDatasets(operationTables, project, drillholes), ...localDrillholeDatasets(snapshot, drillholeDraft, project)]
   const integrated = integratedLocalDataset(sourceDatasets, project)
   // Historical scenarios are alternatives, not extra measurements to join
@@ -713,10 +722,14 @@ export function useProjectEdaDatasets() {
   // The stored index changes whenever an operation table is added or removed; reading it is cheap, the tables are not.
   const operationIndex = storage.getItem('geoeye.analytics.operation-tables.v1') ?? ''
   const operationTables = useMemo(() => readOperationTables(storage), [operationIndex, storage])
+  // Every class edit also saves its section import, so the draft signature covers renames, imports and deletions.
+  const classTables = useMemo(() => (['laboratory', 'strength'] as const)
+    .flatMap((section) => readClassTables(storage, section).map((table) => ({ section, table }))), [localDraftSignature, storage])
+  const classSignature = classTables.map(({ section, table }) => `${section}:${table.id}:${table.rows.length}`).join('|')
   return useQuery<EdaDataset[]>({
     enabled: workspace.live && !workspace.projectsLoading && !workspace.localLoading,
-    queryFn: ({ signal }) => buildLocalEdaInWorker([workspace.localSnapshot, workspace.localDrillholeDraft, workspace.localTabularDrafts, workspace.project, savedRmrDatasets, operationTables], signal),
-    queryKey: ['eda-datasets', 'local', projectId, workspace.localSnapshot?.refreshedAt ?? 'empty', workspace.localDrillholeDraft?.updatedAt ?? 'no-draft', localDraftSignature, savedSignature, operationIndex],
+    queryFn: ({ signal }) => buildLocalEdaInWorker([workspace.localSnapshot, workspace.localDrillholeDraft, workspace.localTabularDrafts, workspace.project, savedRmrDatasets, operationTables, classTables], signal),
+    queryKey: ['eda-datasets', 'local', projectId, workspace.localSnapshot?.refreshedAt ?? 'empty', workspace.localDrillholeDraft?.updatedAt ?? 'no-draft', localDraftSignature, savedSignature, operationIndex, classSignature],
     staleTime: Number.POSITIVE_INFINITY,
   })
 }

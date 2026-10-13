@@ -1,4 +1,5 @@
 import type { EdaDataset, EdaVariableKey } from '../data/edaTypes.js'
+import { filterSummary, matchesFieldFilters, type FieldFilters } from './fieldFilter.js'
 import { calculateDistribution, type DistributionRequest, type DistributionResult, type WeightingMethod } from './distributionEngine.js'
 
 export interface EdaRunConfiguration {
@@ -6,7 +7,7 @@ export interface EdaRunConfiguration {
   compareBy: string | null
   datasetId: string
   datasetName: string
-  filterValues: Record<string, string>
+  filterValues: FieldFilters
   minimumPopulationSize: number
   secondGroup: string | null
   snapshotAt: string
@@ -64,17 +65,6 @@ export function edaConfigurationSignature(configuration: EdaRunConfiguration) {
   return JSON.stringify(normalizedConfiguration(configuration))
 }
 
-function matchesFilters(
-  dimensions: Readonly<Record<string, string>>,
-  activeFilterKeys: readonly string[],
-  filterValues: Readonly<Record<string, string>>,
-) {
-  return activeFilterKeys.every((key) => {
-    const selected = filterValues[key]
-    return selected === undefined || selected === 'all' || dimensions[key] === selected
-  })
-}
-
 function populationKey(variableKey: string, compareValue: string | null, secondGroupValue: string | null) {
   return [variableKey, compareValue ?? 'all', secondGroupValue ?? 'all'].map(encodeURIComponent).join('::')
 }
@@ -85,11 +75,7 @@ export function buildEdaRunRequest(
   runNumber: number,
   now = new Date(),
 ): EdaRunRequest {
-  const filtered = dataset.observations.filter((observation) => matchesFilters(
-    observation.dimensions,
-    configuration.activeFilterKeys,
-    configuration.filterValues,
-  ))
+  const filtered = dataset.observations.filter((observation) => matchesFieldFilters(observation, configuration.activeFilterKeys, configuration.filterValues))
   const compareDimension = dataset.dimensions.find((dimension) => dimension.key === configuration.compareBy)
   const secondDimension = dataset.dimensions.find((dimension) => dimension.key === configuration.secondGroup)
   const populations: EdaPopulationWork[] = []
@@ -140,7 +126,7 @@ export function buildEdaRunRequest(
           datasetId: configuration.datasetId,
           filterSignature: configuration.activeFilterKeys.length === 0
             ? 'No filters'
-            : configuration.activeFilterKeys.map((key) => `${key}=${configuration.filterValues[key] ?? 'all'}`).join(';'),
+            : configuration.activeFilterKeys.map((key) => filterSummary(key, configuration.filterValues[key])).join(';'),
           missingCount: group.observations.length - finite.length,
           observations: finite,
           snapshotAt: configuration.snapshotAt,

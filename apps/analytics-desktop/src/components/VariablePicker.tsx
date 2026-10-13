@@ -7,12 +7,15 @@ interface VariablePickerProps {
   selectedKeys: readonly string[]
   onToggle: (key: string) => void
   ariaLabel: string
+  /** Trigger caption; the summary replaces the "<n> selected" text when given. */
+  label?: string
+  summary?: string
   minSelected?: number
   maxSelected?: number
   children?: ReactNode
 }
 
-export function VariablePicker({ variables, selectedKeys, onToggle, ariaLabel, minSelected = 0, maxSelected, children }: VariablePickerProps) {
+export function VariablePicker({ variables, selectedKeys, onToggle, ariaLabel, label = 'Variables', summary, minSelected = 0, maxSelected, children }: VariablePickerProps) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const root = useRef<HTMLDivElement>(null)
@@ -41,7 +44,7 @@ export function VariablePicker({ variables, selectedKeys, onToggle, ariaLabel, m
 
   return <div className="feature-picker" ref={root} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false) }}>
     <button aria-label={ariaLabel} aria-expanded={open} aria-controls={panelId} className="feature-picker-trigger" ref={trigger} onClick={() => { setOpen(!open); setQuery('') }} type="button">
-      <span>Variables</span><strong>{selectedCount === 1 ? variables.find((item) => selectedKeys.includes(item.key))?.shortLabel : `${selectedCount} selected`}</strong><ChevronDown size={14} />
+      <span>{label}</span><strong>{summary ?? (selectedCount === 1 ? variables.find((item) => selectedKeys.includes(item.key))?.shortLabel : `${selectedCount} selected`)}</strong><ChevronDown size={14} />
     </button>
     {open ? <div className="feature-picker-panel" id={panelId}>
       <label className="feature-picker-search"><Search size={15} /><input aria-label="Search variables" placeholder="Search features…" ref={search} value={query} onChange={(event) => setQuery(event.target.value)} /></label>

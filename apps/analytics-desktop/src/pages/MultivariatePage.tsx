@@ -1,4 +1,6 @@
-import { VariablePicker } from '../components/VariablePicker.js'
+import { FieldFilters, type FilterField } from '../components/FieldFilters.js'
+import { FieldSelects } from '../components/FieldSelects.js'
+import type { FieldFilter } from '../analysis/fieldFilter.js'
 import { useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, Box, CheckCircle2, ChevronDown, CopyPlus, Database, GitBranch, Layers3, Play, RefreshCw, Save, ScatterChart, TableProperties, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -14,7 +16,8 @@ import {
 } from '../analysis/multivariateEngine.js'
 import { useMultivariateEngine } from '../analysis/useMultivariateEngine.js'
 import { GeoEyeChart } from '../components/GeoEyeChart.js'
-import { EdaDatasetOptions } from '../components/EdaDatasetOptions.js'
+import { DatasetScopePicker } from '../components/DatasetScopePicker.js'
+import { withClassScopes } from '../data/datasetScope.js'
 import { type EdaDataset, type EdaVariableDefinition } from '../data/edaTypes.js'
 import { useProjectEdaDatasets } from '../data/liveEda.js'
 import { currentAnalysisTemplateVersion, recordAnalysisTemplateSave, resolveAnalysisTemplateVersion } from '../data/analysisSaveStore.js'
@@ -108,7 +111,7 @@ function MultivariatePopulationPage({ onNavigate }: MultivariatePageProps) {
   const [datasetId, setDatasetId] = usePersistentState('multivariate.datasetId', '')
   const [variableKeys, setVariableKeys] = usePersistentState<string[]>('multivariate.variableKeys', ['assay.au', 'assay.cu', 'assay.as', 'geotech.rqd', 'geotech.ucs'])
   const [activeFilterKeys, setActiveFilterKeys] = usePersistentState<string[]>('multivariate.activeFilterKeys', [])
-  const [filterValues, setFilterValues] = usePersistentState<Record<string, string>>('multivariate.filterValues', {})
+  const [filterValues, setFilterValues] = usePersistentState<Record<string, FieldFilter>>('multivariate.filterValues', {})
   const [scaling, setScaling] = usePersistentState<MultivariateScaling>('multivariate.scaling', 'standard')
   const [missingPolicy, setMissingPolicy] = usePersistentState<MultivariateMissingPolicy>('multivariate.missingPolicy', 'complete-case')
   const [clusterCount, setClusterCount] = usePersistentState('multivariate.clusterCount', 3)
@@ -135,7 +138,7 @@ function MultivariatePopulationPage({ onNavigate }: MultivariatePageProps) {
   const restoringRunRef = useRef(false)
   const { clearSelection, replaceSelection, selectedIds, toggleSelection } = useGeoEyeSelection()
   const runEngine = useMultivariateEngine(submittedRequest)
-  const datasets = datasetsQuery.data ?? []
+  const datasets = useMemo(() => withClassScopes(datasetsQuery.data ?? []), [datasetsQuery.data])
   const dataset = datasets.find((candidate) => candidate.id === datasetId) ?? datasets[0]
   const effectiveVariableKeys = dataset === undefined ? [] : variableKeys.filter((key) => dataset.variables.some((variable) => variable.key === key && variable.dataType !== 'category'))
 
@@ -203,7 +206,14 @@ function MultivariatePopulationPage({ onNavigate }: MultivariatePageProps) {
   const runDataset = datasets.find((candidate) => candidate.id === activeRun?.configuration.datasetId)
   const runVariables = runDataset === undefined || activeRun === null ? [] : selectedVariables(runDataset, activeRun.configuration.variableKeys)
   const selectedSet = new Set(selectedIds)
-  const availableFilters = dataset.dimensions.filter((dimension) => !activeFilterKeys.includes(dimension.key))
+  const filterFields = useMemo<FilterField[]>(() => [
+    ...dataset.variables.filter((variable) => variable.dataType !== 'category')
+      .map((variable): FilterField => ({ key: variable.key, kind: 'number', label: variable.label, unit: variable.unit })),
+    ...dataset.dimensions.flatMap((dimension): FilterField[] => {
+      const values = dimensionValues(dataset, dimension.key)
+      return values.length === 0 ? [] : [{ key: dimension.key, kind: 'category', label: dimension.label, values }]
+    }),
+  ], [dataset])
   const comparisonOptions = comparisonDimensions(runDataset)
   const componentOptions = activeRun === null ? [] : Array.from({ length: activeRun.pca.componentCount }, (_, index) => index)
   const currentTemplateVersion = activeRun === null || typeof window === 'undefined'
@@ -228,20 +238,13 @@ function MultivariatePopulationPage({ onNavigate }: MultivariatePageProps) {
     setSecondGroup(null)
     clearSelection()
   }
-  const toggleVariable = (key: string) => {
-    setVariableKeys((current) => current.includes(key) ? current.filter((candidate) => candidate !== key) : [...current, key])
+  const changeFields = (keys: string[]) => { setVariableKeys(keys); clearSelection() }
+  const changeFilterKeys = (keys: string[]) => {
+    setActiveFilterKeys(keys)
+    setFilterValues((current) => Object.fromEntries(Object.entries(current).filter(([key]) => keys.includes(key))))
     clearSelection()
   }
-  const addFilter = (key: string) => {
-    if (key === '' || activeFilterKeys.includes(key)) return
-    setActiveFilterKeys((current) => [...current, key])
-    setFilterValues((current) => ({ ...current, [key]: 'all' }))
-  }
-  const removeFilter = (key: string) => {
-    setActiveFilterKeys((current) => current.filter((candidate) => candidate !== key))
-    setFilterValues((current) => Object.fromEntries(Object.entries(current).filter(([candidate]) => candidate !== key)))
-    clearSelection()
-  }
+  const changeFilter = (key: string, filter: FieldFilter) => { setFilterValues((current) => ({ ...current, [key]: filter })); clearSelection() }
   const runAnalysis = () => {
     if (draftConfiguration === null || draftConfiguration.variableKeys.length < 2 || runEngine.pending) return
     restoringRunRef.current = false
@@ -353,12 +356,9 @@ function MultivariatePopulationPage({ onNavigate }: MultivariatePageProps) {
     {durable.notice ? <p role="status">{durable.notice}</p> : null}
     <h1 className="sr-only">Multivariate analysis</h1>
     <div className="analysis-toolbar eda-toolbar mv-toolbar">
-      <label className="tool-select tool-select-field mv-dataset-select"><span>Dataset snapshot</span><select aria-label="Multivariate dataset" onChange={(event) => changeDataset(event.target.value)} value={dataset.id}><EdaDatasetOptions datasets={datasets} /></select><ChevronDown size={14} /></label>
-      <VariablePicker ariaLabel="Select multivariate variables" variables={dataset.variables.filter((item) => item.dataType !== 'category')} selectedKeys={variableKeys} onToggle={toggleVariable} maxSelected={10}><div className="mv-picker-heading"><span>Categorical context</span><small>Initial comparison</small></div>{dataset.dimensions.map((dimension) => <label className="feature-picker-option" key={dimension.key}><input name="multivariate-context" checked={groupBy === dimension.key} onChange={() => { setGroupBy(dimension.key); if (secondGroup === dimension.key) setSecondGroup(null) }} type="radio" /><span><strong>{dimension.label}</strong><small>Retained for population comparison</small></span></label>)}</VariablePicker>
-      {activeFilterKeys.map((key) => { const dimension = dataset.dimensions.find((candidate) => candidate.key === key); if (dimension === undefined) return null; return <div className="eda-filter-control" key={key}><label className="tool-select tool-select-field"><span>{dimension.label}</span><select aria-label={`Filter by ${dimension.label}`} onChange={(event) => { setFilterValues((current) => ({ ...current, [key]: event.target.value })); clearSelection() }} value={filterValues[key] ?? 'all'}><option value="all">All</option>{dimensionValues(dataset, key).map((value) => <option key={value} value={value}>{value}</option>)}</select><ChevronDown size={14} /></label><button aria-label={`Remove ${dimension.label} filter`} onClick={() => removeFilter(key)} type="button"><X size={13} /></button></div> })}
-      {availableFilters.length > 0 ? <label className="tool-select tool-select-field eda-add-filter"><span>Filters</span><select aria-label="Add multivariate filter" onChange={(event) => { addFilter(event.target.value); event.target.value = '' }} value=""><option value="">Add filter…</option>{availableFilters.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}</select><ChevronDown size={14} /></label> : null}
-      <label className="tool-select tool-select-field"><span>Compare by</span><select aria-label="Multivariate primary grouping dimension" onChange={(event) => { const value = event.target.value || null; setGroupBy(value); if (value === null || value === secondGroup) setSecondGroup(null) }} value={groupBy ?? ''}><option value="">None</option>{dataset.dimensions.map((dimension) => <option key={dimension.key} value={dimension.key}>{dimension.label}</option>)}</select><ChevronDown size={14} /></label>
-      <label className="tool-select tool-select-field"><span>Second group</span><select aria-label="Multivariate second grouping dimension" disabled={groupBy === null} onChange={(event) => setSecondGroup(event.target.value || null)} value={secondGroup ?? ''}><option value="">None</option>{dataset.dimensions.filter((dimension) => dimension.key !== groupBy).map((dimension) => <option key={dimension.key} value={dimension.key}>{dimension.label}</option>)}</select><ChevronDown size={14} /></label>
+      <DatasetScopePicker ariaPrefix="Multivariate" datasets={datasets} onChange={changeDataset} storageKey="multivariate" value={dataset.id} />
+      <FieldSelects ariaPrefix="Multivariate" maxFields={10} minFields={2} onChange={changeFields} value={variableKeys} variables={dataset.variables.filter((item) => item.dataType !== 'category')} />
+      <FieldFilters ariaPrefix="Multivariate" fields={filterFields} filters={filterValues} keys={activeFilterKeys} onChangeFilter={changeFilter} onChangeKeys={changeFilterKeys} />
       <label className="tool-select tool-select-field"><span>Scaling</span><select aria-label="Scaling method" onChange={(event) => setScaling(event.target.value as MultivariateScaling)} value={scaling}>{Object.entries(scalingLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select><ChevronDown size={14} /></label>
       <label className="tool-select tool-select-field"><span>Missing data</span><select aria-label="Missing data handling" onChange={(event) => setMissingPolicy(event.target.value as MultivariateMissingPolicy)} value={missingPolicy}>{Object.entries(missingLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select><ChevronDown size={14} /></label>
       <label className="tool-select tool-select-field mv-cluster-count"><span>Clusters (k)</span><select aria-label="Cluster count" onChange={(event) => setClusterCount(Number(event.target.value))} value={clusterCount}>{Array.from({ length: 7 }, (_, index) => index + 2).map((value) => <option key={value} value={value}>{value}</option>)}</select><ChevronDown size={14} /></label>

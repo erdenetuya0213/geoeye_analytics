@@ -1,4 +1,6 @@
-import { VariablePicker } from '../components/VariablePicker.js'
+import { FieldFilters, type FilterField } from '../components/FieldFilters.js'
+import { FieldSelects } from '../components/FieldSelects.js'
+import { matchesFieldFilters, toFieldFilters, type FieldFilter, type FieldFilters as FilterMap } from '../analysis/fieldFilter.js'
 import { useQuery } from '@tanstack/react-query'
 import { prepareCorrelationMatrix } from '../analysis/correlationWorker.js'
 import { AlertTriangle, BarChart3, ChartSpline, ChevronDown, Grid3X3, LayoutDashboard, Play, RefreshCw, ScatterChart, Settings2, TableProperties, X } from 'lucide-react'
@@ -9,7 +11,8 @@ import { buildEdaRunRequest, edaConfigurationSignature, type EdaPopulationResult
 import type { DistributionResult, WeightingMethod } from '../analysis/distributionEngine.js'
 import { useEdaRunEngine } from '../analysis/useEdaRunEngine.js'
 import { GeoEyeChart } from '../components/GeoEyeChart.js'
-import { EdaDatasetOptions } from '../components/EdaDatasetOptions.js'
+import { DatasetScopePicker } from '../components/DatasetScopePicker.js'
+import { withClassScopes } from '../data/datasetScope.js'
 import { GeoEyeFacetChart } from '../components/GeoEyeFacetChart.js'
 import { type EdaDataset, type EdaVariableDefinition, type EdaVariableKey } from '../data/edaTypes.js'
 import { nextEdaRunNumber, readEdaRunCache, writeEdaRunCache } from '../data/edaRunCache.js'
@@ -48,11 +51,8 @@ function ChartFrame({ children, detail, title }: { children: React.ReactNode; de
   return <section className="eda-chart-card"><header><div><h3>{title}</h3><p>{detail}</p></div></header><div className="eda-plot">{children}</div></section>
 }
 
-function filterObservations(observations: readonly EdaObservation[], activeFilterKeys: readonly string[], filterValues: Readonly<Record<string, string>>) {
-  return observations.filter((observation) => activeFilterKeys.every((key) => {
-    const selected = filterValues[key]
-    return selected === undefined || selected === 'all' || observation.dimensions[key] === selected
-  }))
+function filterObservations(observations: readonly EdaObservation[], activeFilterKeys: readonly string[], filterValues: FilterMap) {
+  return observations.filter((observation) => matchesFieldFilters(observation, activeFilterKeys, filterValues))
 }
 
 function observationsForPopulation(dataset: EdaDataset | undefined, configuration: EdaRunConfiguration | undefined, population: EdaPopulationResult | undefined) {
@@ -121,9 +121,10 @@ export function ExplorePage() {
   const [datasetId, setDatasetId] = usePersistentState('explore.datasetId', '')
   const [variableKeys, setVariableKeys] = usePersistentState<EdaVariableKey[]>('explore.variableKeys', ['assay.au', 'assay.cu', 'assay.as'])
   const [activeFilterKeys, setActiveFilterKeys] = usePersistentState<string[]>('explore.activeFilterKeys', [])
-  const [filterValues, setFilterValues] = usePersistentState<Record<string, string>>('explore.filterValues', {})
-  const [compareBy, setCompareBy] = usePersistentState<string | null>('explore.compareBy', null)
-  const [secondGroup, setSecondGroup] = usePersistentState<string | null>('explore.secondGroup', null)
+  const [filterValues, setFilterValues] = usePersistentState<Record<string, FieldFilter>>('explore.filterValues', {})
+  // Populations are no longer split in the toolbar; a run covers the chosen fields as one.
+  const compareBy = null
+  const secondGroup = null
   const [declusteringEnabled, setDeclusteringEnabled] = usePersistentState('explore.declusteringEnabled', false)
   const [declusteringSettingsOpen, setDeclusteringSettingsOpen] = useState(false)
   const [weightingMethod, setWeightingMethod] = usePersistentState<WeightingMethod>('explore.weightingMethod', 'cell-declustering')
@@ -151,7 +152,7 @@ export function ExplorePage() {
   const autoRunRequestedRef = useRef(false)
   const runEngine = useEdaRunEngine(submittedRequest)
 
-  const datasets = datasetsQuery.data ?? []
+  const datasets = useMemo(() => withClassScopes(datasetsQuery.data ?? []), [datasetsQuery.data])
   const dataset = datasets.find((candidate) => candidate.id === datasetId) ?? datasets[0]
   const effectiveVariableKeys = dataset === undefined ? [] : variableKeys.filter((key) => dataset.variables.some((variable) => variable.key === key && variable.dataType !== 'category'))
   const draftConfiguration = useMemo((): EdaRunConfiguration | null => dataset === undefined ? null : ({ activeFilterKeys, compareBy, datasetId: dataset.id, datasetName: dataset.name, filterValues, minimumPopulationSize: 20, secondGroup: compareBy === null ? null : secondGroup, snapshotAt: dataset.snapshotAt, supportLabel: dataset.support, variableKeys: effectiveVariableKeys, weighting: { cellSize: declusteringCellSize, method: weightingMethod } }), [activeFilterKeys, compareBy, dataset, declusteringCellSize, effectiveVariableKeys, filterValues, secondGroup, weightingMethod])
@@ -227,7 +228,7 @@ export function ExplorePage() {
     if (cached === undefined) return
     autoRunRequestedRef.current = true
     setActiveRunId(cached.runId)
-    setActiveRun(cached); setActivePopulationId(cached.populations[0]?.populationId ?? null); setDatasetId(cached.configuration.datasetId); setVariableKeys(cached.configuration.variableKeys); setActiveFilterKeys(cached.configuration.activeFilterKeys); setFilterValues(cached.configuration.filterValues); setCompareBy(cached.configuration.compareBy); setSecondGroup(cached.configuration.secondGroup); setWeightingMethod(cached.configuration.weighting.method); setDeclusteringCellSize(cached.configuration.weighting.cellSize); setResultMode('facets')
+    setActiveRun(cached); setActivePopulationId(cached.populations[0]?.populationId ?? null); setDatasetId(cached.configuration.datasetId); setVariableKeys(cached.configuration.variableKeys); setActiveFilterKeys(cached.configuration.activeFilterKeys); setFilterValues(toFieldFilters(cached.configuration.filterValues));  setWeightingMethod(cached.configuration.weighting.method); setDeclusteringCellSize(cached.configuration.weighting.cellSize); setResultMode('facets')
   }, [datasets, storage])
 
   useEffect(() => {
@@ -286,15 +287,36 @@ export function ExplorePage() {
   const matrixOption = buildCorrelationOption(matrixQuery.data ?? { kind: 'correlation', cells: [], labels: [], method: correlationMethod })
   const detailVariables = (activeDataset?.variables ?? []).filter((variable) => activeRun?.populations.some((population) => population.variableKey === variable.key))
 
-  const dimensionValues = (key: string) => Array.from(new Set(dataset.observations.flatMap((observation) => observation.dimensions[key] === undefined ? [] : [observation.dimensions[key]]))).sort()
+  const filterFields = useMemo<FilterField[]>(() => {
+    if (dataset === undefined) return []
+    const dictionaries = new Map(dataset.dimensions.map((dimension) => [dimension.key, new Set<string>()]))
+    for (const observation of dataset.observations) {
+      for (const [key, values] of dictionaries) {
+        const value = observation.dimensions[key]
+        if (value !== undefined && value !== '') values.add(value)
+      }
+    }
+    return [
+      ...dataset.variables.filter((variable) => variable.dataType !== 'category')
+        .map((variable): FilterField => ({ key: variable.key, kind: 'number', label: variable.label, unit: variable.unit })),
+      ...dataset.dimensions.flatMap((dimension): FilterField[] => {
+        const values = [...(dictionaries.get(dimension.key) ?? [])].sort()
+        return values.length === 0 ? [] : [{ key: dimension.key, kind: 'category', label: dimension.label, values }]
+      }),
+    ]
+  }, [dataset])
   const selectDataset = (nextDatasetId: string) => {
     const nextDataset = datasets.find((candidate) => candidate.id === nextDatasetId)
     if (nextDataset === undefined) return
-    setDatasetId(nextDatasetId); setVariableKeys(nextDataset.variables.slice(0, 3).map((variable) => variable.key)); setActiveFilterKeys([]); setFilterValues({}); setCompareBy(null); setSecondGroup(null); clearSelection()
+    setDatasetId(nextDatasetId); setVariableKeys(nextDataset.variables.slice(0, 3).map((variable) => variable.key)); setActiveFilterKeys([]); setFilterValues({}); clearSelection()
   }
-  const toggleVariable = (key: EdaVariableKey) => { setVariableKeys((current) => current.includes(key) ? current.length === 1 ? current : current.filter((candidate) => candidate !== key) : [...current, key]); clearSelection() }
-  const addFilter = (key: string) => { if (key === '' || activeFilterKeys.includes(key)) return; setActiveFilterKeys((current) => [...current, key]); setFilterValues((current) => ({ ...current, [key]: 'all' })) }
-  const removeFilter = (key: string) => { setActiveFilterKeys((current) => current.filter((candidate) => candidate !== key)); setFilterValues((current) => Object.fromEntries(Object.entries(current).filter(([candidate]) => candidate !== key))); clearSelection() }
+  const changeFields = (keys: string[]) => { setVariableKeys(keys as EdaVariableKey[]); clearSelection() }
+  const changeFilterKeys = (keys: string[]) => {
+    setActiveFilterKeys(keys)
+    setFilterValues((current) => Object.fromEntries(Object.entries(current).filter(([key]) => keys.includes(key))))
+    clearSelection()
+  }
+  const changeFilter = (key: string, filter: FieldFilter) => { setFilterValues((current) => ({ ...current, [key]: filter })); clearSelection() }
   const startRun = () => {
     if (draftConfiguration === null || draftConfiguration.variableKeys.length === 0 || runEngine.pending) return
     const runNumber = typeof window === 'undefined' ? (activeRun?.runNumber ?? 0) + 1 : nextEdaRunNumber(storage)
@@ -447,16 +469,9 @@ export function ExplorePage() {
     <h1 className="sr-only">Exploratory data analysis</h1>
 
     <div className="analysis-toolbar eda-toolbar eda-run-toolbar">
-      <label className="tool-select tool-select-field eda-dataset-select"><span>Dataset</span><select aria-label="EDA dataset" onChange={(event) => selectDataset(event.target.value)} value={dataset.id}><EdaDatasetOptions datasets={datasets} /></select><ChevronDown size={14} /></label>
-      <VariablePicker ariaLabel="Select EDA variables" variables={dataset.variables} selectedKeys={variableKeys} onToggle={toggleVariable} minSelected={1} />
-      {activeFilterKeys.map((key) => {
-        const dimension = dataset.dimensions.find((candidate) => candidate.key === key)
-        if (dimension === undefined) return null
-        return <div className="eda-filter-control" key={key}><label className="tool-select tool-select-field"><span>{dimension.label}</span><select aria-label={`Filter by ${dimension.label}`} onChange={(event) => { setFilterValues((current) => ({ ...current, [key]: event.target.value })); clearSelection() }} value={filterValues[key] ?? 'all'}><option value="all">All {dimension.label.toLowerCase()}</option>{dimensionValues(key).map((value) => <option key={value} value={value}>{value}</option>)}</select><ChevronDown size={14} /></label><button aria-label={`Remove ${dimension.label} filter`} onClick={() => removeFilter(key)} type="button"><X size={13} /></button></div>
-      })}
-      <label className="tool-select tool-select-field eda-add-filter"><span>Filters</span><select aria-label="Add a dataset filter" disabled={activeFilterKeys.length === dataset.dimensions.length} onChange={(event) => addFilter(event.target.value)} value=""><option value="">Add filter…</option>{dataset.dimensions.filter((dimension) => !activeFilterKeys.includes(dimension.key)).map((dimension) => <option key={dimension.key} value={dimension.key}>{dimension.label}</option>)}</select><ChevronDown size={14} /></label>
-      <label className="tool-select tool-select-field"><span>Compare by</span><select aria-label="Compare populations by" onChange={(event) => { const value = event.target.value || null; setCompareBy(value); if (value === null || value === secondGroup) setSecondGroup(null) }} value={compareBy ?? ''}><option value="">None</option>{dataset.dimensions.map((dimension) => <option key={dimension.key} value={dimension.key}>{dimension.label}</option>)}</select><ChevronDown size={14} /></label>
-      <label className="tool-select tool-select-field"><span>Second group</span><select aria-label="Second grouping dimension" disabled={compareBy === null} onChange={(event) => setSecondGroup(event.target.value || null)} value={secondGroup ?? ''}><option value="">None</option>{dataset.dimensions.filter((dimension) => dimension.key !== compareBy).map((dimension) => <option key={dimension.key} value={dimension.key}>{dimension.label}</option>)}</select><ChevronDown size={14} /></label>
+      <DatasetScopePicker ariaPrefix="EDA" datasets={datasets} onChange={selectDataset} storageKey="explore" value={dataset.id} />
+      <FieldSelects ariaPrefix="EDA" onChange={changeFields} value={variableKeys} variables={dataset.variables} />
+      <FieldFilters ariaPrefix="EDA" fields={filterFields} filters={filterValues} keys={activeFilterKeys} onChangeFilter={changeFilter} onChangeKeys={changeFilterKeys} />
       <div className="toolbar-spacer" />
       <div className={`eda-run-control ${configurationChanged ? 'is-stale' : ''}`}>{activeRun === null ? null : <span>{configurationChanged ? 'Configuration changed' : `Run #${String(activeRun.runNumber).padStart(2, '0')} · Up to date`}</span>}{activeRun === null || configurationChanged ? <button className="primary-button" disabled={runEngine.pending || variableKeys.length === 0} onClick={startRun} type="button">{runEngine.pending ? <RefreshCw className="is-spinning" size={13} /> : <Play size={13} />}{runEngine.pending ? 'Running…' : activeRun === null ? 'Run analysis' : 'Update analysis'}</button> : null}</div>
     </div>

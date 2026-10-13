@@ -1,6 +1,8 @@
 import { useMemo } from 'react'
 import { ChevronDown, Layers3 } from 'lucide-react'
 import { compositeDataset, filterDatasetByIds, type CompositeStats } from '../analysis/compositing.js'
+import { DatasetScopePicker } from './DatasetScopePicker.js'
+import { withClassScopes } from '../data/datasetScope.js'
 import type { EdaDataset } from '../data/edaTypes.js'
 import { useProjectEdaDatasets } from '../data/liveEda.js'
 import { readDomainMembershipDocument, type SavedDomainSet } from '../data/domainMembershipStore.js'
@@ -26,7 +28,7 @@ export function useAnalysisScope(): AnalysisScope {
   const query = useProjectEdaDatasets()
   const storage = useProjectStorage()
   const [state, set] = usePersistentState<ScopeState>('analysis.scope', { datasetId: '', domainSetId: '', classId: '', compositeLength: 0 })
-  const datasets = query.data ?? []
+  const datasets = useMemo(() => withClassScopes(query.data ?? []), [query.data])
   const base = datasets.find((d) => d.id === state.datasetId) ?? datasets[0]
   const domainSets = useMemo(() => readDomainMembershipDocument(storage).domain_sets.filter((s) => base === undefined || s.provenance.dataset_id === base.id || s.provenance.dataset_id === base.id.split(':')[0]), [storage, base?.id])
   const domainSet = domainSets.find((s) => s.domain_set_id === state.domainSetId)
@@ -53,10 +55,10 @@ export function AnalysisScopePicker({ scope }: { scope: AnalysisScope }) {
   const { state, setState } = scope
   const classes = scope.domainSets.find((s) => s.domain_set_id === state.domainSetId)?.classes ?? []
   return <>
-    <label className="tool-select tool-select-field eda-dataset-select"><span>Dataset</span><select onChange={(e) => setState({ datasetId: e.target.value, domainSetId: '', classId: '' })} value={scope.base?.id ?? ''}>{scope.datasets.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}</select><ChevronDown size={14} /></label>
+    <DatasetScopePicker ariaPrefix="Analysis" datasets={scope.datasets} onChange={(datasetId) => setState({ datasetId, domainSetId: '', classId: '' })} storageKey="analysis" value={state.datasetId} />
     <label className="tool-select tool-select-field" title={scope.domainSets.length === 0 ? 'Save a domain set on the Domain page to filter by domain' : undefined}><span><Layers3 size={11} /> Domain</span>
       <select disabled={scope.domainSets.length === 0} onChange={(e) => setState({ domainSetId: e.target.value, classId: '' })} value={state.domainSetId}><option value="">All data</option>{scope.domainSets.map((s) => <option key={s.domain_set_id} value={s.domain_set_id}>{s.domain_set_id} v{s.template_version}</option>)}</select><ChevronDown size={14} /></label>
-    {state.domainSetId !== '' ? <label className="tool-select tool-select-field"><span>Class</span><select onChange={(e) => setState({ classId: e.target.value })} value={state.classId}><option value="">All classes</option>{classes.map((c) => <option key={c.class_id} value={c.class_id}>{c.class_label} · {c.observation_ids.length}</option>)}</select><ChevronDown size={14} /></label> : null}
+    {state.domainSetId !== '' ? <label className="tool-select tool-select-field"><span>Domain class</span><select onChange={(e) => setState({ classId: e.target.value })} value={state.classId}><option value="">All classes</option>{classes.map((c) => <option key={c.class_id} value={c.class_id}>{c.class_label} · {c.observation_ids.length}</option>)}</select><ChevronDown size={14} /></label> : null}
     <label className="tool-select tool-select-field tool-number-field" title="0 = raw samples"><span>Composite (m)</span><input inputMode="decimal" onChange={(e) => setState({ compositeLength: Math.max(0, Number(e.target.value) || 0) })} value={state.compositeLength} /></label>
   </>
 }

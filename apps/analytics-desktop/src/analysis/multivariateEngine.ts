@@ -1,4 +1,5 @@
 import type { EdaDataset } from '../data/edaTypes.js'
+import { matchesFieldFilters, type FieldFilters } from './fieldFilter.js'
 
 export type MultivariateMethod = 'full' | 'correlation' | 'pca' | 'clustering'
 export type MultivariateCorrelationMethod = 'pearson' | 'spearman'
@@ -11,7 +12,7 @@ export interface MultivariateConfiguration {
   correlationMethod: MultivariateCorrelationMethod
   datasetId: string
   datasetName: string
-  filterValues: Record<string, string>
+  filterValues: FieldFilters
   groupBy: string | null
   method: MultivariateMethod
   missingPolicy: MultivariateMissingPolicy
@@ -130,10 +131,7 @@ export function buildMultivariateRunRequest(
   now = new Date(),
 ): MultivariateRunRequest {
   const rows = dataset.observations
-    .filter((observation) => configuration.activeFilterKeys.every((key) => {
-      const selected = configuration.filterValues[key]
-      return selected === undefined || selected === 'all' || observation.dimensions[key] === selected
-    }))
+    .filter((observation) => matchesFieldFilters(observation, configuration.activeFilterKeys, configuration.filterValues))
     .map((observation): MultivariateInputRow => {
       const groupKeys = [configuration.groupBy, configuration.secondGroup]
         .filter((key): key is string => key !== null && key !== undefined)
