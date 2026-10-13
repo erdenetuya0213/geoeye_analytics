@@ -1,3 +1,5 @@
+import { normalizedHoleIdentifier } from '@geoeye/datapool-client'
+
 export interface EdaObservation {
   locationValid?: boolean
   depthFrom: number
@@ -276,14 +278,68 @@ export function pairedSamples(
 export interface JoinedPair {
   id: string
   joinKey: string
+  matchMethod?: 'interval-overlap' | 'row-identity'
   sourceObservationIds: string[]
   x: number
   y: number
 }
 
+function hasValue(observation: EdaObservation, key: string): boolean {
+  const value = observation.values[key]
+  return typeof value === 'number' && Number.isFinite(value)
+}
+
 /**
- * Joins variables from independently sourced datasets by their canonical
- * interval key. Lineage for both axes is retained for cross-view selection.
+ * Best drillhole-support partner for `left` among `rights`. Hole names are
+ * compared by normalised identifier (TT2026-006GT = TT_2026_006GT). Candidates
+ * must carry the wanted value, so mixed-method tables (point-load rows next to
+ * Schmidt rows) never match a row to itself. Interval overlap wins; a point
+ * inside an interval (either side) matches at zero overlap, nearest first.
+ */
+export function bestSupportPartner(left: EdaObservation, rights: readonly EdaObservation[], accept: (candidate: EdaObservation) => boolean): EdaObservation | undefined {
+  const hole = normalizedHoleIdentifier(left.holeId)
+  const leftMid = (left.depthFrom + left.depthTo) / 2
+  return rights
+    .filter((candidate) => accept(candidate) && normalizedHoleIdentifier(candidate.holeId) === hole)
+    .map((candidate) => ({
+      candidate,
+      distance: Math.abs((candidate.depthFrom + candidate.depthTo) / 2 - leftMid),
+      overlap: Math.max(0, Math.min(left.depthTo, candidate.depthTo) - Math.max(left.depthFrom, candidate.depthFrom)),
+    }))
+    .filter(({ candidate, overlap }) => overlap > 0
+      || (candidate.depthFrom === candidate.depthTo && candidate.depthFrom >= left.depthFrom && candidate.depthFrom <= left.depthTo)
+      || (left.depthFrom === left.depthTo && left.depthFrom >= candidate.depthFrom && left.depthFrom <= candidate.depthTo))
+    .sort((a, b) => b.overlap - a.overlap || a.distance - b.distance)[0]?.candidate
+}
+
+function supportPartner(left: EdaObservation, rights: readonly EdaObservation[], rightKey: string): EdaObservation | undefined {
+  return bestSupportPartner(left, rights, (candidate) => hasValue(candidate, rightKey))
+}
+
+function hasDrillholeSupport(observation: EdaObservation): boolean {
+  return observation.locationValid !== false
+    && Number.isFinite(observation.depthFrom)
+    && Number.isFinite(observation.depthTo)
+}
+
+/**
+ * Finds the partner of an un-located observation (e.g. a lab table with no
+ * hole or depth columns). Same source row wins; otherwise a sample ID that is
+ * unique on the other side. Duplicated sample IDs never pair, because one ID
+ * can legitimately cover several tests.
+ */
+function identityPartner(left: EdaObservation, rights: readonly EdaObservation[]): EdaObservation | undefined {
+  const sameRow = rights.find((candidate) => candidate.sourceObservationId === left.sourceObservationId)
+  if (sameRow !== undefined) return sameRow
+  const sameSample = rights.filter((candidate) => !hasDrillholeSupport(candidate) && candidate.sampleId === left.sampleId)
+  return sameSample.length === 1 ? sameSample[0] : undefined
+}
+
+/**
+ * Joins variables from independently sourced datasets by drillhole support
+ * (interval overlap, or a point inside an interval). Observations without
+ * hole/depth join by row/sample identity instead of being dropped. Lineage for
+ * both axes is retained for cross-view selection.
  */
 export function pairedDatasetSamples(
   leftObservations: readonly EdaObservation[],
@@ -292,18 +348,11 @@ export function pairedDatasetSamples(
   rightKey: string,
 ): JoinedPair[] {
   return leftObservations.flatMap((leftObservation) => {
-    const rightObservation = rightObservations
-      .filter((candidate) => candidate.holeId === leftObservation.holeId)
-      .map((candidate) => ({
-        candidate,
-        overlap: Math.max(0, Math.min(leftObservation.depthTo, candidate.depthTo) - Math.max(leftObservation.depthFrom, candidate.depthFrom)),
-      }))
-      .filter((match) => match.overlap > 0 || (
-        match.candidate.depthFrom === match.candidate.depthTo
-        && match.candidate.depthFrom >= leftObservation.depthFrom
-        && match.candidate.depthFrom <= leftObservation.depthTo
-      ))
-      .sort((left, right) => right.overlap - left.overlap)[0]?.candidate
+    if (!hasValue(leftObservation, leftKey)) return []
+    const located = hasDrillholeSupport(leftObservation)
+    const rightObservation = located
+      ? supportPartner(leftObservation, rightObservations, rightKey)
+      : identityPartner(leftObservation, rightObservations)
     if (rightObservation === undefined) return []
     const x = leftObservation.values[leftKey]
     const y = rightObservation.values[rightKey]
@@ -314,7 +363,8 @@ export function pairedDatasetSamples(
     ]))
     return [{
       id: sourceObservationIds.join('|'),
-      joinKey: leftObservation.joinKey,
+      joinKey: located ? leftObservation.joinKey : leftObservation.sampleId,
+      matchMethod: located ? 'interval-overlap' as const : 'row-identity' as const,
       sourceObservationIds,
       x,
       y,

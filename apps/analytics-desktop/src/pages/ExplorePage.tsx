@@ -11,28 +11,31 @@ import { useEdaRunEngine } from '../analysis/useEdaRunEngine.js'
 import { GeoEyeChart } from '../components/GeoEyeChart.js'
 import { EdaDatasetOptions } from '../components/EdaDatasetOptions.js'
 import { GeoEyeFacetChart } from '../components/GeoEyeFacetChart.js'
-import { DownholeCorrelationIcon } from '../components/GeoEyeIcons.js'
 import { type EdaDataset, type EdaVariableDefinition, type EdaVariableKey } from '../data/edaTypes.js'
 import { nextEdaRunNumber, readEdaRunCache, writeEdaRunCache } from '../data/edaRunCache.js'
 import { useProjectEdaDatasets } from '../data/liveEda.js'
 import { useGeoEyeSelection } from '../state/SelectionContext.js'
-import { buildCdfOption, buildCorrelationOption, buildDistributionBoxPlotOption, buildHistogramOption, buildProbabilityPlotOption, buildScatterOption, buildSwathOption } from '../visualization/chartOptions.js'
-import { DownholeCorrelationWorkspace } from './DownholeCorrelationPage.js'
+import type { EChartsCoreOption } from 'echarts/core'
+import { SaveExportBar, type ExportTable } from '../components/SaveExportBar.js'
+import { csv } from '../data/resultExport.js'
+import { geoEyeChartColors } from '../visualization/geoEyeTheme.js'
+import { axisTitle, buildBoxPlotOption, buildCdfOption, buildCorrelationOption, buildDistributionBoxPlotOption, buildHistogramOption, buildProbabilityPlotOption, buildScatterOption, buildSwathOption , type ScatterOverlay } from '../visualization/chartOptions.js'
 import { clearPersistedState, readPersistedState, usePersistentState } from '../state/persistentState.js'
 import { useProjectStorage } from '../state/ProjectStorageContext.js'
 
-type ExploreView = 'statistics' | 'distribution' | 'relationships' | 'swath' | 'downhole'
+type ExploreView = 'statistics' | 'distribution' | 'relationships' | 'swath'
 type ResultMode = 'facets' | 'detail'
 type RelationshipView = 'facets' | 'detail' | 'matrix'
 type CorrelationMethod = 'pearson' | 'spearman'
 type DistributionChart = 'all' | 'histogram' | 'cdf' | 'probability' | 'box'
 type FacetChart = 'histogram' | 'cdf' | 'probability' | 'box'
 
+const facetChartNames: Record<FacetChart, string> = { box: 'Box plot', cdf: 'CDF', histogram: 'Histogram', probability: 'Probability plot' }
 const weightingLabels: Record<WeightingMethod, string> = { 'cell-declustering': 'Cell declustering', 'equal-hole': 'Equal per hole', 'interval-support': 'Interval support' }
 
 function initialExploreView(): ExploreView {
   if (typeof window === 'undefined') return 'statistics'
-  return new URLSearchParams(window.location.search).get('statisticsView') === 'downhole' ? 'downhole' : 'statistics'
+  return 'statistics'
 }
 
 function formatNumber(value: number | null, variable: EdaVariableDefinition, includeUnit = false) {
@@ -137,6 +140,8 @@ export function ExplorePage() {
   const [yDatasetId, setYDatasetId] = usePersistentState('explore.yDatasetId', '')
   const [yVariableKey, setYVariableKey] = usePersistentState<EdaVariableKey>('explore.yVariableKey', 'geotech.rqd')
   const [relationshipView, setRelationshipView] = usePersistentState<RelationshipView>('explore.relationshipView', 'facets')
+  const [overlay, setOverlay] = usePersistentState<ScatterOverlay>('explore.scatterOverlay', 'none')
+  const [overlayFactor, setOverlayFactor] = usePersistentState('explore.scatterOverlayFactor', 24)
   const [relationshipPopulationId, setRelationshipPopulationId] = usePersistentState<string | null>('explore.relationshipPopulationId', null)
   const [correlationMethod, setCorrelationMethod] = usePersistentState<CorrelationMethod>('explore.correlationMethod', 'pearson')
   const [swathAxis, setSwathAxis] = usePersistentState<SwathAxis>('explore.swathAxis', 'easting')
@@ -156,7 +161,8 @@ export function ExplorePage() {
   const relationshipDatasets = relationshipDatasetIds.flatMap((id) => { const candidate = datasets.find((item) => item.id === id); return candidate === undefined ? [] : [candidate] })
   const appliedFilters = activeRun?.configuration ?? draftConfiguration
   const matrixVariables = (view === 'relationships' && relationshipView === 'matrix' ? relationshipDatasets : []).flatMap((relationshipDataset) => relationshipDataset.variables
-    .filter((variable) => variable.dataType !== 'category')
+    // The run's dataset contributes only the variables picked for the run (keeps row counters such as "No" out).
+    .filter((variable) => variable.dataType !== 'category' && (relationshipDataset.id !== activeRun?.configuration.datasetId || activeRun.configuration.variableKeys.includes(variable.key)))
     .map((variable) => ({
       datasetId: relationshipDataset.id,
       id: `${relationshipDataset.id}::${variable.key}`,
@@ -171,7 +177,7 @@ export function ExplorePage() {
     label: duplicateMatrixLabels.has(variable.label) ? `${variable.label} · ${relationshipDatasets.find((candidate) => candidate.id === variable.datasetId)?.name.split(' · ')[0] ?? 'Dataset'}` : variable.label,
   }))
   const matrixQuery = useQuery({
-    queryKey: ['correlation-matrix', relationshipDatasets.map(item => [item.id, item.snapshotAt]), appliedFilters?.activeFilterKeys, appliedFilters?.filterValues, correlationMethod],
+    queryKey: ['correlation-matrix', relationshipDatasets.map(item => [item.id, item.snapshotAt]), labeledMatrixVariables.map((item) => item.id), appliedFilters?.activeFilterKeys, appliedFilters?.filterValues, correlationMethod],
     enabled: view === 'relationships' && relationshipView === 'matrix' && labeledMatrixVariables.length > 0,
     staleTime: Infinity,
     queryFn: ({ signal }) => prepareCorrelationMatrix({ variables: labeledMatrixVariables, method: correlationMethod, activeFilterKeys: appliedFilters?.activeFilterKeys ?? [], filterValues: appliedFilters?.filterValues ?? {} }, signal),
@@ -253,7 +259,7 @@ export function ExplorePage() {
   const swath = swathResult?.bins ?? []
   const swathOption = activeVariable === undefined || swathResult === null ? null : buildSwathOption(swathResult, {
     x: swathAxis === 'depth' ? 'Downhole depth (m)' : `${swathAxis} (m)`,
-    y: `${activeVariable.label} (${activeVariable.unit})`,
+    y: axisTitle(activeVariable.label, activeVariable.unit),
   })
 
   const xDataset = datasets.find((candidate) => candidate.id === xDatasetId) ?? relationshipDatasets[0]
@@ -271,10 +277,12 @@ export function ExplorePage() {
     : relationshipPopulationFacets(xObservations, yObservations, xVariable.key, yVariable.key, activeRun?.configuration, xDataset?.dimensions ?? [])
   const selectedRelationshipFacet = relationshipFacets.find((facet) => facet.id === relationshipPopulationId)
   const detailRelationship = selectedRelationshipFacet?.result.relationship ?? relationshipResult
+  const overlayOptions = { kind: overlay, factor: overlayFactor }
+  const scatterName = `${yVariable?.shortLabel ?? 'Y'} vs ${xVariable?.shortLabel ?? 'X'}`
   const scatterOption = buildScatterOption(detailRelationship, {
-    x: `${xVariable?.label ?? 'X'} (${xVariable?.unit ?? ''})`,
-    y: `${yVariable?.label ?? 'Y'} (${yVariable?.unit ?? ''})`,
-  })
+    x: axisTitle(xVariable?.label ?? 'X', xVariable?.unit),
+    y: axisTitle(yVariable?.label ?? 'Y', yVariable?.unit),
+  }, overlayOptions)
   const matrixOption = buildCorrelationOption(matrixQuery.data ?? { kind: 'correlation', cells: [], labels: [], method: correlationMethod })
   const detailVariables = (activeDataset?.variables ?? []).filter((variable) => activeRun?.populations.some((population) => population.variableKey === variable.key))
 
@@ -385,6 +393,32 @@ export function ExplorePage() {
     if (chart === 'probability') return buildProbabilityPlotOption(facet.distribution, config)
     return buildDistributionBoxPlotOption(facet.distribution, config)
   }
+  const groupLabel = (population: EdaPopulationResult) => [population.compareValue, population.secondGroupValue].filter((value) => value !== null).join(' · ') || population.label
+  // With Compare by, one box plot per variable shows every group side by side, with the samples on top.
+  const groupedBoxFacets = activeRun === null || activeRun.configuration.compareBy === null ? [] : activeRun.configuration.variableKeys.flatMap((variableKey) => {
+    const variable = activeDataset?.variables.find((candidate) => candidate.key === variableKey)
+    const populations = activeRun.populations.filter((population) => population.variableKey === variableKey && population.result.sample.summary.count > 0)
+    return variable === undefined || populations.length === 0 ? [] : [{ id: variableKey, result: { populations, variable }, subtitle: `${variable.unit ? `${variable.unit} · ` : ''}by ${activeDataset?.dimensions.find((dimension) => dimension.key === activeRun.configuration.compareBy)?.label ?? activeRun.configuration.compareBy}`, title: variable.shortLabel }]
+  })
+  const groupedBoxOption = ({ populations, variable }: { populations: EdaPopulationResult[]; variable: EdaVariableDefinition }): EChartsCoreOption => {
+    const categories = populations.map((population) => `${groupLabel(population)}\nn=${population.result.sample.summary.count}`)
+    const base = buildBoxPlotOption({ groups: populations.map((population, index) => { const s = population.result.sample.summary; return { category: categories[index]!, high: s.maximum, low: s.minimum, median: s.median, q1: s.q1, q3: s.q3, sourceObservationIds: [] } }), kind: 'box-plot' }, { x: '', y: axisTitle(variable.label, variable.unit) }) as Record<string, unknown>
+    const points = populations.flatMap((population, index) => observationsForPopulation(activeDataset, activeRun?.configuration, population).flatMap((observation) => {
+      const value = observation.values[variable.key]
+      return typeof value === 'number' && Number.isFinite(value) ? [[categories[index]!, value]] : []
+    }))
+    // Non-negative data (strength, modulus…) keeps a zero floor instead of an auto axis that dips below zero.
+    const values = points.map((point) => point[1] as number)
+    const low = Math.min(...values), high = Math.max(...values)
+    const yAxis = low >= 0 && low - (high - low) * 0.15 < 0 ? { ...(base.yAxis as object), min: 0 } : base.yAxis
+    return { ...base, yAxis, series: [...(base.series as unknown[]), { data: points, itemStyle: { color: geoEyeChartColors.accent, opacity: 0.85 }, name: 'Samples', symbolSize: 7, type: 'scatter', z: 3 }] } as EChartsCoreOption
+  }
+  const summaryHeader = ['variable', 'unit', 'group', 'n', 'missing', 'mean', 'median', 'std_dev', 'cv', 'minimum', 'p25', 'p75', 'p95', 'maximum']
+  const statisticsTables: ExportTable[] = activeRun === null ? [] : [
+    { name: 'summary', csv: () => csv(summaryHeader, summaryRows.map(({ summary: s, variable }) => [variable.label, variable.unit, 'All', s.count, s.missing, s.mean, s.median, s.standardDeviation, s.coefficientOfVariation, s.minimum, s.q1, s.q3, s.p95, s.maximum])) },
+    ...(activeRun.configuration.compareBy === null ? [] : [{ name: 'summary-by-group', csv: () => csv(summaryHeader, activeRun.populations.map((population) => { const variable = activeDataset?.variables.find((candidate) => candidate.key === population.variableKey); const s = population.result.sample.summary; return [variable?.label ?? population.variableKey, variable?.unit ?? '', groupLabel(population), s.count, s.missing, s.mean, s.median, s.standardDeviation, s.coefficientOfVariation, s.minimum, s.q1, s.q3, s.p95, s.maximum] })) }]),
+    ...(view === 'relationships' && relationshipView === 'detail' && xVariable !== undefined && yVariable !== undefined ? [{ name: `pairs-${xVariable.key}-vs-${yVariable.key}`, csv: () => csv(['match', xVariable.label, yVariable.label], detailRelationship.points.map((pair) => [pair.joinKey, pair.x, pair.y])) }] : []),
+  ]
   const resultModeControl = activeRun === null || !supportsPopulationModes ? null : <div className="segmented-control eda-result-mode-control" role="group" aria-label={`${view === 'swath' ? 'Spatial' : 'Distribution'} view`}><button className={resultMode === 'facets' ? 'is-active' : ''} onClick={() => setResultMode('facets')} type="button"><Grid3X3 size={12} /> Facets</button><button className={resultMode === 'detail' ? 'is-active' : ''} onClick={() => setResultMode('detail')} type="button"><BarChart3 size={12} /> Detail</button></div>
   const detailVariableControl = activeRun === null || !supportsPopulationModes || resultMode !== 'detail' || detailVariables.length === 0 ? null : <label className="eda-inline-plot-tools eda-detail-variable-control"><span>Variable</span><select aria-label="Detail variable" onChange={(event) => selectDetailVariable(event.target.value as EdaVariableKey)} value={activeVariable?.key ?? detailVariables[0]?.key}>{detailVariables.map((variable) => <option key={variable.key} value={variable.key}>{variable.shortLabel} · {variable.label} ({variable.unit})</option>)}</select><ChevronDown aria-hidden="true" size={13} /></label>
   const relationshipViewControl = activeRun === null || view !== 'relationships' ? null : <div className="segmented-control eda-result-mode-control eda-relationship-view-control" role="group" aria-label="Relationship view"><button className={relationshipView === 'facets' ? 'is-active' : ''} onClick={() => setRelationshipView('facets')} type="button"><Grid3X3 size={12} /> Facets</button><button className={relationshipView === 'detail' ? 'is-active' : ''} onClick={() => setRelationshipView('detail')} type="button"><ScatterChart size={12} /> Detail</button><button className={relationshipView === 'matrix' ? 'is-active' : ''} onClick={() => setRelationshipView('matrix')} type="button"><TableProperties size={12} /> Matrix</button></div>
@@ -393,11 +427,12 @@ export function ExplorePage() {
     ? <div className="segmented-control eda-facet-chart-picker" role="group" aria-label="Facet chart">{(['histogram', 'cdf', 'probability', 'box'] as const).map((chart) => <button aria-pressed={facetChart === chart} className={facetChart === chart ? 'is-active' : ''} key={chart} onClick={() => setFacetChart(chart)} type="button">{chart === 'histogram' ? 'Histogram' : chart === 'cdf' ? 'CDF' : chart === 'probability' ? 'Probability' : 'Box plot'}</button>)}</div>
     : <div className="segmented-control eda-detail-chart-picker" role="group" aria-label="Distribution chart"><button className={distributionChart === 'all' ? 'is-active' : ''} onClick={() => setDistributionChart('all')} type="button">All</button><button className={distributionChart === 'histogram' ? 'is-active' : ''} onClick={() => setDistributionChart('histogram')} type="button">Histogram</button><button className={distributionChart === 'cdf' ? 'is-active' : ''} onClick={() => setDistributionChart('cdf')} type="button">CDF</button><button className={distributionChart === 'probability' ? 'is-active' : ''} onClick={() => setDistributionChart('probability')} type="button">Probability</button><button className={distributionChart === 'box' ? 'is-active' : ''} onClick={() => setDistributionChart('box')} type="button">Box plot</button></div>}</div>
   const spatialAxisControl = activeRun === null || view !== 'swath' ? null : <div className="eda-inline-plot-tools eda-spatial-tool-control"><span>Spatial axis</span><div className="segmented-control" role="group" aria-label="Spatial axis">{(['easting', 'northing', 'depth'] as const).map((axis) => <button aria-pressed={swathAxis === axis} className={swathAxis === axis ? 'is-active' : ''} key={axis} onClick={() => setSwathAxis(axis)} type="button">{axis}</button>)}</div></div>
-  const contextualTools = activeRun === null || view === 'statistics' || view === 'downhole' ? null : <div className="eda-context-toolbar" role="region" aria-label={`${view === 'distribution' ? 'Distribution' : view === 'relationships' ? 'Relationships' : 'Spatial'} tools`}>
+  const contextualTools = activeRun === null || view === 'statistics' ? null : <div className="eda-context-toolbar" role="region" aria-label={`${view === 'distribution' ? 'Distribution' : view === 'relationships' ? 'Relationships' : 'Spatial'} tools`}>
     <div className="eda-context-toolbar-title"><strong>{view === 'distribution' ? 'Distribution' : view === 'relationships' ? 'Relationships' : 'Spatial'}</strong><span>View tools</span></div>
     {supportsPopulationModes ? <div className="eda-context-tool-group"><span>Layout</span>{resultModeControl}</div> : null}
     {detailVariableControl}
     {relationshipViewControl === null ? null : <div className="eda-context-tool-group"><span>Layout</span>{relationshipViewControl}</div>}
+    {view === 'relationships' ? <div className="eda-context-tool-group"><span>Reference</span><select aria-label="Scatter reference overlay" onChange={(event) => setOverlay(event.target.value as ScatterOverlay)} value={overlay}><option value="none">None</option><option value="one-to-one">1:1 line</option><option value="priest-hudson">Priest &amp; Hudson (RQD vs FF)</option><option value="calibration">y = k·x (Is50 → UCS)</option></select>{overlay === 'calibration' ? <input aria-label="Calibration factor k" inputMode="decimal" onChange={(event) => setOverlayFactor(Number(event.target.value) || 24)} style={{ width: 52 }} value={overlayFactor} /> : null}</div> : null}
     {relationshipMatrixControl}
     {distributionPlotControl === null ? null : <div className="eda-context-tool-group"><span>Chart</span>{distributionPlotControl}</div>}
     {spatialAxisControl}
@@ -411,7 +446,7 @@ export function ExplorePage() {
   return <div className="page explore-page">
     <h1 className="sr-only">Exploratory data analysis</h1>
 
-    {view !== 'downhole' ? <div className="analysis-toolbar eda-toolbar eda-run-toolbar">
+    <div className="analysis-toolbar eda-toolbar eda-run-toolbar">
       <label className="tool-select tool-select-field eda-dataset-select"><span>Dataset</span><select aria-label="EDA dataset" onChange={(event) => selectDataset(event.target.value)} value={dataset.id}><EdaDatasetOptions datasets={datasets} /></select><ChevronDown size={14} /></label>
       <VariablePicker ariaLabel="Select EDA variables" variables={dataset.variables} selectedKeys={variableKeys} onToggle={toggleVariable} minSelected={1} />
       {activeFilterKeys.map((key) => {
@@ -424,32 +459,44 @@ export function ExplorePage() {
       <label className="tool-select tool-select-field"><span>Second group</span><select aria-label="Second grouping dimension" disabled={compareBy === null} onChange={(event) => setSecondGroup(event.target.value || null)} value={secondGroup ?? ''}><option value="">None</option>{dataset.dimensions.filter((dimension) => dimension.key !== compareBy).map((dimension) => <option key={dimension.key} value={dimension.key}>{dimension.label}</option>)}</select><ChevronDown size={14} /></label>
       <div className="toolbar-spacer" />
       <div className={`eda-run-control ${configurationChanged ? 'is-stale' : ''}`}>{activeRun === null ? null : <span>{configurationChanged ? 'Configuration changed' : `Run #${String(activeRun.runNumber).padStart(2, '0')} · Up to date`}</span>}{activeRun === null || configurationChanged ? <button className="primary-button" disabled={runEngine.pending || variableKeys.length === 0} onClick={startRun} type="button">{runEngine.pending ? <RefreshCw className="is-spinning" size={13} /> : <Play size={13} />}{runEngine.pending ? 'Running…' : activeRun === null ? 'Run analysis' : 'Update analysis'}</button> : null}</div>
-    </div> : null}
+    </div>
 
     <div className="eda-view-tabs eda-tool-tabs" role="tablist" aria-label="EDA views">
       <button aria-selected={view === 'statistics'} className={view === 'statistics' ? 'is-active' : ''} onClick={() => openView('statistics')} role="tab" type="button"><TableProperties aria-hidden="true" size={15} /><strong>Summary</strong></button>
       <button aria-selected={view === 'distribution'} className={view === 'distribution' ? 'is-active' : ''} onClick={() => openView('distribution')} role="tab" type="button"><BarChart3 aria-hidden="true" size={15} /><strong>Distribution</strong></button>
       <button aria-selected={view === 'relationships'} className={view === 'relationships' ? 'is-active' : ''} onClick={() => openView('relationships')} role="tab" type="button"><ScatterChart aria-hidden="true" size={15} /><strong>Relationships</strong></button>
       <button aria-selected={view === 'swath'} className={view === 'swath' ? 'is-active' : ''} onClick={() => openView('swath')} role="tab" type="button"><ChartSpline aria-hidden="true" size={15} /><strong>Spatial</strong></button>
-      <button aria-selected={view === 'downhole'} className={view === 'downhole' ? 'is-active' : ''} onClick={() => openView('downhole')} role="tab" type="button"><DownholeCorrelationIcon size={15} /><strong>Downhole correlation</strong></button>
     </div>
     {contextualTools}
 
-    {view !== 'downhole' && runEngine.error !== null ? <div className="eda-engine-error" role="alert">{runEngine.error}. The previous cached run remains available.</div> : null}
+    {runEngine.error !== null ? <div className="eda-engine-error" role="alert">{runEngine.error}. The previous cached run remains available.</div> : null}
 
-    {view === 'downhole' ? <DownholeCorrelationWorkspace embedded /> : activeRun === null ? <section className="panel eda-run-empty"><LayoutDashboard size={22} /><div><h2>Configure once, then run the full analysis</h2><p>GeoEye will calculate every requested variable and valid population combination. Results stay interactive until you update the run.</p></div><button className="primary-button" disabled={runEngine.pending} onClick={startRun} type="button"><Play size={13} /> Run analysis</button></section> : <>
+    {activeRun === null ? <section className="panel eda-run-empty"><LayoutDashboard size={22} /><div><h2>Configure once, then run the full analysis</h2><p>GeoEye will calculate every requested variable and valid population combination. Results stay interactive until you update the run.</p></div><button className="primary-button" disabled={runEngine.pending} onClick={startRun} type="button"><Play size={13} /> Run analysis</button></section> : <>
       {supportsPopulationModes && resultMode === 'facets' ? <section className="panel eda-facets-panel">
-        {view === 'distribution' ? <GeoEyeFacetChart
+        {view === 'distribution' && facetChart === 'box' && groupedBoxFacets.length > 0 ? <GeoEyeFacetChart
+          ariaLabel="Box plots by group"
+          buildOption={groupedBoxOption}
+          chartProps={{ clickSelection: 'none', loading: runEngine.pending }}
+          exportFeature="statistics"
+          exportPrefix="Box plot"
+          facets={groupedBoxFacets}
+          key="grouped-box"
+        /> : view === 'distribution' ? <GeoEyeFacetChart
           ariaLabel={`${facetChart} population facets`}
+          exportFeature="statistics"
+          exportPrefix={facetChartNames[facetChart]}
+          key={facetChart}
           buildOption={(result) => facetOption(facetChart, result)}
           chartProps={{ clickSelection: facetChart === 'histogram' ? 'replace' : 'toggle', loading: runEngine.pending }}
           facets={chartFacets}
           onFacetClick={(facet) => openPopulation(facet.id)}
         /> : <GeoEyeFacetChart
           ariaLabel={`${swathAxis} spatial trend facets`}
+          exportFeature="statistics"
+          exportPrefix={`Spatial trend ${swathAxis}`}
           buildOption={({ swath: result, variable }) => buildSwathOption(result, {
             x: swathAxis === 'depth' ? 'Downhole depth (m)' : `${swathAxis} (m)`,
-            y: `${variable.label} (${variable.unit})`,
+            y: axisTitle(variable.label, variable.unit),
           })}
           chartProps={{ clickSelection: 'replace', loading: runEngine.pending }}
           facets={swathFacets}
@@ -464,7 +511,7 @@ export function ExplorePage() {
           <div className="eda-summary-table-wrap">
             <table className="eda-summary-table">
               <thead><tr><th>Variable</th><th>Valid</th><th>Missing</th><th>Mean</th><th>Median</th><th>Std dev</th><th>CV</th><th>Minimum</th><th>P25</th><th>P75</th><th>P95</th><th>Maximum</th></tr></thead>
-              <tbody>{summaryRows.map(({ summary, variable }) => <tr className={summary.count < activeRun.configuration.minimumPopulationSize ? 'is-insufficient' : ''} key={variable.key}><th scope="row"><strong>{variable.shortLabel}</strong><small>{variable.label} · {variable.unit}</small></th><td>{summary.count.toLocaleString()}</td><td>{summary.missing.toLocaleString()}</td><td>{formatNumber(summary.mean, variable)}</td><td>{formatNumber(summary.median, variable)}</td><td>{formatNumber(summary.standardDeviation, variable)}</td><td>{summary.coefficientOfVariation?.toFixed(3) ?? '—'}</td><td>{formatNumber(summary.minimum, variable)}</td><td>{formatNumber(summary.q1, variable)}</td><td>{formatNumber(summary.q3, variable)}</td><td>{formatNumber(summary.p95, variable)}</td><td>{formatNumber(summary.maximum, variable)}</td></tr>)}</tbody>
+              <tbody>{(activeRun.configuration.compareBy === null ? summaryRows.map((row) => ({ ...row, group: null as string | null, key: row.variable.key })) : activeRun.populations.flatMap((population) => { const variable = activeDataset.variables.find((candidate) => candidate.key === population.variableKey); return variable === undefined ? [] : [{ group: `${activeRun.configuration.compareBy}: ${groupLabel(population)}`, key: population.populationId, summary: population.result.sample.summary, variable }] })).map(({ group, key, summary, variable }) => <tr className={summary.count < activeRun.configuration.minimumPopulationSize ? 'is-insufficient' : ''} key={key}><th scope="row"><strong>{variable.shortLabel}</strong><small>{group ?? `${variable.label}${variable.unit ? ` · ${variable.unit}` : ''}`}</small></th><td>{summary.count.toLocaleString()}</td><td>{summary.missing.toLocaleString()}</td><td>{formatNumber(summary.mean, variable)}</td><td>{formatNumber(summary.median, variable)}</td><td>{formatNumber(summary.standardDeviation, variable)}</td><td>{summary.coefficientOfVariation?.toFixed(3) ?? '—'}</td><td>{formatNumber(summary.minimum, variable)}</td><td>{formatNumber(summary.q1, variable)}</td><td>{formatNumber(summary.q3, variable)}</td><td>{formatNumber(summary.p95, variable)}</td><td>{formatNumber(summary.maximum, variable)}</td></tr>)}</tbody>
             </table>
           </div>
         </section> : null}
@@ -472,10 +519,10 @@ export function ExplorePage() {
         {view === 'distribution' ? <div className="eda-distribution-detail">
           <section className="panel eda-main-panel">
             <div className={`eda-chart-grid eda-distribution-grid ${distributionChart !== 'all' ? 'is-single' : ''}`}>
-              {distributionChart === 'all' || distributionChart === 'histogram' ? <ChartFrame detail={histogramDetail} title={`Histogram · ${activeVariable.shortLabel}`}>{chartData === null ? null : <GeoEyeChart ariaLabel={`${activeVariable.label} histogram`} brushSelection="replace" clickSelection="replace" loading={runEngine.pending} option={chartData.histogram} />}</ChartFrame> : null}
-              {distributionChart === 'all' || distributionChart === 'cdf' ? <ChartFrame detail={cdfDetail} title="CDF">{chartData === null ? null : <GeoEyeChart ariaLabel={`${activeVariable.label} cumulative distribution`} loading={runEngine.pending} option={chartData.cdf} />}</ChartFrame> : null}
-              {distributionChart === 'all' || distributionChart === 'probability' ? <ChartFrame detail={probabilityDetail} title="Probability plot">{chartData === null ? null : <GeoEyeChart ariaLabel={`${activeVariable.label} probability plot`} loading={runEngine.pending} option={chartData.probability} />}</ChartFrame> : null}
-              {distributionChart === 'all' || distributionChart === 'box' ? <ChartFrame detail="Raw and declustered five-number summaries" title="Box plot">{chartData === null ? null : <GeoEyeChart ariaLabel={`${activeVariable.label} box plot`} clickSelection="replace" loading={runEngine.pending} option={chartData.box} />}</ChartFrame> : null}
+              {distributionChart === 'all' || distributionChart === 'histogram' ? <ChartFrame detail={histogramDetail} title={`Histogram · ${activeVariable.shortLabel}`}>{chartData === null ? null : <GeoEyeChart ariaLabel={`${activeVariable.label} histogram`} exportFeature="statistics" exportName={`Histogram - ${activePopulation.label}`} brushSelection="replace" clickSelection="replace" loading={runEngine.pending} option={chartData.histogram} />}</ChartFrame> : null}
+              {distributionChart === 'all' || distributionChart === 'cdf' ? <ChartFrame detail={cdfDetail} title="CDF">{chartData === null ? null : <GeoEyeChart ariaLabel={`${activeVariable.label} cumulative distribution`} exportFeature="statistics" exportName={`CDF - ${activePopulation.label}`} loading={runEngine.pending} option={chartData.cdf} />}</ChartFrame> : null}
+              {distributionChart === 'all' || distributionChart === 'probability' ? <ChartFrame detail={probabilityDetail} title="Probability plot">{chartData === null ? null : <GeoEyeChart ariaLabel={`${activeVariable.label} probability plot`} exportFeature="statistics" exportName={`Probability plot - ${activePopulation.label}`} loading={runEngine.pending} option={chartData.probability} />}</ChartFrame> : null}
+              {distributionChart === 'all' || distributionChart === 'box' ? <ChartFrame detail="Raw and declustered five-number summaries" title="Box plot">{chartData === null ? null : <GeoEyeChart ariaLabel={`${activeVariable.label} box plot`} exportFeature="statistics" exportName={`Box plot - ${activePopulation.label}`} clickSelection="replace" loading={runEngine.pending} option={chartData.box} />}</ChartFrame> : null}
             </div>
           </section>
           <RawSourceTable observations={populationObservations} selectedIds={selectedSet} variable={activeVariable} />
@@ -483,16 +530,18 @@ export function ExplorePage() {
 
         {view === 'relationships' ? <div className="eda-workspace eda-workspace-wide eda-relationship-workspace"><section className="panel eda-main-panel"><div className="eda-relationship-view">
           <div className="eda-relationship-config">
-            <div className="eda-relationship-datasets"><span>Datasets</span>{relationshipDatasets.map((item) => <span className="eda-dataset-chip" key={item.id}>{item.name}{relationshipDatasets.length > 1 ? <button aria-label={`Remove ${item.name}`} onClick={() => removeRelationshipDataset(item.id)} type="button"><X size={12} /></button> : null}</span>)}<select aria-label="Add relationship dataset" disabled={availableRelationshipDatasets.length === 0} onChange={(event) => addRelationshipDataset(event.target.value)} value=""><option value="">{availableRelationshipDatasets.length === 0 ? 'All datasets added' : '+ Add dataset'}</option>{availableRelationshipDatasets.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><small className="eda-match-method">interval-overlap matching</small></div>
+            <div className="eda-relationship-datasets"><span>Datasets</span>{relationshipDatasets.map((item) => <span className="eda-dataset-chip" key={item.id}>{item.name}{relationshipDatasets.length > 1 ? <button aria-label={`Remove ${item.name}`} onClick={() => removeRelationshipDataset(item.id)} type="button"><X size={12} /></button> : null}</span>)}<select aria-label="Add relationship dataset" disabled={availableRelationshipDatasets.length === 0} onChange={(event) => addRelationshipDataset(event.target.value)} value=""><option value="">{availableRelationshipDatasets.length === 0 ? 'All datasets added' : '+ Add dataset'}</option>{availableRelationshipDatasets.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><small className="eda-match-method">{relationshipResult.matchMetadata.method === 'row-identity' ? 'same-row matching' : 'interval-overlap matching'}</small></div>
             <div className="eda-axis-builder"><strong>X axis</strong><label><span>Dataset</span><select aria-label="X axis dataset" onChange={(event) => { const next = datasets.find((item) => item.id === event.target.value); const variable = next?.variables.find((item) => item.dataType !== 'category'); if (variable !== undefined) selectRelationshipAxis('x', event.target.value, variable.key) }} value={xDataset?.id}>{relationshipDatasets.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label><span>Variable</span><select aria-label="X axis variable" onChange={(event) => selectRelationshipAxis('x', xDataset?.id ?? '', event.target.value as EdaVariableKey)} value={xVariable?.key}>{xDataset?.variables.filter((item) => item.dataType !== 'category').map((item) => <option key={item.key} value={item.key}>{item.label} · {item.unit}</option>)}</select></label></div>
             <div className="eda-axis-builder"><strong>Y axis</strong><label><span>Dataset</span><select aria-label="Y axis dataset" onChange={(event) => { const next = datasets.find((item) => item.id === event.target.value); const variable = next?.variables.find((item) => item.dataType !== 'category'); if (variable !== undefined) selectRelationshipAxis('y', event.target.value, variable.key) }} value={yDataset?.id}>{relationshipDatasets.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label><span>Variable</span><select aria-label="Y axis variable" onChange={(event) => selectRelationshipAxis('y', yDataset?.id ?? '', event.target.value as EdaVariableKey)} value={yVariable?.key}>{yDataset?.variables.filter((item) => item.dataType !== 'category').map((item) => <option key={item.key} value={item.key}>{item.label} · {item.unit}</option>)}</select></label></div>
           </div>
 
           {relationshipView === 'facets' ? <section className="eda-facets-panel eda-relationship-facets"><GeoEyeFacetChart
             ariaLabel="Relationship population facets"
-            buildOption={({ relationship }) => buildScatterOption(relationship, { x: `${xVariable?.shortLabel ?? 'X'} (${xVariable?.unit ?? ''})`, y: `${yVariable?.shortLabel ?? 'Y'} (${yVariable?.unit ?? ''})` })}
+            exportFeature="statistics"
+            exportPrefix={scatterName}
+            buildOption={({ relationship }) => buildScatterOption(relationship, { x: axisTitle(xVariable?.shortLabel ?? 'X', xVariable?.unit), y: axisTitle(yVariable?.shortLabel ?? 'Y', yVariable?.unit) }, overlayOptions)}
             chartProps={{ clickSelection: 'replace', loading: runEngine.pending }}
-            facets={relationshipFacets.map((facet) => ({ ...facet, subtitle: `n = ${facet.result.relationship.matchMetadata.matchedObservationCount.toLocaleString()} · r = ${facet.result.relationship.correlation?.toFixed(3) ?? '—'}` }))}
+            facets={relationshipFacets.filter((facet) => facet.result.relationship.matchMetadata.matchedObservationCount > 0).map((facet) => ({ ...facet, subtitle: `n = ${facet.result.relationship.matchMetadata.matchedObservationCount.toLocaleString()} · r = ${facet.result.relationship.correlation?.toFixed(3) ?? '—'}` }))}
             onFacetClick={(facet) => openRelationshipFacet(facet.id)}
           /></section> : null}
 
@@ -503,18 +552,19 @@ export function ExplorePage() {
               <span><small>Spearman ρ</small><strong>{detailRelationship.spearman?.toFixed(3) ?? '—'}</strong></span>
               <span><small>Regression R² <em>diagnostic</em></small><strong>{detailRelationship.regression?.rSquared.toFixed(3) ?? '—'}</strong></span>
             </div>
-            <div className="eda-chart-grid eda-relationship-detail-grid"><ChartFrame detail={`${detailRelationship.matchMetadata.matchedObservationCount.toLocaleString()} matched observations · ${detailRelationship.matchMetadata.method} match${selectedRelationshipFacet === undefined ? '' : ` · ${selectedRelationshipFacet.title}`}`} title={`${xVariable?.shortLabel ?? 'X'} × ${yVariable?.shortLabel ?? 'Y'} scatter plot`}><GeoEyeChart ariaLabel="Selected X and Y relationship scatter plot" brushSelection="replace" clickSelection="toggle" loading={runEngine.pending} option={scatterOption} /></ChartFrame></div>
+            <div className="eda-chart-grid eda-relationship-detail-grid"><ChartFrame detail={`${detailRelationship.matchMetadata.matchedObservationCount.toLocaleString()} matched observations · ${detailRelationship.matchMetadata.method} match${selectedRelationshipFacet === undefined ? '' : ` · ${selectedRelationshipFacet.title}`}`} title={`${xVariable?.shortLabel ?? 'X'} × ${yVariable?.shortLabel ?? 'Y'} scatter plot`}><GeoEyeChart ariaLabel="Selected X and Y relationship scatter plot" exportFeature="statistics" exportName={`${scatterName}${selectedRelationshipFacet === undefined ? '' : ` - ${selectedRelationshipFacet.title}`}`} brushSelection="replace" clickSelection="toggle" loading={runEngine.pending} option={scatterOption} /></ChartFrame></div>
           </div> : null}
 
           {relationshipView === 'matrix' && matrixQuery.isError ? <p role="alert">The correlation matrix could not be prepared. Change the selection to retry.</p> : null}
-          {relationshipView === 'matrix' ? <div className="eda-chart-grid eda-relationship-matrix-grid"><ChartFrame detail={`${labeledMatrixVariables.length} numeric variables from selected datasets · each cell shows matched n · click a cell to open Detail`} title={`${correlationMethod === 'pearson' ? 'Pearson' : 'Spearman'} correlation matrix`}><GeoEyeChart ariaLabel={`${correlationMethod} correlation matrix`} clickSelection="replace" loading={matrixQuery.isFetching} onDatumClick={openMatrixCell} option={matrixOption} renderer="svg" /></ChartFrame></div> : null}
+          {relationshipView === 'matrix' ? <div className="eda-chart-grid eda-relationship-matrix-grid"><ChartFrame detail={`${labeledMatrixVariables.length} numeric variables from selected datasets · each cell shows matched n · click a cell to open Detail`} title={`${correlationMethod === 'pearson' ? 'Pearson' : 'Spearman'} correlation matrix`}><GeoEyeChart ariaLabel={`${correlationMethod} correlation matrix`} exportFeature="statistics" exportName={`${correlationMethod === 'pearson' ? 'Pearson' : 'Spearman'} correlation matrix`} clickSelection="replace" loading={matrixQuery.isFetching} onDatumClick={openMatrixCell} option={matrixOption} renderer="svg" /></ChartFrame></div> : null}
         </div></section>
         {relationshipView === 'detail' && xVariable !== undefined && yVariable !== undefined ? <RelationshipSourceTable pairs={detailRelationship.points} selectedIds={selectedSet} xVariable={xVariable} yVariable={yVariable} /> : null}
         </div> : null}
 
-        {view === 'swath' ? <div className="eda-workspace eda-workspace-wide"><section className="panel eda-main-panel"><div className="eda-spatial-view"><ChartFrame detail="Equal-width bins · click a point to link source observations" title={`${activeVariable.shortLabel} spatial trend`}>{swathOption === null ? null : <GeoEyeChart ariaLabel={`${activeVariable.label} ${swathAxis} spatial trend`} clickSelection="replace" option={swathOption} />}</ChartFrame><div className="eda-swath-table" role="table" aria-label="Spatial bin values"><div className="eda-swath-row is-header" role="row"><span>Bin range</span><span>Samples</span><span>Mean</span><span>Median</span></div>{swath.map((bin) => <div className="eda-swath-row" key={bin.midpoint} role="row"><span>{bin.from.toFixed(1)}–{bin.to.toFixed(1)} m</span><strong>{bin.count}</strong><span>{formatNumber(bin.mean, activeVariable, true)}</span><span>{formatNumber(bin.median, activeVariable, true)}</span></div>)}</div></div></section></div> : null}
+        {view === 'swath' ? <div className="eda-workspace eda-workspace-wide"><section className="panel eda-main-panel"><div className="eda-spatial-view"><ChartFrame detail="Equal-width bins · click a point to link source observations" title={`${activeVariable.shortLabel} spatial trend`}>{swathOption === null ? null : <GeoEyeChart ariaLabel={`${activeVariable.label} ${swathAxis} spatial trend`} exportFeature="statistics" exportName={`Spatial trend ${swathAxis} - ${activePopulation.label}`} clickSelection="replace" option={swathOption} />}</ChartFrame><div className="eda-swath-table" role="table" aria-label="Spatial bin values"><div className="eda-swath-row is-header" role="row"><span>Bin range</span><span>Samples</span><span>Mean</span><span>Median</span></div>{swath.map((bin) => <div className="eda-swath-row" key={bin.midpoint} role="row"><span>{bin.from.toFixed(1)}–{bin.to.toFixed(1)} m</span><strong>{bin.count}</strong><span>{formatNumber(bin.mean, activeVariable, true)}</span><span>{formatNumber(bin.median, activeVariable, true)}</span></div>)}</div></div></section></div> : null}
 
       </> : null}
+      <SaveExportBar lineage={() => ({ chart: facetChart, configuration: activeRun.configuration, layout: resultMode, run: activeRun.runNumber, view })} summary={`Statistics · ${activeRun.configuration.datasetName} · run #${activeRun.runNumber}`} tables={statisticsTables} />
     </>}
   </div>
 }
@@ -524,5 +574,5 @@ function RawSourceTable({ observations, selectedIds, variable }: { observations:
 }
 
 function RelationshipSourceTable({ pairs, selectedIds, xVariable, yVariable }: { pairs: readonly JoinedPair[]; selectedIds: ReadonlySet<string>; xVariable: EdaVariableDefinition; yVariable: EdaVariableDefinition }) {
-  return <section className="panel eda-source-data-panel eda-relationship-source-panel"><header><div><h3>Linked source observations</h3><p>{pairs.length.toLocaleString()} matched observations · interval-overlap match</p></div></header><div className="eda-source-data-wrap"><table className="eda-source-data-table eda-relationship-source-table"><thead><tr><th>Matched support</th><th>Source observations</th><th>{xVariable.shortLabel} ({xVariable.unit})</th><th>{yVariable.shortLabel} ({yVariable.unit})</th></tr></thead><tbody>{pairs.map((pair) => <tr className={pair.sourceObservationIds.some((id) => selectedIds.has(id)) ? 'is-selected' : ''} key={pair.id}><th scope="row"><strong>{pair.joinKey}</strong><small>interval-overlap</small></th><td>{pair.sourceObservationIds.map((id) => <small className="eda-source-lineage-id" key={id}>{id}</small>)}</td><td>{formatNumber(pair.x, xVariable, true)}</td><td>{formatNumber(pair.y, yVariable, true)}</td></tr>)}</tbody></table></div></section>
+  return <section className="panel eda-source-data-panel eda-relationship-source-panel"><header><div><h3>Linked source observations</h3><p>{pairs.length.toLocaleString()} matched observations · {pairs.length > 0 && pairs.every((pair) => pair.matchMethod === 'row-identity') ? 'same-row match' : 'interval-overlap match'}</p></div></header><div className="eda-source-data-wrap"><table className="eda-source-data-table eda-relationship-source-table"><thead><tr><th>Matched support</th><th>Source observations</th><th>{xVariable.shortLabel} ({xVariable.unit})</th><th>{yVariable.shortLabel} ({yVariable.unit})</th></tr></thead><tbody>{pairs.map((pair) => <tr className={pair.sourceObservationIds.some((id) => selectedIds.has(id)) ? 'is-selected' : ''} key={pair.id}><th scope="row"><strong>{pair.joinKey}</strong><small>{pair.matchMethod === 'row-identity' ? 'same row' : 'interval-overlap'}</small></th><td>{pair.sourceObservationIds.map((id) => <small className="eda-source-lineage-id" key={id}>{id}</small>)}</td><td>{formatNumber(pair.x, xVariable, true)}</td><td>{formatNumber(pair.y, yVariable, true)}</td></tr>)}</tbody></table></div></section>
 }

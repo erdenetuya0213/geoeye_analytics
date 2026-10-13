@@ -41,3 +41,20 @@ export function buildFanOption(fan: FanResult | null, sill: number, fraction = 0
     series: [{ type: 'line', coordinateSystem: 'polar', data: [...data, data[0] ?? [0, 0]], symbol: 'circle', symbolSize: 5, lineStyle: { color: c.accent, width: 2 }, itemStyle: { color: c.accent }, areaStyle: { color: c.accent, opacity: 0.12 } }],
   }
 }
+
+/** Polar variogram map from the fan: angle × lag → γ, mirrored to 360°. */
+export function buildVariogramMapOption(fan: FanResult | null, sill: number): EChartsCoreOption {
+  const rays = fan?.rays ?? []
+  const step = rays.length > 0 ? 180 / rays.length : 10
+  const angles = Array.from({ length: Math.round(360 / step) }, (_, i) => Math.round(i * step))
+  const lags = [...new Set(rays.flatMap((r) => r.lags.map((l) => Math.round(l.distance))))].sort((a, b) => a - b)
+  const data = rays.flatMap((r) => r.lags.flatMap((l) => { const li = lags.indexOf(Math.round(l.distance)); const a1 = angles.indexOf(Math.round(r.angle)); const a2 = angles.indexOf(Math.round((r.angle + 180) % 360)); return [[li, a1, l.gamma], [li, a2, l.gamma]] }))
+  return {
+    polar: { radius: ['8%', '78%'] },
+    angleAxis: { type: 'category', data: angles.map((a) => `${a}°`), startAngle: 90, clockwise: true, boundaryGap: true, axisLabel: { color: c.muted, interval: Math.max(0, Math.round(30 / step) - 1) }, splitLine: { show: false } },
+    radiusAxis: { type: 'category', data: lags.map(String), axisLabel: { color: c.muted, interval: Math.max(0, Math.ceil(lags.length / 5) - 1) }, splitLine: { show: false } },
+    visualMap: { min: 0, max: sill * 1.3, calculable: false, right: 0, top: 'middle', itemHeight: 90, inRange: { color: ['#2d4a66', '#3f7f9f', '#8cc1a6', '#f1d26b', '#d58b46', '#b25f68'] }, textStyle: { color: c.muted } },
+    tooltip: { trigger: 'item', formatter: (p: { data: number[] }) => `${angles[p.data[1] ?? 0]}° · ${lags[p.data[0] ?? 0]} m · γ ${p.data[2]?.toFixed(3)}` },
+    series: [{ type: 'heatmap', coordinateSystem: 'polar', data, emphasis: { itemStyle: { borderColor: '#fff', borderWidth: 1 } } }],
+  }
+}

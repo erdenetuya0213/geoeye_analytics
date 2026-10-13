@@ -15,11 +15,17 @@ import {
 import { init, use, type EChartsCoreOption, type EChartsType } from 'echarts/core'
 import { CanvasRenderer, SVGRenderer } from 'echarts/renderers'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { useChartDesign } from '../state/ChartDesignContext.js'
+import { Download } from 'lucide-react'
+import { chartPng, saveExportFiles } from '../data/exportBundle.js'
+import { useChartRegistry } from '../state/ChartRegistryContext.js'
+import { useExportTarget } from '../state/ExportContext.js'
+import { ExportDialog } from './ExportDialog.js'
+import type { ExportFeature, ExportFile } from '../desktop/bridge.js'
+import { useChartDesign, useGraphSettings } from '../state/ChartDesignContext.js'
 import { useGeoEyeSelection } from '../state/SelectionContext.js'
 import { applyChartDesign, chartDesignById, type ChartSurfaceColors } from '../visualization/chartDesigns.js'
 import { geoEyeChartColors, geoEyeThemeName } from '../visualization/geoEyeTheme.js'
-import { desktopBridge } from '../desktop/bridge.js'
+import { applyGraphSettings } from '../visualization/graphSettings.js'
 
 use([
   AriaComponent,
@@ -53,7 +59,12 @@ export interface GeoEyeChartProps {
   onDatumClick?: (datum: unknown) => void
   onObservationClick?: (sourceObservationIds: readonly string[]) => void
   onObservationSelection?: (sourceObservationIds: readonly string[]) => void
+  /** Receives the live chart instance after init (null on dispose). */
+  onReady?: (chart: EChartsType | null) => void
   option: EChartsCoreOption
+  /** Enables the per-chart ⤓ (transparent PNG) and registers the chart for the page-level Save. */
+  exportName?: string
+  exportFeature?: ExportFeature
   renderer?: 'canvas' | 'svg'
   /** Keep scientific figure styling (flat marks, exact axes) supplied by the author. */
   publicationStyle?: boolean
@@ -202,12 +213,22 @@ export function GeoEyeChart({
   onDatumClick,
   onObservationClick,
   onObservationSelection,
+  onReady,
   option,
   renderer = 'canvas',
   publicationStyle = false,
   exportFileName,
   exportSize,
+  exportName,
+  exportFeature,
 }: GeoEyeChartProps) {
+  const registry = useChartRegistry()
+  const exportTarget = useExportTarget(exportFeature)
+  const graphName = exportName ?? ariaLabel
+  const graphSettings = useGraphSettings()
+  const [naming, setNaming] = useState(false)
+  const [pendingFigure, setPendingFigure] = useState<ExportFile[] | null>(null)
+  const [downloadNotice, setDownloadNotice] = useState('')
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<EChartsType | null>(null)
   const [visible, setVisible] = useState(() => typeof IntersectionObserver === 'undefined')
@@ -225,8 +246,8 @@ export function GeoEyeChart({
     text: design.text,
   }), [design])
   const designedOption = useMemo(
-    () => publicationStyle ? option : applyChartDesign(option, designId, surfaceColors ?? fallbackSurface),
-    [designId, fallbackSurface, option, publicationStyle, surfaceColors],
+    () => publicationStyle ? option : applyGraphSettings(applyChartDesign(option, designId, surfaceColors ?? fallbackSurface), graphSettings),
+    [designId, fallbackSurface, graphSettings, option, publicationStyle, surfaceColors],
   )
   const effectiveOption = useMemo(() => selectedOption(designedOption, selectedIds), [designedOption, selectedIds])
   const stableOption = useMemo(() => ({
@@ -265,16 +286,20 @@ export function GeoEyeChart({
     if (container === null || !visible) return undefined
     const chart = init(container, geoEyeThemeName(designId), { renderer })
     chartRef.current = chart
+    onReady?.(chart)
+    const unregister = registry?.register(graphName, chart)
     const observer = new ResizeObserver(() => {
       if (container.isConnected) chart.resize()
     })
     observer.observe(container)
     return () => {
       observer.disconnect()
+      unregister?.()
+      onReady?.(null)
       chart.dispose()
       chartRef.current = null
     }
-  }, [designId, renderer, visible])
+  }, [designId, renderer, visible, graphName, registry])
 
   useEffect(() => {
     const chart = chartRef.current
@@ -326,49 +351,57 @@ export function GeoEyeChart({
     }
   }, [addSelection, brushSelection, clickSelection, designId, onDatumClick, onObservationClick, onObservationSelection, renderer, replaceSelection, stableOption, toggleSelection, visible])
 
-  const exportImages = async (formats: Array<'png' | 'svg'>) => {
+  // Publication figures: render PNG/SVG at the requested size, then name and save them into export/<Feature>.
+  const exportImages = (formats: Array<'png' | 'svg'>) => {
     if (chartRef.current === null || exporting) return
-    setExporting(true); setExportNotice('')
-    try {
-      const name = (exportFileName ?? 'analytics-chart').replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 100).replace(/^-+/, '') || 'analytics-chart'
-      const width = exportSize?.width ?? 1440
-      const height = exportSize?.height ?? 900
-      // Export the actual current option, including legend state and selection.
-      const current = chartRef.current.getOption()
-      const exportOption = { ...current, animation: false, tooltip: { show: false }, toolbox: { show: false } }
-      const images = formats.map(format => {
-        const host = document.createElement('div')
-        Object.assign(host.style, { position: 'fixed', left: '-100000px', width: `${width}px`, height: `${height}px` })
-        document.body.appendChild(host)
-        const chart = init(host, undefined, { width, height, renderer: format === 'svg' ? 'svg' : 'canvas' })
-        try {
-          chart.setOption(exportOption, { notMerge: true, lazyUpdate: false })
-          return { name, format, dataUrl: chart.getDataURL({ type: format, pixelRatio: format === 'png' ? 2 : 1, backgroundColor: String(current.backgroundColor || '#ffffff'), excludeComponents: ['toolbox'] }) }
-        } finally { chart.dispose(); host.remove() }
-      })
-      const native = desktopBridge()
-      if (native?.exportChartImages) {
-        const result = await native.exportChartImages({ images })
-        setExportNotice(result.canceled ? 'Export canceled.' : `Saved: ${result.paths.join(' · ')}`)
-      } else {
-        for (const image of images) {
-          const link = document.createElement('a')
-          link.href = image.dataUrl; link.download = `${image.name}.${image.format}`; link.click()
-        }
-        setExportNotice('Chart downloads requested.')
-      }
-    } catch (error) { setExportNotice(`Export failed: ${error instanceof Error ? error.message : String(error)}`) }
+    setExportNotice('')
+    const name = exportFileName ?? graphName
+    const width = exportSize?.width ?? 1440
+    const height = exportSize?.height ?? 900
+    // Export the actual current option, including legend state and selection.
+    const current = chartRef.current.getOption()
+    const exportOption = { ...current, animation: false, tooltip: { show: false }, toolbox: { show: false } }
+    setPendingFigure(formats.map((format): ExportFile => {
+      const host = document.createElement('div')
+      Object.assign(host.style, { position: 'fixed', left: '-100000px', width: `${width}px`, height: `${height}px` })
+      document.body.appendChild(host)
+      const chart = init(host, undefined, { width, height, renderer: format === 'svg' ? 'svg' : 'canvas' })
+      try {
+        chart.setOption(exportOption, { notMerge: true, lazyUpdate: false })
+        const dataUrl = chart.getDataURL({ type: format, pixelRatio: format === 'png' ? 2 : 1, backgroundColor: String(current.backgroundColor || '#ffffff'), excludeComponents: ['toolbox'] })
+        if (format === 'png') return { dataUrl, kind: 'png', name }
+        const body = dataUrl.slice(dataUrl.indexOf(',') + 1)
+        return { contents: dataUrl.includes(';base64,') ? atob(body) : decodeURIComponent(body), kind: 'svg', name }
+      } finally { chart.dispose(); host.remove() }
+    }))
+  }
+  const saveFigure = async (files: ExportFile[], names: string[]) => {
+    setPendingFigure(null); setExporting(true)
+    try { const result = await saveExportFiles(exportTarget, files.map((file, index) => ({ ...file, name: names[index] ?? file.name }))); setExportNotice(`Saved: ${result.paths.join(' · ')}`) }
+    catch (error) { setExportNotice(`Export failed: ${error instanceof Error ? error.message : String(error)}`) }
     finally { setExporting(false) }
   }
-  if (exportFileName === undefined) return <div aria-label={ariaLabel} className={`geoeye-chart geoeye-chart-${designId} ${className}`.trim()} ref={containerRef} role="img" />
+  const downloadOne = async (name: string) => {
+    const chart = chartRef.current; if (chart === null) return
+    try { const r = await saveExportFiles(exportTarget, [{ name, kind: 'png', dataUrl: chartPng(chart) }]); setDownloadNotice(`Saved ${r.paths[0] ?? ''}`) }
+    catch (error) { setDownloadNotice(`Export failed: ${error instanceof Error ? error.message : String(error)}`) }
+    finally { setNaming(false); window.setTimeout(() => setDownloadNotice(''), 4000) }
+  }
+  if (exportFileName === undefined) return <div className="geoeye-chart-wrap">
+    <div aria-label={ariaLabel} className={`geoeye-chart geoeye-chart-${designId} ${className}`.trim()} ref={containerRef} role="img" />
+    <button aria-label={`Download ${graphName} as PNG`} className="chart-download" onClick={() => setNaming(true)} title={`Download PNG (transparent) to export/${exportTarget.folder}`} type="button"><Download size={13} /></button>
+    {downloadNotice ? <span className="chart-download-notice" role="status">{downloadNotice}</span> : null}
+    {naming ? <ExportDialog items={[{ kind: 'png', name: graphName }]} onCancel={() => setNaming(false)} onConfirm={([name]) => { void downloadOne(name ?? graphName) }} target={exportTarget} title="Download chart" /> : null}
+  </div>
   return <div className={`geoeye-chart geoeye-export-chart ${className}`.trim()}>
     <div className="geoeye-export-toolbar" onClick={event => event.stopPropagation()}>
       <span>Export current figure</span>
-      <button type="button" disabled={exporting || loading} onClick={() => void exportImages(['png'])}>PNG</button>
-      <button type="button" disabled={exporting || loading} onClick={() => void exportImages(['svg'])}>SVG</button>
-      <button type="button" disabled={exporting || loading} onClick={() => void exportImages(['png', 'svg'])}>{exporting ? 'Exporting…' : 'PNG + SVG'}</button>
+      <button type="button" disabled={exporting || loading} onClick={() => exportImages(['png'])}>PNG</button>
+      <button type="button" disabled={exporting || loading} onClick={() => exportImages(['svg'])}>SVG</button>
+      <button type="button" disabled={exporting || loading} onClick={() => exportImages(['png', 'svg'])}>{exporting ? 'Exporting…' : 'PNG + SVG'}</button>
       <span className="geoeye-export-notice" role="status">{exportNotice}</span>
     </div>
+    {pendingFigure !== null ? <ExportDialog items={pendingFigure} onCancel={() => setPendingFigure(null)} onConfirm={(names) => { void saveFigure(pendingFigure, names) }} target={exportTarget} title={`Save to export/${exportTarget.folder}`} /> : null}
     <div aria-label={ariaLabel} className={`geoeye-chart-canvas geoeye-chart-${designId}`} ref={containerRef} role="img" />
   </div>
 }

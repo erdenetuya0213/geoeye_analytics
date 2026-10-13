@@ -1,9 +1,12 @@
 import type { FieldLoggingOverview, FieldLoggingSubmission, ProjectSummary } from '@geoeye/datapool-client'
 import { CircleAlert, Gem, Layers3, Palette, RefreshCw, Search, Shield, Waypoints } from 'lucide-react'
 import { useDeferredValue } from 'react'
+import { SaveExportBar } from '../components/SaveExportBar.js'
+import { loggingDatasetFor, loggingSheetCsv } from '../data/loggingSheet.js'
 import { usePersistentState } from '../state/persistentState.js'
 
 interface LiveLoggingPageProps {
+  holeNames: ReadonlyMap<string, string>
   onRefresh: () => Promise<void>
   overview: FieldLoggingOverview | null
   project: ProjectSummary
@@ -33,7 +36,7 @@ function filledRecordCount(submission: FieldLoggingSubmission): number {
   return submission.selectedRowCount + submission.intervalCount + submission.structureCount
 }
 
-export function LiveLoggingPage({ onRefresh, overview, project, refreshing }: LiveLoggingPageProps) {
+export function LiveLoggingPage({ holeNames, onRefresh, overview, project, refreshing }: LiveLoggingPageProps) {
   const [activeTemplateId, setActiveTemplateId] = usePersistentState<string | null>('liveLogging.activeTemplateId', null, { scope: project.id })
   const [selectedKey, setSelectedKey] = usePersistentState<string | null>('liveLogging.selectedKey', null, { scope: project.id })
   const [query, setQuery] = usePersistentState('liveLogging.query', '', { scope: project.id })
@@ -45,6 +48,8 @@ export function LiveLoggingPage({ onRefresh, overview, project, refreshing }: Li
     submission.templateId === activeTemplate?.id
     && `${submission.holeName} ${submission.templateName}`.toLowerCase().includes(deferredQuery)
   ))
+  const sheet = loggingDatasetFor(overview?.datasets ?? [], activeTemplate)
+  const sheetHoles = new Set((sheet?.records ?? []).map((record) => record.holeId)).size
   const keyFor = (submission: FieldLoggingSubmission) => `${submission.holeId}:${submission.templateId}`
   const selected = filtered.find((submission) => keyFor(submission) === selectedKey) ?? filtered[0] ?? null
 
@@ -114,6 +119,14 @@ export function LiveLoggingPage({ onRefresh, overview, project, refreshing }: Li
           </aside>
         )}
       </div>
+
+      <SaveExportBar
+        disabled={sheet === undefined || sheet.records.length === 0}
+        summary={activeTemplate === null ? 'No logging template' : sheet === undefined || sheet.records.length === 0
+          ? `${activeTemplate.name} · no logged rows in the local copy`
+          : `${activeTemplate.name} · ${sheetHoles} ${sheetHoles === 1 ? 'hole' : 'holes'} · ${sheet.records.length.toLocaleString('en-US')} rows`}
+        tables={sheet === undefined || activeTemplate === null ? [] : [{ csv: () => loggingSheetCsv(sheet, holeNames), name: activeTemplate.name }]}
+      />
     </div>
   )
 }

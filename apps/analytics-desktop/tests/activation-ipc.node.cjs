@@ -80,7 +80,7 @@ test('native IPC requires activation, restores offline, writes real local data, 
     }
     call('geoeye:project:write', { address, record: { key: 'local', snapshot, draft: null, tabularDrafts: {} } })
     assert.equal(call('geoeye:project:read', address).snapshot.project.name, 'Local project')
-    assert.ok(fs.existsSync(path.join(workspace.rootPath, 'tenants', '_unassigned', 'projects', 'local-test', 'project.sqlite')))
+    assert.ok(fs.existsSync(path.join(workspace.rootPath, 'Unassigned', 'Local project', 'project.sqlite')))
     call('geoeye:project-documents:write', { address, key: 'test-import', value: '{"rows":1}' })
     assert.equal(call('geoeye:project-documents:read', address)['test-import'], '{"rows":1}')
 
@@ -101,7 +101,7 @@ test('native IPC requires activation, restores offline, writes real local data, 
     call('geoeye:project:write', { address, record: { key: 'local', snapshot, draft: dirty, tabularDrafts: {} } })
     const queued = call('geoeye:outbox:enqueue', { address, entity: 'drillholes', version: 'v1', requests: [{ path: '/v1/projects/local-test/drillholes/hole-1/collar', method: 'PUT', body: '{}' }] })
     const { DatabaseSync } = require('node:sqlite')
-    const verification = new DatabaseSync(path.join(workspace.rootPath, 'tenants', '_unassigned', 'projects', 'local-test', 'project.sqlite'))
+    const verification = new DatabaseSync(path.join(workspace.rootPath, 'Unassigned', 'Local project', 'project.sqlite'))
     verification.prepare("UPDATE transfer_outbox SET state='sent' WHERE id=?").run(queued[0].id)
     verification.close()
     call('geoeye:project:write', { address, record: { key: 'local', snapshot, draft: { ...dirty, dirty: true }, tabularDrafts: {} } })

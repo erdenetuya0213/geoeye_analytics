@@ -1,5 +1,7 @@
 import type { EdaObservation } from '../analysis/eda.js'
 
+export type { EdaObservation }
+
 export type EdaVariableKey = string
 
 export interface EdaVariableDefinition {

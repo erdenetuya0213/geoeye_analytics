@@ -9,6 +9,7 @@ const { createDatabaseConnection } = require('./database-connection.cjs')
 const { createWorkspaceFiles } = require('./workspace-files.cjs')
 const { validateChartImages, writeChartImages } = require('./chart-export.cjs')
 const { createAnalyticsEngine, resolveLaunch } = require('./analytics-engine.cjs')
+const { FEATURE_FOLDERS, saveExportBundle, suggestExportNames } = require('./export-bundle.cjs')
 let lastChartExportDirectory
 // Administrator provisioning is one-shot and never inherited by renderer processes.
 const databaseProvisioning = process.env.GEOEYE_DATABASE_PROVISION
@@ -220,6 +221,17 @@ function safeSegment(value, fallback) {
   return (normalized || fallback).slice(0, 120)
 }
 
+/** Folder name a person reads: keeps letters of any script, drops what Windows rejects. */
+function folderSegment(value, fallback) {
+  const normalized = String(value ?? '')
+    .replace(/[<>:"/\\|?*\u0000-\u001f]+/g, '-')
+    .replace(/\s+/g, ' ')
+    .replace(/^[\s.-]+|[\s.]+$/g, '')
+    .slice(0, 80)
+  if (/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i.test(normalized)) return `_${normalized}`
+  return normalized || fallback
+}
+
 function addressKey(address) {
   return `${endpointHash(address.endpoint)}#${safeSegment(address.accountId, 'local')}#${safeSegment(address.projectId, 'project')}`
 }
@@ -252,7 +264,131 @@ function createWorkspace(rootPath) {
       version: 1,
     }, null, 2)}\n`)
   }
-  for (const folder of ['tenants', 'imports', 'exports', 'sync']) fs.mkdirSync(path.join(rootPath, folder), { recursive: true })
+}
+
+/** <workspace>/<Tenant>/<Project>/ — both names as the Database shows them in the project dropdown. */
+function projectFolderSegments(project, address) {
+  return [
+    folderSegment(project?.organizationName ?? address.tenantId ?? '', 'Unassigned'),
+    folderSegment(project?.name ?? '', safeSegment(address.projectId, 'Project')),
+  ]
+}
+
+/** The folder this project should own; two projects of one name are kept apart by id. */
+function projectRelativePath(settings, key, current, segments, projectId) {
+  const free = (candidate) => {
+    if (candidate === current) return true
+    if (Object.entries(settings.projectRegistry).some(([other, entry]) => other !== key && entry.relativePath === candidate)) return false
+    return !fs.existsSync(path.resolve(settings.workspaceRoot, candidate))
+  }
+  const base = path.join(...segments)
+  if (free(base)) return base
+  const unique = path.join(segments[0], `${segments[1]} (${safeSegment(projectId, 'project').slice(0, 8)})`)
+  return free(unique) ? unique : current ?? base
+}
+
+/** Renaming a project in the Database renames its folder; an occupied target is never overwritten. */
+function moveProjectFolder(root, current, desired) {
+  if (current === null || current === desired) return desired
+  const from = path.resolve(root, current)
+  const to = path.resolve(root, desired)
+  if (!fs.existsSync(from)) return desired
+  if (fs.existsSync(to)) return current
+  try {
+    fs.mkdirSync(path.dirname(to), { recursive: true })
+    fs.renameSync(from, to)
+    return desired
+  } catch {
+    return current
+  }
+}
+
+function ensureProjectLayout(projectPath) {
+  for (const folder of Object.values(FEATURE_FOLDERS)) {
+    for (const kind of ['import', 'export']) fs.mkdirSync(path.join(projectPath, folder, kind), { recursive: true })
+  }
+}
+
+/** Moves the children of `from` into `to`. Never overwrites, never deletes a file. */
+function moveChildren(from, to) {
+  if (!fs.existsSync(from)) return false
+  let moved = false
+  fs.mkdirSync(to, { recursive: true })
+  for (const entry of fs.readdirSync(from)) {
+    const target = path.join(to, entry)
+    if (fs.existsSync(target)) continue
+    try { fs.renameSync(path.join(from, entry), target); moved = true } catch { /* leave the original in place */ }
+  }
+  removeEmpty(from)
+  return moved
+}
+
+function removeEmpty(directory, levels = 1) {
+  for (let level = 0; level < levels; level += 1) {
+    try { fs.rmdirSync(directory) } catch { return }
+    directory = path.dirname(directory)
+  }
+}
+
+/**
+ * Earlier builds kept imports, exports and sync at the workspace root under
+ * tenants/<id>/projects/<id>, and screen results under <project>/export/<Feature>.
+ * Everything moves into the project folder it belongs to.
+ */
+function migrateProjectFiles(settings, address, projectPath) {
+  const root = settings.workspaceRoot
+  const tail = path.join('tenants', safeSegment(address.tenantId, '_unassigned'), 'projects', safeSegment(address.projectId, 'project'))
+  const moves = [
+    [path.join(root, 'imports', tail), path.join(projectPath, FEATURE_FOLDERS.data, 'import')],
+    [path.join(root, 'exports', tail), path.join(projectPath, FEATURE_FOLDERS.data, 'export')],
+    [path.join(root, 'sync', tail), path.join(projectPath, 'sync')],
+  ]
+  for (const [from, to] of moves) {
+    if (moveChildren(from, to)) removeEmpty(path.dirname(from), 4)
+  }
+  const legacyExports = path.join(projectPath, 'export')
+  if (fs.existsSync(legacyExports)) {
+    for (const folder of fs.readdirSync(legacyExports)) moveChildren(path.join(legacyExports, folder), path.join(projectPath, folder, 'export'))
+    removeEmpty(legacyExports)
+  }
+  removeEmpty(path.join(root, 'tenants', safeSegment(address.tenantId, '_unassigned'), 'projects'), 3)
+  rewriteWorkspaceFilePaths(path.join(projectPath, 'project.sqlite'))
+}
+
+/** Stored file paths become project-relative, so a later rename of the project keeps them valid. */
+function rewriteWorkspaceFilePaths(databasePath) {
+  if (!fs.existsSync(databasePath)) return
+  const legacy = { exports: [FEATURE_FOLDERS.data, 'export'], imports: [FEATURE_FOLDERS.data, 'import'] }
+  const database = new DatabaseSync(databasePath)
+  try {
+    if (!database.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='workspace_files'").get()) return
+    const update = database.prepare('UPDATE workspace_files SET relative_path = ? WHERE id = ?')
+    for (const row of database.prepare('SELECT id, relative_path FROM workspace_files').all()) {
+      const parts = String(row.relative_path).split(/[\\/]+/)
+      const target = legacy[parts[0]]
+      if (target === undefined || parts[1] !== 'tenants' || parts[3] !== 'projects') continue
+      update.run(path.join(...target, ...parts.slice(5)), row.id)
+    }
+  } finally { database.close() }
+}
+
+/** Files the folder under the project's own name before anything is written to it. */
+function reserveProjectFolder(address, project) {
+  const settings = readSettings()
+  if (settings.workspaceRoot === null || project === null) return
+  const key = addressKey(address)
+  const current = settings.projectRegistry[key]?.relativePath ?? null
+  const desired = projectRelativePath(settings, key, current, projectFolderSegments(project, address), address.projectId)
+  const relativePath = moveProjectFolder(settings.workspaceRoot, current, desired)
+  if (relativePath === current) return
+  settings.projectRegistry[key] = {
+    ...settings.projectRegistry[key],
+    projectId: address.projectId,
+    relativePath,
+    tenantId: address.tenantId ?? null,
+    updatedAt: new Date().toISOString(),
+  }
+  writeSettings(settings)
 }
 
 function resolveProject(settings, address, create) {
@@ -426,6 +562,7 @@ function writeProjectRecord(input) {
   if (address.tenantId === undefined && record.snapshot?.project?.organizationId !== undefined) {
     address.tenantId = record.snapshot.project.organizationId
   }
+  reserveProjectFolder(address, record.snapshot?.project ?? null)
   const opened = openProject(address, true)
   const { database } = opened
   // A renderer save may have started before an upload was acknowledged. Never
@@ -579,7 +716,10 @@ function writeProjectRecord(input) {
     database.close()
   }
 
+  migrateProjectFiles(opened.settings, address, opened.projectPath)
+  ensureProjectLayout(opened.projectPath)
   opened.settings.projectRegistry[opened.registry.key] = {
+    ...opened.settings.projectRegistry[opened.registry.key],
     projectId: address.projectId,
     relativePath: opened.registry.relativePath,
     tenantId: address.tenantId ?? null,
@@ -827,6 +967,14 @@ function registerIpc() {
     try { return { ok: true, result: await analyticsEngine.call(input.method, input.params ?? {}) } }
     catch (error) { return { ok: false, error: error.message, type: error.type ?? null } }
   })
+  // Exports live with the project: <workspace>/<project folder>/export/<Feature>/.
+  const exportProjectPath = (input) => {
+    const project = resolveProject(readSettings(), requireAddress(input?.address), true)
+    if (project === null) throw new Error('Open a project before exporting.')
+    return project.projectPath
+  }
+  licensedHandle('geoeye:exports:suggest', (_event, input) => suggestExportNames({ projectPath: exportProjectPath(input), feature: input?.feature, files: input?.files ?? [] }))
+  licensedHandle('geoeye:exports:save', (_event, input) => saveExportBundle({ projectPath: exportProjectPath(input), feature: input?.feature, files: input?.files }))
   licensedHandle('geoeye:charts:export', async (event, input) => {
     const images = validateChartImages(input)
     const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender), {

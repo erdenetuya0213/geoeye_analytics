@@ -7,6 +7,8 @@ const segment = (value) => (String(value ?? '_unassigned').replace(/[^a-zA-Z0-9.
 
 // SQLite is authoritative. The folder manifests are readable, rebuildable mirrors,
 // never a source of executable requests (editing JSON cannot cause an upload).
+const { FEATURE_FOLDERS } = require('./export-bundle.cjs')
+
 function createWorkspaceFiles({ openProject, atomicWrite, requestDataPool, requireActive }) {
   const running = new Set()
   function open(address) {
@@ -26,34 +28,36 @@ function createWorkspaceFiles({ openProject, atomicWrite, requestDataPool, requi
     `)
     return project
   }
-  function directory(project, kind) {
-    const tenantId = project.settings.projectRegistry?.[project.registry.key]?.tenantId ?? project.address.tenantId
-    return path.join(project.settings.workspaceRoot, kind, 'tenants', segment(tenantId), 'projects', segment(project.address.projectId))
+  // Everything a project owns lives under its own folder: <Tenant>/<Project>/<Feature>/{import,export} and /sync.
+  function directory(project, kind, feature) {
+    if (kind === 'sync') return path.join(project.projectPath, 'sync')
+    return path.join(project.projectPath, FEATURE_FOLDERS[feature] ?? FEATURE_FOLDERS.data, kind === 'imports' ? 'import' : 'export')
   }
   const owner = project => digest(`${project.address.endpoint.replace(/\/$/, '').toLowerCase()}#${project.address.accountId ?? ''}`)
-  function persistFile(project, kind, name, bytes) {
+  /** Paths are stored relative to the project folder, so renaming a project or tenant keeps them valid. */
+  function persistFile(project, kind, name, bytes, feature) {
     const id = randomUUID()
-    const target = path.join(directory(project, kind), id, segment(name))
+    const target = path.join(directory(project, kind, feature), id, segment(name))
     atomicWrite(target, bytes)
     project.database.prepare('INSERT INTO workspace_files VALUES (?, ?, ?, ?, ?, ?)')
-      .run(id, kind, name, path.relative(project.settings.workspaceRoot, target), digest(bytes), new Date().toISOString())
+      .run(id, kind, name, path.relative(project.projectPath, target), digest(bytes), new Date().toISOString())
     return target
   }
-  function archive({ address, files }) {
+  function archive({ address, feature, files }) {
     if (!Array.isArray(files) || files.length > 10) throw new Error('Invalid import files.')
     const project = open(address)
     try {
       return files.map(file => {
         if (typeof file.name !== 'string' || typeof file.contents !== 'string' || Buffer.byteLength(file.contents) > 64 * 1024 * 1024) throw new Error('Import file is invalid or larger than 64 MB.')
         if (file.base64 !== undefined && (typeof file.base64 !== 'string' || file.base64.length > 90 * 1024 * 1024 || !/^[A-Za-z0-9+/]*={0,2}$/.test(file.base64))) throw new Error('Invalid source file bytes.')
-        return persistFile(project, 'imports', file.name, file.base64 === undefined ? Buffer.from(file.contents, 'utf8') : Buffer.from(file.base64, 'base64'))
+        return persistFile(project, 'imports', file.name, file.base64 === undefined ? Buffer.from(file.contents, 'utf8') : Buffer.from(file.base64, 'base64'), feature)
       })
     } finally { project.database.close() }
   }
-  function exportFile({ address, name, contents }) {
+  function exportFile({ address, contents, feature, name }) {
     if (typeof name !== 'string' || !/\.(json|csv|svg)$/i.test(name) || typeof contents !== 'string' || Buffer.byteLength(contents) > 128 * 1024 * 1024) throw new Error('Invalid export file.')
     const project = open(address)
-    try { return persistFile(project, 'exports', name, Buffer.from(contents, 'utf8')) }
+    try { return persistFile(project, 'exports', name, Buffer.from(contents, 'utf8'), feature) }
     finally { project.database.close() }
   }
   function list(project) {

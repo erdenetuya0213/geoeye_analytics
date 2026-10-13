@@ -2,13 +2,17 @@ import { useEffect, useMemo, useState } from 'react'
 import { ChevronDown, Compass, Copy, Play, RefreshCw, Sparkles } from 'lucide-react'
 import { callEngine, engineAvailable, type ExperimentalVariogram, type FanResult, type StructureType, type VariogramModel } from '../analysis/engineClient.js'
 import { defaultModel, practicalRange, withTotalSill } from '../analysis/variogramModel.js'
+import { experimentalAdvice, lagAdvice, modelAdvice, type Advice } from '../analysis/variogramAdvice.js'
 import { GeoEyeChart } from '../components/GeoEyeChart.js'
-import { useProjectEdaDatasets } from '../data/liveEda.js'
+import { VariogramPanel } from '../components/VariogramPanel.js'
+import { AnalysisScopePicker, useAnalysisScope } from '../components/AnalysisScope.js'
 import { usePersistentState } from '../state/persistentState.js'
-import { buildFanOption, buildVariogramOption, directionColors } from '../visualization/variogramCharts.js'
+import { variogramExports, type AxisDirection } from '../data/resultExport.js'
+import { SaveExportBar, type ExportTable } from '../components/SaveExportBar.js'
+import { buildFanOption, buildVariogramMapOption, buildVariogramOption, directionColors } from '../visualization/variogramCharts.js'
 
 type Transform = 'raw' | 'normal-scores' | 'log'
-interface Prepared { values: number[]; coordinates: number[][]; holeIds: string[]; extent: number; compositeLength: number; holeCount: number }
+interface Prepared { values: number[]; coordinates: number[][]; holeIds: string[]; extent: number; compositeLength: number; holeCount: number; collars: Array<[number, number]> }
 interface Experiments { downhole: ExperimentalVariogram; directions: ExperimentalVariogram[]; fan: FanResult; sill: number }
 
 const DOWNHOLE_LAGS = 50
@@ -30,9 +34,7 @@ function Panel({ children, detail, title, color }: { children: React.ReactNode; 
 }
 
 export function VariographyPage() {
-  const datasetsQuery = useProjectEdaDatasets()
-  const datasets = datasetsQuery.data ?? []
-  const [datasetId, setDatasetId] = usePersistentState('vg.datasetId', '')
+  const scope = useAnalysisScope()
   const [variableKey, setVariableKey] = usePersistentState('vg.variableKey', '')
   const [transform, setTransform] = usePersistentState<Transform>('vg.transform', 'normal-scores')
   const [strike, setStrike] = usePersistentState('vg.strike', 0)
@@ -46,13 +48,14 @@ export function VariographyPage() {
   const [model, setModel] = usePersistentState<VariogramModel | null>('vg.model', null)
   const [storedRun, setStoredRun] = usePersistentState<{ signature: string; experiments: Experiments } | null>('vg.lastRun', null)
   const [pending, setPending] = useState<string | null>(null)
+  const [fanView, setFanView] = usePersistentState<'fan' | 'map'>('vg.fanView', 'fan')
   const [error, setError] = useState<string | null>(null)
 
-  const dataset = datasets.find((d) => d.id === datasetId) ?? datasets[0]
+  const dataset = scope.dataset
   const numeric = dataset?.variables.filter((v) => v.dataType !== 'category') ?? []
   const variable = numeric.find((v) => v.key === variableKey) ?? numeric[0]
   const directions = principalDirections(strike, dip, plunge)
-  const signature = `${dataset?.id ?? ''}|${variable?.key ?? ''}|${transform}`
+  const signature = `${scope.signature}|${variable?.key ?? ''}|${transform}`
   const experiments = storedRun?.signature === signature ? storedRun.experiments : null
   const setExperiments = (next: Experiments | null) => setStoredRun(next === null ? null : { signature, experiments: next })
 
@@ -67,10 +70,13 @@ export function VariographyPage() {
     }
     if (values.length < 20) return null
     const extent = Math.max(robustSpan(coordinates.map((p) => p[0] ?? 0)), robustSpan(coordinates.map((p) => p[1] ?? 0)))
-    return { values, coordinates, holeIds, extent, compositeLength: Math.max(0.1, median(lengths)), holeCount: new Set(holeIds).size }
+    const collarMap = new Map<string, [number, number]>()
+    coordinates.forEach((p, i) => { const h = holeIds[i] ?? ''; if (!collarMap.has(h)) collarMap.set(h, [p[0] ?? 0, p[1] ?? 0]) })
+    return { values, coordinates, holeIds, extent, compositeLength: Math.max(0.1, median(lengths)), holeCount: collarMap.size, collars: [...collarMap.values()] }
   }, [dataset, variable, transform])
 
-  const autoLag = () => { if (prepared !== null) setLag(Number((prepared.extent / Math.max(2, Math.sqrt(prepared.holeCount))).toPrecision(2))) }
+  const advice = useMemo(() => prepared === null ? null : lagAdvice(prepared.collars, prepared.extent), [prepared])
+  const autoLag = () => { if (advice !== null) { setLag(advice.lag); setLagCount(advice.lagCount) } }
   useEffect(() => { if (lag === 0) autoLag() }, [prepared]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const run = async () => {
@@ -105,8 +111,23 @@ export function VariographyPage() {
   const updateModel = (next: VariogramModel) => setModel(withTotalSill(next))
   const setStructure = (i: number, patch: Partial<VariogramModel['structures'][number]>) => { if (model) updateModel({ ...model, structures: model.structures.map((s, k) => (k === i ? { ...s, ...patch } : s)) }) }
   const hMax = lag * lagCount
+  const spacing = advice?.spacing ?? lag
+  const explain: Advice[] = experiments === null ? [] : [
+    ...experimentalAdvice('Downhole', experiments.downhole, experiments.sill, prepared?.compositeLength ?? 1),
+    ...directions.flatMap((d, i) => experimentalAdvice(d.label, experiments.directions[i] ?? null, experiments.sill, spacing)),
+    ...(model === null ? [] : modelAdvice(model, spacing, hMax, prepared?.holeCount ?? 0)),
+  ]
+  const pairNote = (e: ExperimentalVariogram | undefined) => e === undefined ? '' : ` · ${e.lags.reduce((s, l) => s + l.pairs, 0).toLocaleString()} pairs${e.lags.some((l) => l.pairs < 30) ? ' · some lags < 30' : ''}`
   const downholeMax = prepared === null ? hMax : prepared.compositeLength * DOWNHOLE_LAGS
-  const exportJson = () => { if (model) void navigator.clipboard.writeText(JSON.stringify({ variable: variable?.key, transform, directions, model }, null, 2)) }
+  const runId = `variography-${signature.replace(/[^a-z0-9]+/gi, '-')}`
+  const stem = `variogram-${variable?.key ?? 'variable'}-${transform}`
+  const exportBundle = () => model === null || dataset === undefined ? null : variogramExports({ variable: variable?.key ?? '', transform, datasetName: dataset.name, runId, strike, dip, plunge, directions: directions as AxisDirection[], model, hMax })
+  const tables: ExportTable[] = [
+    { name: 'axes', csv: () => exportBundle()?.axisTable ?? '' },
+    { name: 'structures', csv: () => exportBundle()?.structures ?? '' },
+    { name: 'leapfrog', csv: () => exportBundle()?.leapfrog ?? '' },
+    { name: 'experimental', csv: () => experiments === null ? '' : ['direction,distance_m,gamma,pairs', ...[['downhole', experiments.downhole] as const, ...directions.map((d, i) => [d.label, experiments.directions[i]] as const)].flatMap(([label, e]) => (e?.lags ?? []).map((l) => `${label},${l.distance},${l.gamma},${l.pairs}`))].join('\n') + '\n' },
+  ]
 
   return <div className="page domain-page domain-simple-page vg-page">
     <h1 className="sr-only">Variography</h1>
@@ -114,14 +135,14 @@ export function VariographyPage() {
     {error ? <p role="alert">{error}</p> : null}
 
     <section className="analysis-toolbar eda-toolbar vg-toolbar">
-      <label className="tool-select tool-select-field eda-dataset-select"><span>Dataset snapshot</span><select aria-label="Variography dataset" onChange={(e) => setDatasetId(e.target.value)} value={dataset?.id ?? ''}>{datasets.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}</select><ChevronDown size={14} /></label>
+      <AnalysisScopePicker scope={scope} />
       <label className="tool-select tool-select-field"><span>Variable</span><select aria-label="Variography variable" onChange={(e) => setVariableKey(e.target.value)} value={variable?.key ?? ''}>{numeric.map((v) => <option key={v.key} value={v.key}>{v.shortLabel} · {v.unit}</option>)}</select><ChevronDown size={14} /></label>
       <label className="tool-select tool-select-field"><span>Transform</span><select aria-label="Transform" onChange={(e) => setTransform(e.target.value as Transform)} value={transform}><option value="normal-scores">Normal scores</option><option value="log">Log</option><option value="raw">Raw</option></select><ChevronDown size={14} /></label>
       <label className="tool-select tool-select-field tool-number-field" title="Strike azimuth of the mineralised plane"><span>Strike °</span><input aria-label="Strike" inputMode="decimal" onChange={(e) => setStrike(Number(e.target.value) || 0)} value={strike} /></label>
       <label className="tool-select tool-select-field tool-number-field"><span>Dip °</span><input aria-label="Dip" inputMode="decimal" onChange={(e) => setDip(Number(e.target.value) || 0)} value={dip} /></label>
       <label className="tool-select tool-select-field tool-number-field"><span>Plunge °</span><input aria-label="Plunge" inputMode="decimal" onChange={(e) => setPlunge(Number(e.target.value) || 0)} value={plunge} /></label>
       <label className="tool-select tool-select-field tool-number-field"><span>Lag (m)</span><input aria-label="Lag" inputMode="decimal" onChange={(e) => setLag(Number(e.target.value) || 1)} value={lag} /></label>
-      <button className="button button-secondary" onClick={autoLag} type="button" title="≈ drill spacing (extent / √holes)">Auto</button>
+      <button className="button button-secondary" onClick={autoLag} type="button" title={advice ? `Median collar spacing ${Math.round(advice.spacing)} m → lag ${advice.lag} m × ${advice.lagCount}` : 'Lag from drill spacing'}>Auto</button>
       <label className="tool-select tool-select-field tool-number-field"><span>Lags</span><input aria-label="Lag count" inputMode="numeric" onChange={(e) => setLagCount(Math.max(3, Number(e.target.value) || 12))} value={lagCount} /></label>
       <label className="tool-select tool-select-field tool-number-field"><span>Tolerance °</span><input aria-label="Angular tolerance" inputMode="decimal" onChange={(e) => setTolerance(Number(e.target.value) || 22.5)} value={tolerance} /></label>
       <label className="tool-select tool-select-field tool-number-field" title="0 = none"><span>Band (m)</span><input aria-label="Bandwidth" inputMode="decimal" onChange={(e) => setBandwidth(Number(e.target.value) || 0)} value={bandwidth} /></label>
@@ -130,12 +151,12 @@ export function VariographyPage() {
 
     {experiments !== null ? <>
       <section className="vg-grid">
-        <Panel color={directionColors[0] ?? ''} detail={`lag ${fmt(prepared?.compositeLength, 1)} m · along hole`} title="Downhole"><GeoEyeChart ariaLabel="Downhole variogram" option={buildVariogramOption(experiments.downhole, model, 3, experiments.sill, directionColors[0] ?? '', downholeMax)} /></Panel>
-        {directions.map((d, i) => <Panel color={directionColors[i + 1] ?? ''} detail={`az ${Math.round(d.azimuth)}° · dip ${Math.round(d.dip)}° · ±${tolerance}°`} key={d.label} title={d.label}><GeoEyeChart ariaLabel={`${d.label} variogram`} option={buildVariogramOption(experiments.directions[i] ?? null, model, i, experiments.sill, directionColors[i + 1] ?? '', hMax)} /></Panel>)}
-        <Panel color={directionColors[1] ?? ''} detail="Horizontal plane · 18 rays · 70 % sill reach" title="Continuity fan"><GeoEyeChart ariaLabel="Horizontal continuity fan" option={buildFanOption(experiments.fan, experiments.sill)} /></Panel>
+        <Panel color={directionColors[0] ?? ''} detail={`lag ${fmt(prepared?.compositeLength, 1)} m · along hole${pairNote(experiments.downhole)}`} title="Downhole"><VariogramPanel ariaLabel="Downhole variogram" exportName="downhole" color={directionColors[0] ?? ''} directionIndex={3} model={model} onModelChange={updateModel} option={buildVariogramOption(experiments.downhole, model, 3, experiments.sill, directionColors[0] ?? '', downholeMax)} /></Panel>
+        {directions.map((d, i) => <Panel color={directionColors[i + 1] ?? ''} detail={`az ${Math.round(d.azimuth)}° · dip ${Math.round(d.dip)}° · ±${tolerance}°${pairNote(experiments.directions[i])}`} key={d.label} title={d.label}><VariogramPanel ariaLabel={`${d.label} variogram`} exportName={`D${i + 1}`} color={directionColors[i + 1] ?? ''} directionIndex={i} model={model} onModelChange={updateModel} option={buildVariogramOption(experiments.directions[i] ?? null, model, i, experiments.sill, directionColors[i + 1] ?? '', hMax)} /></Panel>)}
+        <section className="eda-chart-card domain-chart-card vg-panel" style={{ borderTopColor: directionColors[1] }}><header><div><h3>{fanView === 'fan' ? 'Continuity fan' : 'Variogram map'}</h3><p>{fanView === 'fan' ? 'Horizontal · reach to 70 % sill per azimuth · long axis = strike' : 'Horizontal · γ by azimuth and lag · cool = continuous'}</p></div><div className="vg-model-actions"><button className={fanView === 'fan' ? 'ghost is-active' : 'ghost'} onClick={() => setFanView('fan')} type="button">Fan</button><button className={fanView === 'map' ? 'ghost is-active' : 'ghost'} onClick={() => setFanView('map')} type="button">Map</button></div></header><div className="eda-plot">{fanView === 'fan' ? <GeoEyeChart ariaLabel="Horizontal continuity fan" exportFeature="variography" exportName="fan" option={buildFanOption(experiments.fan, experiments.sill)} /> : <GeoEyeChart ariaLabel="Horizontal variogram map" exportFeature="variography" exportName="variogram-map" option={buildVariogramMapOption(experiments.fan, experiments.sill)} />}</div></section>
         <section className="eda-chart-card domain-chart-card vg-panel vg-model" style={{ borderTopColor: directionColors[3] }}>
           <header><div><h3>Model</h3><p>{model ? `total sill ${fmt(model.totalSill, 3)} · nugget ${Math.round((model.nugget / model.totalSill) * 100)} %${model.rmse !== undefined ? ` · fit rmse ${fmt(model.rmse, 3)}` : ''}` : 'no model yet'}</p></div>
-            <div className="vg-model-actions"><button className="ghost" disabled={pending !== null} onClick={() => { void autoFit() }} type="button"><Sparkles size={13} /> Auto-fit</button><button className="ghost" disabled={model === null} onClick={exportJson} type="button"><Copy size={13} /> Copy JSON</button></div></header>
+            <div className="vg-model-actions"><button className="ghost" disabled={pending !== null} onClick={() => { void autoFit() }} type="button"><Sparkles size={13} /> Auto-fit</button></div></header>
           {model ? <div className="vg-model-table">
             <div className="vg-row is-header"><span>Structure</span><span>Sill</span><span>D1 range</span><span>D2 range</span><span>D3 range</span><span>Downhole</span></div>
             <div className="vg-row"><strong>Nugget</strong><input inputMode="decimal" onChange={(e) => updateModel({ ...model, nugget: Number(e.target.value) || 0 })} step="0.01" type="number" value={Number(model.nugget.toFixed(4))} /><span /><span /><span /><span /></div>
@@ -150,6 +171,9 @@ export function VariographyPage() {
           </div> : null}
         </section>
       </section>
+      {explain.length > 0 ? <section className="panel vg-explain"><header><h3>What the data says</h3><span>{explain.filter((a) => a.severity === 'warn').length} warnings · {explain.filter((a) => a.severity === 'note').length} notes</span></header>
+        <ul>{explain.map((a, i) => <li className={`is-${a.severity}`} key={i}><i /><div><strong>{a.title}</strong><p>{a.detail}</p></div></li>)}</ul></section> : null}
+      <SaveExportBar disabled={model === null} lineage={() => ({ runId, scope: scope.summary, variable: variable?.key, transform, strike, dip, plunge, lag, lagCount, tolerance, bandwidth, directions, model, gslib: exportBundle()?.gslib })} summary={`${variable?.shortLabel ?? ''} · ${transform} · ${model ? `${model.structures.length} structures` : 'no model'}`} tables={tables} />
     </> : null}
   </div>
 }

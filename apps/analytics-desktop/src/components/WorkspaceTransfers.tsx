@@ -91,7 +91,6 @@ export function WorkspaceTransfers() {
       <button className="button button-primary" disabled={busy || workspace.localLoading || !workspace.connected || !workspace.project?.canWrite} onClick={() => void run(true)} type="button">{busy ? 'Working…' : 'Sync pending imports'}</button>
       {retryEnabled ? <button className="button button-secondary" onClick={() => setRetryEnabled(false)} type="button">Pause retries</button> : null}
     </div>
-    <p className="pool-live-note">Source CSVs: imports · Exports: exports · Transfer status: sync. Each folder is grouped by tenant and project. Retries run while this page is open; the queue survives closing the app.</p>
     {notice ? <p className="pool-live-note" role="status">{notice}</p> : null}
     {operations.filter(row => row.state !== 'sent' && row.state !== 'cancelled').map(row => <div className="pool-live-note" key={row.id}>
       <strong>{row.entity}: {row.state}</strong> · {row.lastError ?? 'Waiting to send'}

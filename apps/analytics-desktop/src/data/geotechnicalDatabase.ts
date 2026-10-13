@@ -14,14 +14,17 @@ import {
 import type { GeotechnicalSource, RmrDataset } from './geotechnicalTypes.js'
 import type { LocalTabularDraft } from './localProjectDb.js'
 import { liveFieldLoggingDatasets } from './fieldLoggingSources.js'
+import { SCHMIDT_VALID_RANGE, schmidtToUcsMpa } from '../analysis/schmidt.js'
 
 export type Rmr76ColumnMapping = Partial<Record<Rmr76CanonicalInputKey, string>>
 
 export interface Rmr76ParameterSource {
   columnKey: string
   sourceId: string
-  strengthMode?: 'ucs' | 'point-load' | 'field-grade' | 'unconfirmed'
+  strengthMode?: 'ucs' | 'point-load' | 'schmidt' | 'field-grade' | 'unconfirmed'
   ucsFactor?: number | undefined
+  /** Dry unit weight (kN/m³) for the Schmidt rebound → UCS relation. */
+  unitWeightKnM3?: number | undefined
   fallback?: { sourceId: string; columnKey: string; strengthMode: 'field-grade' } | undefined
 }
 
@@ -160,6 +163,7 @@ export function mappedValue(key: Rmr76CanonicalInputKey, value: unknown, excavat
   if (numericInputs.has(key)) {
     const number = numericValue(value)
     if (key !== 'geotech.ucs' || selection?.strengthMode === undefined || selection.strengthMode === 'ucs') return number
+    if (selection.strengthMode === 'schmidt') return number === null ? null : schmidtToUcsMpa(number, selection.unitWeightKnM3 ?? Number.NaN)
     if (selection.strengthMode === 'unconfirmed' || !Number.isFinite(selection.ucsFactor) || selection.ucsFactor! <= 0) return null
     return number === null ? null : number * selection.ucsFactor!
   }
@@ -192,7 +196,12 @@ export function isPointLoadColumn(column: DatabaseRmrColumn): boolean {
   return /\bis\s*\(?50\)?\b|point[ -]?load/i.test(`${column.sourceColumn ?? ''} ${column.displayName}`)
 }
 
+export function isSchmidtColumn(column: DatabaseRmrColumn): boolean {
+  return /schmidt|smidth|rebound/i.test(`${column.sourceColumn ?? ''} ${column.displayName}`)
+}
+
 export function rmrStrengthSourceLabel(name: string, selection: Rmr76ParameterSource): string {
+  if (selection.strengthMode === 'schmidt') return `${name} · Schmidt rebound → UCS · γ ${selection.unitWeightKnM3 ?? 'unset'} kN/m³ (R ${SCHMIDT_VALID_RANGE.min}–${SCHMIDT_VALID_RANGE.max})`
   return selection.strengthMode === 'point-load'
     ? `${name} · point-load Is(50) · UCS factor ${selection.ucsFactor ?? 'unset'}` : name
 }
@@ -386,7 +395,7 @@ export function buildJoinedRmrDataset(
   }
   const signature = RMR76_METHOD_DEFINITION.requiredInputs.map((definition) => {
     const selection = mapping[definition.key]
-    return `${definition.key}=${selection?.sourceId ?? ''}:${selection?.columnKey ?? ''}:${selection?.strengthMode ?? ''}:${selection?.ucsFactor ?? ''}:${JSON.stringify(selection?.fallback ?? null)}`
+    return `${definition.key}=${selection?.sourceId ?? ''}:${selection?.columnKey ?? ''}:${selection?.strengthMode ?? ''}:${selection?.ucsFactor ?? ''}:${selection?.unitWeightKnM3 ?? ''}:${JSON.stringify(selection?.fallback ?? null)}`
   }).join('|')
   const versions = [...selectedSources.values()].map((source) => source.dataset.currentVersion)
   const version = versions.length === 0 ? 1 : Math.max(...versions)

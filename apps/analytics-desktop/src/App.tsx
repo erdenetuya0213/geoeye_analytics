@@ -22,6 +22,9 @@ import { GradePage } from './pages/GradePage.js'
 import { VariographyPage } from './pages/VariographyPage.js'
 import { CustomPage } from './pages/CustomPage.js'
 import { PageErrorBoundary } from './components/PageErrorBoundary.js'
+import { ChartRegistryProvider } from './state/ChartRegistryContext.js'
+import { ExportFeatureProvider, exportFeatureForSection } from './state/ExportContext.js'
+import { loadGraphSettings, saveGraphSettings, type GraphSettings } from './visualization/graphSettings.js'
 import { DrillholesPage } from './pages/DrillholesPage.js'
 import { ExplorePage } from './pages/ExplorePage.js'
 import { GeotechnicalPage } from './pages/GeotechnicalPage.js'
@@ -31,7 +34,7 @@ import { OverviewPage } from './pages/OverviewPage.js'
 import { PlaceholderPage } from './pages/PlaceholderPage.js'
 import { GeologicalAnalysis3DPage } from './pages/GeologicalAnalysis3DPage.js'
 import { StructurePage } from './pages/StructurePage.js'
-import { StrengthPage } from './pages/StrengthPage.js'
+import { ClassDataPage } from './pages/ClassDataPage.js'
 import { ChartDesignProvider } from './state/ChartDesignContext.js'
 import { loadWorkspaceState, saveWorkspaceState } from './state/persistentState.js'
 import { DataPoolWorkspaceProvider } from './state/DataPoolWorkspaceContext.js'
@@ -56,7 +59,7 @@ const themeStorageKey = 'theme'
 const chartDesignStorageKey = 'geoeye.analytics.chart-design.v1'
 const stereonetThemeStorageKey = 'geoeye.analytics.stereonet-theme.v1'
 const sectionStateKey = 'app.section'
-const datasetSections: readonly DatasetSection[] = ['laboratory', 'xrf', 'spectral']
+const datasetSections: readonly DatasetSection[] = ['xrf', 'spectral']
 
 function isDatasetSection(section: SectionId): section is DatasetSection {
   return datasetSections.includes(section as DatasetSection)
@@ -132,6 +135,7 @@ export function App() {
   const [stereonetTheme, setStereonetTheme] = useState<StereonetThemeId>(loadStereonetTheme)
   const [sceneBackgroundPreferences, setSceneBackgroundPreferences] = useState(() => loadSceneBackgroundPreferences(appStorage))
   const [sceneTextPreferences, setSceneTextPreferences] = useState(() => loadSceneTextPreferences(appStorage))
+  const [graphSettings, setGraphSettings] = useState<GraphSettings>(() => loadGraphSettings(appStorage))
   const [connectionDialogMode, setConnectionDialogMode] = useState<ConnectionDialogMode | null>(null)
   const [showSettings, setShowSettings] = useState(false)
   const [showSignOutConfirmation, setShowSignOutConfirmation] = useState(false)
@@ -232,6 +236,10 @@ export function App() {
     saveSceneTextPreferences(appStorage, sceneTextPreferences)
   }, [sceneTextPreferences])
 
+  useEffect(() => {
+    saveGraphSettings(appStorage, graphSettings)
+  }, [graphSettings])
+
   const setSection = useCallback((next: SectionId) => {
     saveWorkspaceState(sectionStateKey, next)
     // Keep a deep link in step with navigation so a reload reopens the section that was left open.
@@ -300,13 +308,13 @@ export function App() {
   if (section === 'overview') {
     page = <OverviewPage onNavigate={setSection} />
   } else if (section === 'data-pool') {
-    page = <DataPoolPage connectionSettings={connectionSettings} connectionState={connectionState} onNavigate={setSection} />
+    page = <DataPoolPage connectionState={connectionState} />
   } else if (section === 'drillholes') {
     page = <DrillholesPage />
   } else if (section === 'field-logging') {
     page = <LoggingPage />
-  } else if (section === 'strength') {
-    page = <StrengthPage />
+  } else if (section === 'strength' || section === 'laboratory') {
+    page = <ClassDataPage section={section} />
   } else if (isDatasetSection(section)) {
     page = <DatasetToolPage section={section} />
   } else if (section === 'explore') {
@@ -343,7 +351,7 @@ export function App() {
       <ProjectStorageProvider>
         {activationError ? <div role="alert">{activationError}</div> : null}
         <StereonetThemeProvider themeId={stereonetTheme}>
-          <ChartDesignProvider designId={chartDesign}>
+          <ChartDesignProvider designId={chartDesign} graphSettings={graphSettings}>
             <AppShell
               active={section}
               chartDesign={chartDesign}
@@ -354,7 +362,7 @@ export function App() {
               onThemeChange={changeTheme}
               theme={theme}
             >
-              <LocalWorkspaceBootstrap><PageErrorBoundary resetKey={section}>{page}</PageErrorBoundary></LocalWorkspaceBootstrap>
+              <LocalWorkspaceBootstrap><PageErrorBoundary resetKey={section}><ChartRegistryProvider key={section}><ExportFeatureProvider feature={exportFeatureForSection(section)}>{page}</ExportFeatureProvider></ChartRegistryProvider></PageErrorBoundary></LocalWorkspaceBootstrap>
             </AppShell>
           </ChartDesignProvider>
         </StereonetThemeProvider>
@@ -366,7 +374,7 @@ export function App() {
             onSave={saveConnection}
           />
         ) : null}
-        {showSettings ? <div className={`settings-theme-surface theme-geoeye-industrial ${theme}`}><SettingsDialog chartDesign={chartDesign} onChartDesignChange={changeChartDesign} onClose={closeSettings} onSceneBackgroundChange={changeSceneBackground} onSceneTextChange={changeSceneText} onStereonetThemeChange={changeStereonetTheme} sceneBackground={sceneBackground} sceneBackgroundHistory={sceneBackgroundPreferences.recentColors} sceneText={sceneTextPreferences} stereonetTheme={stereonetTheme} /></div> : null}
+        {showSettings ? <div className={`settings-theme-surface theme-geoeye-industrial ${theme}`}><SettingsDialog chartDesign={chartDesign} graphSettings={graphSettings} onChartDesignChange={changeChartDesign} onGraphSettingsChange={setGraphSettings} onClose={closeSettings} onSceneBackgroundChange={changeSceneBackground} onSceneTextChange={changeSceneText} onStereonetThemeChange={changeStereonetTheme} sceneBackground={sceneBackground} sceneBackgroundHistory={sceneBackgroundPreferences.recentColors} sceneText={sceneTextPreferences} stereonetTheme={stereonetTheme} /></div> : null}
         {showSignOutConfirmation ? <SignOutDialog onCancel={cancelSignOut} onConfirm={confirmSignOut} /> : null}
       </ProjectStorageProvider>
     </DataPoolWorkspaceProvider>

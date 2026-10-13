@@ -12,7 +12,7 @@
     "desktop": "pnpm build && electron .",
     "dist:windows": "pnpm build && electron-builder --win nsis",
     "preview": "vite preview --host 127.0.0.1",
-    "test": "node --test tests/activation.node.cjs tests/activation-ipc.node.cjs tests/database-connection.node.cjs tests/workspace-files.node.cjs tests/chart-export.node.cjs tests/analytics-engine.node.cjs && vitest run",
+    "test": "node --test tests/activation.node.cjs tests/activation-ipc.node.cjs tests/database-connection.node.cjs tests/workspace-files.node.cjs tests/workspace-layout.node.cjs tests/chart-export.node.cjs tests/analytics-engine.node.cjs tests/export-bundle.node.cjs && vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

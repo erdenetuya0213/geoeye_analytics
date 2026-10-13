@@ -2,6 +2,7 @@ import { BarChart3, Check, CircleDot, Cuboid, Palette, RotateCcw, X, Cpu } from 
 import { useEffect, useState, type CSSProperties } from 'react'
 import { EngineStatusPanel } from './EngineStatusPanel.js'
 import { chartDesigns, type ChartDesignId } from '../visualization/chartDesigns.js'
+import { DEFAULT_GRAPH_SETTINGS, MAX_GRAPH_FONT_SIZE, MIN_GRAPH_FONT_SIZE, graphFonts, type GraphFontId, type GraphSettings } from '../visualization/graphSettings.js'
 import { normalizeSceneBackground, sceneBackgroundPresets } from '../visualization/sceneBackgrounds.js'
 import {
   DEFAULT_SCENE_TEXT_PREFERENCES,
@@ -19,7 +20,9 @@ type SettingsSection = 'charts' | 'scene3d' | 'stereonet' | 'engine'
 
 interface SettingsDialogProps {
   chartDesign: ChartDesignId
+  graphSettings: GraphSettings
   onChartDesignChange: (design: ChartDesignId) => void
+  onGraphSettingsChange: (settings: GraphSettings) => void
   onClose: () => void
   onSceneBackgroundChange: (color: string) => void
   onSceneTextChange: (preferences: SceneTextPreferences) => void
@@ -39,6 +42,26 @@ function ChartDesignPreview({ design }: { design: (typeof chartDesigns)[number] 
     '--preview-two': design.palette[1],
   } as CSSProperties
   return <div aria-hidden="true" className="chart-design-preview" style={style}><div className="chart-design-swatches">{design.palette.map((color) => <b key={color} style={{ backgroundColor: color }} />)}</div><i /><i /><i /><i /><span /></div>
+}
+
+const graphToggles: Array<{ key: 'legend' | 'axisTitles' | 'axisLabels' | 'gridLines' | 'axisLines'; label: string }> = [
+  { key: 'legend', label: 'Legend' },
+  { key: 'axisTitles', label: 'Axis titles' },
+  { key: 'axisLabels', label: 'Axis labels' },
+  { key: 'gridLines', label: 'Grid lines' },
+  { key: 'axisLines', label: 'Axis lines & ticks' },
+]
+
+/** Font, size, legend and axis visibility for every chart and its exports. */
+function GraphSettingsGroup({ onChange, settings }: { onChange: (settings: GraphSettings) => void; settings: GraphSettings }) {
+  const change = (next: Partial<GraphSettings>) => onChange({ ...settings, ...next })
+  return <section className="scene-setting-group graph-settings-group"><header><div><h4>Graph text &amp; axes</h4><p>Applies to every chart on screen and to exported PNGs. Exports print about {Math.round(settings.fontSize * 0.72)} pt on a 16 cm wide figure.</p></div><button className="scene-setting-reset" onClick={() => onChange({ ...DEFAULT_GRAPH_SETTINGS })} type="button"><RotateCcw size={13} /> Reset</button></header>
+    <div className="scene-text-options graph-settings-options">
+      <label><span>Font</span><select aria-label="Graph font" onChange={(event) => change({ font: event.target.value as GraphFontId })} value={settings.font}>{graphFonts.map((font) => <option key={font.id} value={font.id}>{font.label}</option>)}</select></label>
+      <label className="scene-text-size"><span>Font size</span><div><input aria-label="Graph font size" max={MAX_GRAPH_FONT_SIZE} min={MIN_GRAPH_FONT_SIZE} onChange={(event) => change({ fontSize: Number(event.target.value) })} step="1" type="range" value={settings.fontSize} /><output>{settings.fontSize} px</output></div></label>
+      <div className="graph-settings-toggles" role="group" aria-label="Show on graphs">{graphToggles.map((toggle) => <label key={toggle.key}><input checked={settings[toggle.key]} onChange={(event) => change({ [toggle.key]: event.target.checked })} type="checkbox" /><span>{toggle.label}</span></label>)}</div>
+    </div>
+  </section>
 }
 
 function StereonetThemePreview({ theme }: { theme: (typeof stereonetThemes)[number] }) {
@@ -95,7 +118,9 @@ function SceneTextPreview({ backgroundColor, preferences }: { backgroundColor: s
 
 export function SettingsDialog({
   chartDesign,
+  graphSettings,
   onChartDesignChange,
+  onGraphSettingsChange,
   onClose,
   onSceneBackgroundChange,
   onSceneTextChange,
@@ -139,6 +164,7 @@ export function SettingsDialog({
         {section === 'engine' ? <EngineStatusPanel /> : null}
         {section === 'charts' ? <div className="settings-content"><div className="settings-section-heading"><div><h3>Chart design</h3></div></div>
           <div aria-label="Chart design" className="chart-design-grid" role="radiogroup">{chartDesigns.map((design) => { const selected = design.id === chartDesign; return <button aria-checked={selected} className={selected ? 'is-selected' : ''} key={design.id} onClick={() => onChartDesignChange(design.id)} role="radio" type="button"><ChartDesignPreview design={design} /><span><strong>{design.label}</strong></span>{selected ? <em><Check size={12} /> Active</em> : null}</button> })}</div>
+          <GraphSettingsGroup onChange={onGraphSettingsChange} settings={graphSettings} />
         </div> : null}
         {section === 'scene3d' ? <div className="settings-content"><div className="settings-section-heading"><div><h3>3D scene</h3><p>Choose the canvas and screen-text appearance.</p></div></div>
           <div className="scene-settings-stack">

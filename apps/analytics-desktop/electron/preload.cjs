@@ -34,6 +34,8 @@ contextBridge.exposeInMainWorld('geoeyeDesktop', Object.freeze({
   removeProjectDocument: (input) => invoke('geoeye:project-documents:remove', input),
   saveAnalysisResultPackage: (input) => invoke('geoeye:analysis-results:save', input),
   readAnalysisResultPackages: (address) => invoke('geoeye:analysis-results:read', address),
+  suggestExportNames: (input) => invoke('geoeye:exports:suggest', input),
+  saveExportBundle: (input) => invoke('geoeye:exports:save', input),
   engineStatus: () => invoke('geoeye:engine:status'),
   engineCall: (input) => invoke('geoeye:engine:call', input),
 }))

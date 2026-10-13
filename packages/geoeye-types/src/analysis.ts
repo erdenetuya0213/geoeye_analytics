@@ -23,7 +23,7 @@ export const analysisRunSchema = z.object({
 })
 
 export const derivedValueStatusSchema = z.enum(['draft', 'saved', 'accepted', 'superseded'])
-export const analysisFeatureSchema = z.enum(['structure', 'geotechnical', 'multivariate', 'domain'])
+export const analysisFeatureSchema = z.enum(['structure', 'geotechnical', 'multivariate', 'domain', 'grade', 'variography'])
 export const analysisSaveModeSchema = z.enum(['overwrite', 'new-version'])
 
 export const analysisResultArtifactInputSchema = z.object({

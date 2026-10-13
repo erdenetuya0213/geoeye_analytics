@@ -1,6 +1,6 @@
 import type { StorageLike } from './geotechnicalDerivedStore.js'
 
-export type AnalysisFeature = 'domain' | 'geotechnical' | 'multivariate' | 'structure'
+export type AnalysisFeature = 'domain' | 'geotechnical' | 'grade' | 'multivariate' | 'structure' | 'variography'
 export type AnalysisSaveMode = 'overwrite' | 'new-version'
 
 export interface AnalysisTemplateSave {

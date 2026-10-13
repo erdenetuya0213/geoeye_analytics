@@ -1,4 +1,5 @@
 import type { EChartsCoreOption } from 'echarts/core'
+import type { ExportFeature } from '../desktop/bridge.js'
 import { GeoEyeChart, type GeoEyeChartProps } from './GeoEyeChart.js'
 
 export interface GeoEyeChartFacet<TResult> {
@@ -12,6 +13,9 @@ interface GeoEyeFacetChartProps<TResult> {
   ariaLabel: string
   buildOption: (result: TResult) => EChartsCoreOption
   chartProps?: Pick<GeoEyeChartProps, 'brushSelection' | 'clickSelection' | 'loading' | 'renderer'>
+  /** Gives every facet a ⤓ button and registers it for the page Save as `<exportPrefix>-<facet title>`. */
+  exportFeature?: ExportFeature
+  exportPrefix?: string
   facets: readonly GeoEyeChartFacet<TResult>[]
   onFacetClick?: (facet: GeoEyeChartFacet<TResult>) => void
 }
@@ -62,6 +66,8 @@ export function GeoEyeFacetChart<TResult>({
   ariaLabel,
   buildOption,
   chartProps,
+  exportFeature,
+  exportPrefix,
   facets,
   onFacetClick,
 }: GeoEyeFacetChartProps<TResult>) {
@@ -77,6 +83,7 @@ export function GeoEyeFacetChart<TResult>({
           <div className="geoeye-facet-canvas">
             <GeoEyeChart
               ariaLabel={`${facet.title}${facet.subtitle === undefined ? '' : `: ${facet.subtitle}`}`}
+              {...(exportPrefix === undefined ? {} : { exportFeature: exportFeature ?? 'statistics', exportName: `${exportPrefix} - ${facet.title}` })}
               option={fitFacetOption(buildOption(facet.result))}
               {...chartProps}
             />

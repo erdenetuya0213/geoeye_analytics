@@ -26,7 +26,7 @@ function fixture(t, request = async () => ({ status: 200, body: '{}' })) {
   db.close()
   const query = (sql, ...params) => { const connection = new DatabaseSync(databasePath); try { return connection.prepare(sql).all(...params) } finally { connection.close() } }
   const api = createWorkspaceFiles({
-    openProject(input) { assert.equal(input.accountId, 'user'); return { address: input, database: new DatabaseSync(databasePath), databasePath, settings: { workspaceRoot: root }, registry: { key: 'test' } } },
+    openProject(input) { assert.equal(input.accountId, 'user'); return { address: input, database: new DatabaseSync(databasePath), databasePath, projectPath: root, settings: { workspaceRoot: root }, registry: { key: 'test' } } },
     atomicWrite(file, contents) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, contents) },
     requestDataPool: request,
     requireActive() {},
@@ -35,17 +35,19 @@ function fixture(t, request = async () => ({ status: 200, body: '{}' })) {
   return { api, root, address, enqueue, query, databasePath }
 }
 
-test('archives original CSV and exports beneath the chosen tenant/project, without overwriting', t => {
+test('archives original CSV and exports inside the project feature folders, without overwriting', t => {
   const f = fixture(t)
   const [first] = f.api.archive({ address: f.address, files: [{ name: '../collar.csv', contents: 'hole,x\r\nA,1\r\n' }] })
   const [second] = f.api.archive({ address: f.address, files: [{ name: '../collar.csv', contents: 'replacement' }] })
   assert.notEqual(first, second)
-  assert.ok(first.startsWith(path.join(f.root, 'imports', 'tenants', 'tenant-1', 'projects', 'project-1')))
+  assert.ok(first.startsWith(path.join(f.root, 'Data', 'import')))
   assert.equal(fs.readFileSync(first, 'utf8'), 'hole,x\r\nA,1\r\n')
   const exported = f.api.exportFile({ address: f.address, name: 'project.json', contents: '{"saved":true}' })
-  assert.ok(exported.startsWith(path.join(f.root, 'exports')))
+  assert.ok(exported.startsWith(path.join(f.root, 'Data', 'export')))
+  const geotech = f.api.archive({ address: f.address, feature: 'geotechnical', files: [{ name: 'rmr.csv', contents: 'a,b\n' }] })[0]
+  assert.ok(geotech.startsWith(path.join(f.root, 'Geotech', 'import')))
   assert.equal(JSON.parse(fs.readFileSync(exported)).saved, true)
-  assert.equal(f.query('SELECT * FROM workspace_files').length, 3)
+  assert.equal(f.query('SELECT * FROM workspace_files').length, 4)
 })
 
 test('successful transfer persists its receipt, clears only the matching draft and is not replayed', async t => {
@@ -59,7 +61,7 @@ test('successful transfer persists its receipt, clears only the matching draft a
   assert.ok(f.query('SELECT pushed_at FROM sync_state')[0].pushed_at)
   await f.api.run({ address: f.address })
   assert.equal(calls, 1)
-  const syncDirectory = path.join(f.root, 'sync', 'tenants', 'tenant-1', 'projects', 'project-1')
+  const syncDirectory = path.join(f.root, 'sync')
   const mirror = path.join(syncDirectory, fs.readdirSync(syncDirectory)[0], 'outbox.json')
   assert.equal(JSON.parse(fs.readFileSync(mirror)).operations[0].state, 'sent')
 })

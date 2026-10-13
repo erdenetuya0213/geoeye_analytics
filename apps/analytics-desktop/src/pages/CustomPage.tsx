@@ -1,6 +1,9 @@
 import { useState } from 'react'
-import { ArrowLeft, LayoutTemplate, Mountain, Plus } from 'lucide-react'
+import { ArrowLeft, ClipboardCheck, GitCompareArrows, Hammer, LayoutTemplate, Mountain, Plus } from 'lucide-react'
 import { MineralAssessmentWorkspace } from '../components/MineralAssessmentPanel.js'
+import { DownholeCorrelationWorkspace } from './DownholeCorrelationPage.js'
+import { GeotechQaqcPage } from './GeotechQaqcPage.js'
+import { StrengthCorrelationPage } from './StrengthCorrelationPage.js'
 import { usePersistentState } from '../state/persistentState.js'
 import type { SectionId } from '../types.js'
 
@@ -8,6 +11,21 @@ interface CustomTemplate { id: string; title: string; summary: string; tags: str
 
 /** Use-case-specific analyses live here as templates; the general tools (Statistics, Domain, Variography…) stay general. */
 const templates: CustomTemplate[] = [
+  {
+    id: 'downhole-correlation', title: 'Downhole correlation', tags: ['geotech', 'QA/QC', 'relog'],
+    summary: 'Classic interval-by-interval comparison of two logs or two loggers down the hole.',
+    icon: <GitCompareArrows size={18} />, render: () => <DownholeCorrelationWorkspace embedded />,
+  },
+  {
+    id: 'geotech-qaqc', title: 'Geotech QA/QC', tags: ['geotech', 'QA/QC', 'completeness'],
+    summary: 'Completeness heatmap, interval gaps/overlaps, RQD ≤ SCR ≤ TCR logic, data support per group.',
+    icon: <ClipboardCheck size={18} />, render: () => <GeotechQaqcPage />,
+  },
+  {
+    id: 'strength-correlation', title: 'Strength correlation', tags: ['geotech', 'strength', 'Schmidt', 'point load', 'UCS'],
+    summary: 'Schmidt vs logged ISRM grade, point load vs Schmidt at the same depth, and estimated vs lab UCS — with a point-load unit check.',
+    icon: <Hammer size={18} />, render: () => <StrengthCorrelationPage />,
+  },
   {
     id: 'mineral-system', title: 'Mineral-system assessment', tags: ['exploration', 'targeting', 'evidence'],
     summary: 'Scores evidence layers against mineral-system models and ranks investigation priorities.',

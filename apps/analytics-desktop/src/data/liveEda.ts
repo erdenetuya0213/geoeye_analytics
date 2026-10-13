@@ -1,5 +1,5 @@
 import { importLocationColumns, readImportLocation } from '@geoeye/datapool-client'
-import { normalizeFieldLoggingDataset } from '@geoeye/datapool-client'
+import { prepareFieldLoggingDataset } from './fieldLoggingSources.js'
 import type {
   DataPoolClient,
   Dataset,
@@ -657,7 +657,7 @@ export function buildLocalEdaDatasets(
   }).filter((dataset) => ![...replacedDatasetNames].some((name) => dataset.name === `${name} · Live` || dataset.name.startsWith(`${name} · v`)))
   const loggingDatasets = (snapshot?.fieldLogging.datasets ?? [])
     .flatMap((dataset) => {
-      const converted = fieldLoggingDataset(normalizeFieldLoggingDataset(dataset), project, drillholes)
+      const converted = fieldLoggingDataset(prepareFieldLoggingDataset(dataset), project, drillholes)
       return converted === null ? [] : [converted]
     })
   const sourceDatasets = [...localDraftDatasets, ...loggingDatasets, ...snapshotDatasets, ...localDrillholeDatasets(snapshot, drillholeDraft, project)]

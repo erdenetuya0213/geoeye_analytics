@@ -1,16 +1,15 @@
 import { RowSelectionCheckbox } from '../components/RowSelectionCheckbox.js'
 import { toggleRowSelection, toggleVisibleSelection } from '../data/rowSelection.js'
-import type { ObservationValue, TabularImportInput, TabularImportResult, VariableDefinition } from '@geoeye/datapool-client'
+import type { TabularImportInput, TabularImportResult } from '@geoeye/datapool-client'
 import { AlertCircle, CheckCircle2, Pencil, RefreshCw, Save, Search, Trash2, Upload, X } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type FormEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type FormEvent, type ReactNode } from 'react'
 import { useDataPoolWorkspace } from '../state/DataPoolWorkspaceContext.js'
 import { usePersistentState } from '../state/persistentState.js'
-import { effectiveDrillholes, type LocalDrillholeDraft, type LocalProjectSnapshot, type LocalTabularDraft } from '../data/localProjectDb.js'
+import { databaseRows, type DatasetSection } from '../data/databaseRows.js'
+import type { LocalDrillholeDraft, LocalProjectSnapshot, LocalTabularDraft } from '../data/localProjectDb.js'
 import { parseTabularCsv } from '../data/tabularCsvImport.js'
 import { readImportSource } from '../data/importSource.js'
-import type { SectionId } from '../types.js'
-
-export type DatasetSection = Extract<SectionId, 'laboratory' | 'xrf' | 'spectral'>
+export type { DatasetSection }
 
 interface DatasetToolConfig {
   columns: readonly string[]
@@ -19,11 +18,6 @@ interface DatasetToolConfig {
 }
 
 const configs: Record<DatasetSection, DatasetToolConfig> = {
-  laboratory: {
-    searchLabel: 'laboratory samples',
-    columns: ['Sample ID', 'Hole ID', 'From', 'To', 'Au g/t'],
-    rows: [],
-  },
   xrf: {
     searchLabel: 'XRF readings',
     columns: ['Reading', 'Hole ID', 'Depth', 'Cu ppm', 'Instrument'],
@@ -54,9 +48,12 @@ export function DatasetToolPage({ section }: { section: DatasetSection }) {
   />
 }
 
-export function DatasetToolWorkbench({ canWrite = true, config, importDraft, notice, noticeIsError = false, onChangeRows, onImport, onPublish, onRefresh, publishing = false, refreshing = false, section }: {
+export function DatasetToolWorkbench({ canWrite = true, config, emptyHint = 'Import your CSV or change the search.', header, importDraft, notice, noticeIsError = false, onChangeRows, onImport, onPublish, onRefresh, publishing = false, refreshing = false, section }: {
   canWrite?: boolean
   config: DatasetToolConfig
+  emptyHint?: string
+  /** Rendered above the toolbar, e.g. a summary or tabs. */
+  header?: ReactNode
   importDraft?: LocalTabularDraft | undefined
   notice?: string | null
   noticeIsError?: boolean
@@ -66,7 +63,7 @@ export function DatasetToolWorkbench({ canWrite = true, config, importDraft, not
   onRefresh?: () => void
   publishing?: boolean
   refreshing?: boolean
-  section: DatasetSection
+  section: string
 }) {
   const [query, setQuery] = usePersistentState(`datasetTool.${section}.query`, '')
   const [selected, setSelected] = useState<Set<number>>(new Set())
@@ -114,13 +111,14 @@ export function DatasetToolWorkbench({ canWrite = true, config, importDraft, not
   return (
     <div className="page dataset-tool-page">
       <h1 className="sr-only">{config.searchLabel}</h1>
+      {header}
       <div className="filter-bar drillhole-control-bar dataset-control-bar">
         <label className="table-search"><Search size={16} /><input aria-label={`Search ${config.searchLabel}`} onChange={event => setQuery(event.target.value)} placeholder={`Search ${config.searchLabel}…`} value={query} /></label>
         <label className="dataset-select-all"><RowSelectionCheckbox checked={all} mixed={some && !all} disabled={saving || visible.length === 0} label={`Select all shown ${config.searchLabel}`} onChange={() => setSelected(current => toggleVisibleSelection(current, visible))} /> Select all</label>
         <span className="result-count">{filteredRows.length} shown</span>
         {selected.size > 0 ? <><span className="result-count">{selected.size} selected</span><button className="button button-secondary" disabled={saving || !onChangeRows} onClick={() => { setError(null); setDeleteIndexes([...selected]) }} type="button"><Trash2 size={15} /> Delete selected</button><button className="button button-secondary" disabled={saving} onClick={() => setSelected(new Set())} type="button">Clear selection</button></> : null}
         {notice == null ? null : <span className={`strength-save-notice ${noticeIsError ? 'is-error' : ''}`} role={noticeIsError ? 'alert' : 'status'}>{noticeIsError ? <AlertCircle size={14} /> : <CheckCircle2 size={14} />} {notice}</span>}
-        <button className="button button-secondary" disabled={refreshing || saving} onClick={onRefresh} type="button"><RefreshCw className={refreshing ? 'spin' : ''} size={16} /> Refresh local copy</button>
+        {onRefresh ? <button className="button button-secondary" disabled={refreshing || saving} onClick={onRefresh} type="button"><RefreshCw className={refreshing ? 'spin' : ''} size={16} /> Refresh local copy</button> : null}
         <input accept=".csv,text/csv" aria-label={`Choose a ${section} CSV file`} className="sr-only" onChange={handleFile} ref={fileInputRef} type="file" />
         <button className="button button-secondary" disabled={saving} onClick={() => fileInputRef.current?.click()} type="button"><Upload size={16} /> Import CSV</button>
         {onPublish ? <button className="button button-primary" disabled={publishing || saving || !canWrite || importDraft?.dirty !== true} onClick={() => void onPublish()} title={!canWrite ? 'Connect with write access to save to the Database' : 'Save local changes to the Database'} type="button"><Save size={16} /> {publishing ? 'Saving…' : 'Save to Database'}</button> : null}
@@ -135,7 +133,7 @@ export function DatasetToolWorkbench({ canWrite = true, config, importDraft, not
             {cells.map((cell, column) => <span className={column === 0 ? 'dataset-record-key' : ''} title={cell} key={column}>{cell}</span>)}
             <span className="strength-row-actions"><button className="icon-button" aria-label={`Edit ${section} row ${index + 1}`} title="Edit" disabled={saving || !onChangeRows} onClick={() => { setEditIndex(index); setEditValues([...cells]); setError(null) }} type="button"><Pencil size={15} /></button><button className="icon-button" aria-label={`Delete ${section} row ${index + 1}`} title="Delete" disabled={saving || !onChangeRows} onClick={() => { setError(null); setDeleteIndexes([index]) }} type="button"><Trash2 size={15} /></button></span>
           </div>)}
-          {filteredRows.length === 0 ? <div className="strength-empty"><strong>No matching records</strong><span>Import your CSV or change the search.</span></div> : null}
+          {filteredRows.length === 0 ? <div className="strength-empty"><strong>No matching records</strong><span>{emptyHint}</span></div> : null}
         </div>
       </section>
       {editIndex !== null ? <div className="dialog-backdrop"><form className="strength-dialog" role="dialog" aria-modal="true" aria-labelledby="dataset-edit-title" onSubmit={saveEdit}>
@@ -154,23 +152,6 @@ export function DatasetToolWorkbench({ canWrite = true, config, importDraft, not
   )
 }
 
-function supportsSection(section: DatasetSection, definition: VariableDefinition, sourceLabel: string): boolean {
-  const haystack = `${definition.key} ${definition.displayName} ${sourceLabel}`.toLowerCase()
-  if (section === 'laboratory') return /assay|laborator|geochem|sample/.test(haystack)
-  if (section === 'xrf') return /(^|[. _-])xrf|fluorescence/.test(haystack)
-  return /spectral|spectrum|specim|mineral/.test(haystack)
-}
-
-function displayObservationValue(observation: ObservationValue, _definition: VariableDefinition | undefined): string {
-  const value = observation.numericValue
-    ?? observation.categoryValue
-    ?? observation.textValue
-    ?? observation.booleanValue
-    ?? observation.datetimeValue
-  if (value === null) return '—'
-  return String(value)
-}
-
 function LiveDatasetToolPage({ canWrite, drillholeDraft, importDraft, onPublish, onRefresh, onSaveLocal, refreshing, section, snapshot }: {
   canWrite: boolean
   drillholeDraft: LocalDrillholeDraft | null
@@ -186,42 +167,9 @@ function LiveDatasetToolPage({ canWrite, drillholeDraft, importDraft, onPublish,
   const [noticeIsError, setNoticeIsError] = useState(false)
   const [publishing, setPublishing] = useState(false)
   const config = useMemo<DatasetToolConfig>(() => {
-      if (importDraft !== undefined) return { columns: importDraft.columns, rows: importDraft.rows, searchLabel: configs[section].searchLabel }
-      const variables = snapshot?.variables ?? []
-      const datasets = snapshot?.datasets ?? []
-      const holes = effectiveDrillholes(snapshot, drillholeDraft)
-      const datasetById = new Map(datasets.map((dataset) => [dataset.id, dataset]))
-      const selectedVariables = variables.filter((variable) => datasets.some((dataset) => (
-        supportsSection(section, variable, `${dataset.name} ${dataset.producerName} ${dataset.producerType}`)
-      )))
-      if (selectedVariables.length === 0) return { ...configs[section], rows: [] }
-      const selectedKeys = new Set(selectedVariables.map((variable) => variable.key))
-      const observations = (snapshot?.observations ?? []).filter((observation) => selectedKeys.has(observation.variableKey))
-      const holeNames = new Map(holes.map(hole => [hole.id, hole.name]))
-      const observed = observations.filter(observation => {
-        const dataset = datasetById.get(observation.datasetId)
-        const definition = selectedVariables.find(variable => variable.key === observation.variableKey)
-        return dataset !== undefined && definition !== undefined && supportsSection(section, definition, `${dataset.name} ${dataset.producerName} ${dataset.producerType}`)
-      })
-      const observedKeys = new Set(observed.map(observation => observation.variableKey))
-      const fields = selectedVariables.filter(variable => observedKeys.has(variable.key))
-      const labels = new Set(['Source record', 'Hole ID', 'From', 'To'])
-      const columns = ['Source record', 'Hole ID', 'From', 'To', ...fields.map(variable => {
-        const original = typeof variable.metadata?.sourceColumn === 'string' ? variable.metadata.sourceColumn : variable.displayName
-        const label = labels.has(original) ? `${original} [${variable.key}]` : original
-        labels.add(label)
-        return label
-      })]
-      const rows = new Map<string, string[]>()
-      for (const observation of observed) {
-        const key = JSON.stringify([observation.datasetId, observation.sourceId, observation.holeId, observation.depthFrom, observation.depthTo])
-        const row = rows.get(key) ?? [observation.sourceId, observation.holeId === null ? '' : holeNames.get(observation.holeId) ?? observation.holeId,
-          observation.depthFrom === null ? '' : String(observation.depthFrom), observation.depthTo === null ? observation.depthFrom === null ? '' : String(observation.depthFrom) : String(observation.depthTo), ...fields.map(() => '')]
-        const index = fields.findIndex(variable => variable.key === observation.variableKey)
-        row[index + 4] = displayObservationValue(observation, undefined)
-        rows.set(key, row)
-      }
-      return { columns, rows: [...rows.values()], searchLabel: configs[section].searchLabel }
+    if (importDraft !== undefined) return { columns: importDraft.columns, rows: importDraft.rows, searchLabel: configs[section].searchLabel }
+    const derived = databaseRows(section, snapshot, drillholeDraft)
+    return derived.columns.length === 0 ? { ...configs[section], rows: [] } : { ...derived, searchLabel: configs[section].searchLabel }
     }, [drillholeDraft, importDraft, section, snapshot])
 
   const importFile = async (file: File) => {

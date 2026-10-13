@@ -12,8 +12,10 @@ import { recordAnalysisTemplateSave } from '../data/analysisSaveStore.js'
 import { barGraphImage, svgElementPngGraphImage } from '../data/analysisGraphImages.js'
 import { saveAnalysisResultPackage } from '../data/analysisResultStore.js'
 import { useDurableAction } from '../state/useDurableAction.js'
-import { desktopBridge } from '../desktop/bridge.js'
-import { projectStorageAddress } from '../state/ProjectStorageContext.js'
+import type { ExportFile } from '../desktop/bridge.js'
+import { saveExportFiles } from '../data/exportBundle.js'
+import { ExportDialog } from '../components/ExportDialog.js'
+import { useExportTarget } from '../state/ExportContext.js'
 import { saveStructureDerivedValues } from '../data/structureDerivedStore.js'
 import { nextStructureLogVersionNumber, readLatestStructureLogVersion, readStructureLogVersions, writeStructureLogVersion } from '../data/structureLogStore.js'
 import { useStereonetTheme } from '../state/StereonetThemeContext.js'
@@ -377,6 +379,8 @@ function StructureWorkbench({ data }: { data: StructureWorkspaceData }) {
   const storage = useProjectStorage()
   const durable = useDurableAction()
   const [exportPath, setExportPath] = useState<string | null>(null)
+  const exportTarget = useExportTarget('structure')
+  const [pendingExport, setPendingExport] = useState<ExportFile[] | null>(null)
   const drillholeData = useMemo(() => ({ collars: data.collars, surveys: data.surveys }), [data.collars, data.surveys])
   const templates = data.templates
   const [templateId, setTemplateId] = usePersistentState('structure.templateId', templates[0]?.id ?? 'structure-empty')
@@ -800,11 +804,10 @@ function StructureWorkbench({ data }: { data: StructureWorkspaceData }) {
     setSaveAsOpen(false)
   })
 
+  // Stereonet → export/Structure as SVG (vector) + PNG, both named before saving.
   const exportPlot = () => durable.perform(async () => {
     const svg = window.document.querySelector<SVGSVGElement>('.structure-page .stereonet svg')
-    const bridge = desktopBridge()
-    const address = projectStorageAddress(storage)
-    if (!svg || !bridge || !address) throw new Error('Open a plot in the Windows app before exporting.')
+    if (!svg) throw new Error('Open a plot before exporting.')
     const copy = svg.cloneNode(true) as SVGSVGElement
     copy.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
     // Inline computed styles so the standalone file does not depend on the app stylesheet.
@@ -814,14 +817,24 @@ function StructureWorkbench({ data }: { data: StructureWorkspaceData }) {
       const style = window.getComputedStyle(node)
       for (const property of ['fill', 'stroke', 'stroke-width', 'opacity', 'font-family', 'font-size', 'color']) copies[index]?.setAttribute(property, style.getPropertyValue(property))
     })
-    const file = await bridge.exportWorkspaceFile({ address, name: `stereonet-${plotMode}-${projection}.svg`, contents: new XMLSerializer().serializeToString(copy) })
-    setExportPath(file)
+    const name = `Stereonet ${plotMode} ${projection}`
+    const png = await svgElementPngGraphImage(name, copy)
+    setPendingExport([
+      { contents: new XMLSerializer().serializeToString(copy), kind: 'svg', name },
+      ...(png === null ? [] : [{ dataUrl: png.imageDataUrl, kind: 'png' as const, name }]),
+    ])
+  })
+  const savePlot = (files: ExportFile[], names: string[]) => durable.perform(async () => {
+    setPendingExport(null)
+    const result = await saveExportFiles(exportTarget, files.map((file, index) => ({ ...file, name: names[index] ?? file.name })))
+    setExportPath(result.paths.join(' · '))
   })
 
   return (
     <div className="page structure-page">
       {durable.notice ? <p role="status">{durable.notice}</p> : null}
       {exportPath ? <p role="status">Export saved: {exportPath}</p> : null}
+      {pendingExport !== null ? <ExportDialog items={pendingExport} onCancel={() => setPendingExport(null)} onConfirm={(names) => { void savePlot(pendingExport, names) }} target={exportTarget} title={`Save to export/${exportTarget.folder}`} /> : null}
       <h1 className="sr-only">Structure</h1>
 
       <div className="analysis-toolbar structure-analysis-toolbar">

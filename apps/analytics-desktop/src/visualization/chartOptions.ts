@@ -126,7 +126,7 @@ export function buildHistogramOption(result: DistributionResult, config: Distrib
       }] : []),
     ],
     tooltip: { axisPointer: { type: 'shadow' }, confine: true, trigger: 'axis', valueFormatter: (value: number) => `${value.toFixed(1)}%` },
-    xAxis: categoryAxis(`${config.variableLabel} (${config.unit})`, labels),
+    xAxis: categoryAxis(axisTitle(config.variableLabel, config.unit), labels),
     yAxis: { ...valueAxis('Relative frequency (%)'), axisLabel: { formatter: '{value}%' }, min: 0 },
   } as EChartsCoreOption
 }
@@ -160,7 +160,7 @@ export function buildCdfOption(result: DistributionResult, config: DistributionC
     ...cartesianBase(),
     series,
     tooltip: { confine: true, trigger: 'axis' },
-    xAxis: valueAxis(`${config.variableLabel} (${config.unit})`),
+    xAxis: valueAxis(axisTitle(config.variableLabel, config.unit)),
     yAxis: { ...valueAxis('Cumulative probability'), axisLabel: { formatter: (value: number) => `${Math.round(value * 100)}%` }, max: 1, min: 0 },
   } as EChartsCoreOption
 }
@@ -187,9 +187,12 @@ export function buildProbabilityPlotOption(result: DistributionResult, config: D
       }] : []),
     ],
     xAxis: valueAxis('Expected normal quantile'),
-    yAxis: valueAxis(`${config.variableLabel} (${config.unit})`),
+    yAxis: valueAxis(axisTitle(config.variableLabel, config.unit)),
   } as EChartsCoreOption
 }
+
+/** "Label (unit)", or just the label when the variable has no unit. */
+export const axisTitle = (label: string, unit?: string) => unit ? `${label} (${unit})` : label
 
 export function buildDistributionBoxPlotOption(result: DistributionResult, config: DistributionChartConfig): EChartsCoreOption {
   const sourceObservationIds = Array.from(new Set(result.histogram.flatMap((bin) => bin.sourceObservationIds)))
@@ -208,13 +211,27 @@ export function buildDistributionBoxPlotOption(result: DistributionResult, confi
       ...(config.showDeclustered ? [group('Declustered', result.representative.summary)] : []),
     ],
     kind: 'box-plot',
-  }, { x: '', y: `${config.variableLabel} (${config.unit})` })
+  }, { x: '', y: axisTitle(config.variableLabel, config.unit) })
 }
 
-export function buildScatterOption(result: ScatterAnalysisResult, titles: AxisTitles): EChartsCoreOption {
+export type ScatterOverlay = 'none' | 'one-to-one' | 'priest-hudson' | 'calibration'
+export interface ScatterOverlayOptions { kind: ScatterOverlay; factor?: number }
+
+/** Reference curves for geotech relationships: 1:1, Priest & Hudson RQD(λ) = 100·e^(−0.1λ)(0.1λ+1), or y = k·x. */
+function overlaySeries(overlay: ScatterOverlayOptions | undefined, minX: number, maxX: number, maxY: number) {
+  if (overlay === undefined || overlay.kind === 'none') return []
+  const base = { showSymbol: false, silent: true, smooth: false, type: 'line', lineStyle: { color: geoEyeChartColors.muted, type: 'dotted', width: 1.5 } }
+  if (overlay.kind === 'one-to-one') { const m = Math.max(maxX, maxY); return [{ ...base, name: '1:1', data: [[0, 0], [m, m]] }] }
+  if (overlay.kind === 'calibration') { const k = overlay.factor ?? 24; return [{ ...base, name: `y = ${k}·x`, data: [[0, 0], [maxX, k * maxX]] }] }
+  const steps = 60
+  return [{ ...base, name: 'Priest & Hudson', data: Array.from({ length: steps + 1 }, (_, i) => { const l = minX + ((maxX - minX) * i) / steps; return [l, 100 * Math.exp(-0.1 * l) * (0.1 * l + 1)] }) }]
+}
+
+export function buildScatterOption(result: ScatterAnalysisResult, titles: AxisTitles, overlay?: ScatterOverlayOptions): EChartsCoreOption {
   const xValues = result.points.map((point) => point.x)
   const minimumX = xValues.length === 0 ? 0 : Math.min(...xValues)
   const maximumX = xValues.length === 0 ? 1 : Math.max(...xValues)
+  const maximumY = result.points.length === 0 ? 1 : Math.max(...result.points.map((point) => point.y))
   const regressionData = result.regression === null ? [] : [minimumX, maximumX].map((x) => datum(
     [x, result.regression!.intercept + result.regression!.slope * x],
     result.sourceObservationIds,
@@ -240,6 +257,7 @@ export function buildScatterOption(result: ScatterAnalysisResult, titles: AxisTi
         smooth: false,
         type: 'line',
       }]),
+      ...overlaySeries(overlay, Math.min(0, minimumX), maximumX, maximumY),
     ],
     xAxis: valueAxis(titles.x),
     yAxis: valueAxis(titles.y),

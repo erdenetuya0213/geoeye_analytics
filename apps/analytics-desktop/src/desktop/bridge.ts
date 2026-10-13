@@ -72,8 +72,8 @@ export interface GeoEyeDesktopBridge {
   chooseWorkspaceRoot(): Promise<DesktopWorkspaceStatus | null>
   readProjectRecord(address: ProjectStorageAddress): Promise<LocalProjectRecord | null>
   writeProjectRecord(input: { address: ProjectStorageAddress; record: LocalProjectRecord }): Promise<void>
-  archiveImportFiles(input: { address: ProjectStorageAddress; files: ImportSourceFile[] }): Promise<string[]>
-  exportWorkspaceFile(input: { address: ProjectStorageAddress; name: string; contents: string }): Promise<string>
+  archiveImportFiles(input: { address: ProjectStorageAddress; feature?: ExportFeature; files: ImportSourceFile[] }): Promise<string[]>
+  exportWorkspaceFile(input: { address: ProjectStorageAddress; contents: string; feature?: ExportFeature; name: string }): Promise<string>
   exportChartImages?(input: { images: Array<{ name: string; format: 'png' | 'svg'; dataUrl: string }> }): Promise<{ paths: string[]; canceled: boolean }>
   enqueueSync(input: { address: ProjectStorageAddress; entity: string; version: string; requests: SyncRequest[] }): Promise<SyncOperation[]>
   syncStatus(input: { address: ProjectStorageAddress }): Promise<SyncOperation[]>
@@ -85,10 +85,16 @@ export interface GeoEyeDesktopBridge {
   removeProjectDocument(input: { address: ProjectStorageAddress; key: string }): Promise<void>
   saveAnalysisResultPackage(input: { address: ProjectStorageAddress; result: AnalysisResultPackage }): Promise<void>
   readAnalysisResultPackages(address: ProjectStorageAddress): Promise<AnalysisResultPackage[]>
+  suggestExportNames(input: ExportNamesInput): Promise<{ directory: string; names: string[] }>
+  saveExportBundle(input: ExportBundleInput): Promise<{ directory: string; paths: string[] }>
   engineStatus(): Promise<EngineStatus>
   engineCall(input: { method: string; params?: unknown }): Promise<EngineCallResponse>
 }
 
+export type ExportFeature = 'statistics' | 'multivariate' | 'domain' | 'grade' | 'variography' | 'structure' | 'geotechnical' | 'custom' | 'data' | '3d'
+export interface ExportFile { name: string; kind: 'png' | 'csv' | 'json' | 'txt' | 'svg'; dataUrl?: string; contents?: string }
+export interface ExportNamesInput { address: ProjectStorageAddress; feature: ExportFeature; files: Array<Pick<ExportFile, 'name' | 'kind'>> }
+export interface ExportBundleInput { address: ProjectStorageAddress; feature: ExportFeature; files: ExportFile[] }
 export interface EngineStatus { running: boolean; version: string | null; source: 'env' | 'bundled' | 'source' | 'path' | null; error: string | null }
 export type EngineCallResponse = { ok: true; result: unknown } | { ok: false; error: string; type: string | null }
 

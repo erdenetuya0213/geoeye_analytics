@@ -17,7 +17,7 @@ export interface ScatterAnalysisResult {
   kind: 'scatter'
   matchMetadata: {
     matchedObservationCount: number
-    method: 'interval-overlap'
+    method: 'interval-overlap' | 'row-identity'
   }
   points: JoinedPair[]
   regression: RegressionLine | null
@@ -151,7 +151,10 @@ export function analyzeRelationship(
   return {
     correlation: pearsonCorrelation(leftValues, rightValues),
     kind: 'scatter',
-    matchMetadata: { matchedObservationCount: points.length, method: 'interval-overlap' },
+    matchMetadata: {
+      matchedObservationCount: points.length,
+      method: points.length > 0 && points.every((point) => point.matchMethod === 'row-identity') ? 'row-identity' : 'interval-overlap',
+    },
     points,
     regression: linearRegression(points),
     sourceObservationIds: Array.from(new Set(points.flatMap((point) => point.sourceObservationIds))),
