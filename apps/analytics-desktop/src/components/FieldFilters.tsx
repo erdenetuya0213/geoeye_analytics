@@ -1,10 +1,9 @@
 import { ChevronDown, X } from 'lucide-react'
-import type { FieldFilter, FieldFilters as FilterMap, NumberRange } from '../analysis/fieldFilter.js'
+import type { FieldFilter, FieldFilters as FilterMap, FilterField, NumberRange } from '../analysis/fieldFilter.js'
 import { normalizeFilter } from '../analysis/fieldFilter.js'
 import { VariablePicker } from './VariablePicker.js'
 
-/** A field a filter can be put on: a numeric field takes a range, a category field its own dictionary. */
-export interface FilterField { key: string; kind: 'category' | 'number'; label: string; unit?: string; values?: readonly string[] }
+export type { FilterField }
 
 const rangeOf = (filter: FieldFilter | null): NumberRange => filter?.kind !== 'number'
   ? 'between'
@@ -39,7 +38,7 @@ export function FieldFilters({ ariaPrefix, fields, filters, keys, onChangeFilter
             summary={values.length === 0 ? 'All' : values.length === 1 ? values[0]! : `${values.length} selected`}
             variables={options}
           >
-            <button className="feature-picker-option" onClick={() => onChangeFilter(key, { kind: 'category', values: [] })} type="button"><span><strong>All {field.label.toLowerCase()}</strong></span></button>
+            <button className="feature-picker-option" onClick={() => onChangeFilter(key, { kind: 'category', values: [] })} type="button"><span><strong>All {field.label}</strong></span></button>
           </VariablePicker>
           {remove}
         </div>

@@ -1,5 +1,6 @@
-import { FieldFilters, type FilterField } from '../components/FieldFilters.js'
+import { FieldFilters } from '../components/FieldFilters.js'
 import { FieldSelects } from '../components/FieldSelects.js'
+import { categoryValues, filterFields, numericFields } from '../data/fieldOptions.js'
 import type { FieldFilter } from '../analysis/fieldFilter.js'
 import { useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, Box, CheckCircle2, ChevronDown, CopyPlus, Database, GitBranch, Layers3, Play, RefreshCw, Save, ScatterChart, TableProperties, X } from 'lucide-react'
@@ -56,10 +57,6 @@ function nextRunNumber(storage: Pick<Storage, 'getItem' | 'setItem'>) {
   return next
 }
 
-function dimensionValues(dataset: EdaDataset, key: string) {
-  return Array.from(new Set(dataset.observations.flatMap((observation) => observation.dimensions[key] === undefined ? [] : [observation.dimensions[key]]))).sort()
-}
-
 function selectedVariables(dataset: EdaDataset, keys: readonly string[]) {
   return keys.flatMap((key) => {
     const variable = dataset.variables.find((candidate) => candidate.key === key)
@@ -76,7 +73,7 @@ function dimensionLabel(dataset: EdaDataset | undefined, key: string | null) {
 
 function comparisonDimensions(dataset: EdaDataset | undefined) {
   if (dataset === undefined) return []
-  return dataset.dimensions.filter((dimension) => dimensionValues(dataset, dimension.key).length > 0)
+  return dataset.dimensions.filter((dimension) => categoryValues(dataset, dimension.key).length > 1)
 }
 
 function clusterIsSmall(count: number, total: number) {
@@ -151,7 +148,7 @@ function MultivariatePopulationPage({ onNavigate }: MultivariatePageProps) {
 
   useEffect(() => {
     if (dataset === undefined || dataset.source !== 'live') return
-    const numericKeys = dataset.variables.filter((variable) => variable.dataType !== 'category').map((variable) => variable.key)
+    const numericKeys = numericFields(dataset).map((variable) => variable.key)
     const validKeys = variableKeys.filter((key) => numericKeys.includes(key))
     const datasetChanged = datasetId !== dataset.id
     if (datasetChanged) setDatasetId(dataset.id)
@@ -206,14 +203,7 @@ function MultivariatePopulationPage({ onNavigate }: MultivariatePageProps) {
   const runDataset = datasets.find((candidate) => candidate.id === activeRun?.configuration.datasetId)
   const runVariables = runDataset === undefined || activeRun === null ? [] : selectedVariables(runDataset, activeRun.configuration.variableKeys)
   const selectedSet = new Set(selectedIds)
-  const filterFields = useMemo<FilterField[]>(() => [
-    ...dataset.variables.filter((variable) => variable.dataType !== 'category')
-      .map((variable): FilterField => ({ key: variable.key, kind: 'number', label: variable.label, unit: variable.unit })),
-    ...dataset.dimensions.flatMap((dimension): FilterField[] => {
-      const values = dimensionValues(dataset, dimension.key)
-      return values.length === 0 ? [] : [{ key: dimension.key, kind: 'category', label: dimension.label, values }]
-    }),
-  ], [dataset])
+  const fields = useMemo(() => filterFields(dataset), [dataset])
   const comparisonOptions = comparisonDimensions(runDataset)
   const componentOptions = activeRun === null ? [] : Array.from({ length: activeRun.pca.componentCount }, (_, index) => index)
   const currentTemplateVersion = activeRun === null || typeof window === 'undefined'
@@ -229,7 +219,7 @@ function MultivariatePopulationPage({ onNavigate }: MultivariatePageProps) {
   const changeDataset = (nextId: string) => {
     const next = datasets.find((candidate) => candidate.id === nextId)
     if (next === undefined) return
-    const numeric = next.variables.filter((variable) => variable.dataType !== 'category').slice(0, 6)
+    const numeric = numericFields(next).slice(0, 6)
     setDatasetId(next.id)
     setVariableKeys(numeric.map((variable) => variable.key))
     setActiveFilterKeys([])
@@ -357,8 +347,8 @@ function MultivariatePopulationPage({ onNavigate }: MultivariatePageProps) {
     <h1 className="sr-only">Multivariate analysis</h1>
     <div className="analysis-toolbar eda-toolbar mv-toolbar">
       <DatasetScopePicker ariaPrefix="Multivariate" datasets={datasets} onChange={changeDataset} storageKey="multivariate" value={dataset.id} />
-      <FieldSelects ariaPrefix="Multivariate" maxFields={10} minFields={2} onChange={changeFields} value={variableKeys} variables={dataset.variables.filter((item) => item.dataType !== 'category')} />
-      <FieldFilters ariaPrefix="Multivariate" fields={filterFields} filters={filterValues} keys={activeFilterKeys} onChangeFilter={changeFilter} onChangeKeys={changeFilterKeys} />
+      <FieldSelects ariaPrefix="Multivariate" maxFields={10} minFields={2} onChange={changeFields} value={variableKeys} variables={numericFields(dataset)} />
+      <FieldFilters ariaPrefix="Multivariate" fields={fields} filters={filterValues} keys={activeFilterKeys} onChangeFilter={changeFilter} onChangeKeys={changeFilterKeys} />
       <label className="tool-select tool-select-field"><span>Scaling</span><select aria-label="Scaling method" onChange={(event) => setScaling(event.target.value as MultivariateScaling)} value={scaling}>{Object.entries(scalingLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select><ChevronDown size={14} /></label>
       <label className="tool-select tool-select-field"><span>Missing data</span><select aria-label="Missing data handling" onChange={(event) => setMissingPolicy(event.target.value as MultivariateMissingPolicy)} value={missingPolicy}>{Object.entries(missingLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select><ChevronDown size={14} /></label>
       <label className="tool-select tool-select-field mv-cluster-count"><span>Clusters (k)</span><select aria-label="Cluster count" onChange={(event) => setClusterCount(Number(event.target.value))} value={clusterCount}>{Array.from({ length: 7 }, (_, index) => index + 2).map((value) => <option key={value} value={value}>{value}</option>)}</select><ChevronDown size={14} /></label>

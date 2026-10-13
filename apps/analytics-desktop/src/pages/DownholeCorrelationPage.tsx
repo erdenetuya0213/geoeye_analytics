@@ -5,6 +5,7 @@ import { readImportSource } from '../data/importSource.js'
 import { useProjectEdaDatasets } from '../data/liveEda.js'
 import { usePersistentState } from '../state/persistentState.js'
 import { intervalComparisonOption, type ComparisonView } from '../visualization/intervalComparisonCharts.js'
+import { numericFields } from '../data/fieldOptions.js'
 
 export function DownholeCorrelationWorkspace({ embedded = false }: { embedded?: boolean }) {
   const query = useProjectEdaDatasets()
@@ -23,7 +24,7 @@ export function DownholeCorrelationWorkspace({ embedded = false }: { embedded?: 
   const imported = useMemo(() => imports.flatMap(input => { try { return [comparisonImportDataset(input)] } catch { return [] } }), [imports])
   const datasets = useMemo(() => [...imported, ...(query.data ?? [])], [imported, query.data])
   const dataset = datasets.find(d => d.id === datasetId)
-  const variables = dataset?.variables.filter(v => v.dataType !== 'category') ?? []
+  const variables = numericFields(dataset)
   const holes = [...new Set(dataset?.observations.map(r => r.holeId) ?? [])].sort()
   const activeHole = holes.includes(hole) ? hole : holes[0] ?? ''
   const activeCurves = useMemo(() => curveKeys.filter(key => variables.some(v => v.key === key)).slice(0, 3), [curveKeys, dataset])
@@ -42,7 +43,7 @@ export function DownholeCorrelationWorkspace({ embedded = false }: { embedded?: 
   const chooseDataset = (id: string) => {
     const selected = datasets.find(d => d.id === id)
     setDatasetId(id); setHole('')
-    setCurveKeys(selected?.variables.filter(v => v.unit === '%' && v.dataType !== 'category').slice(0, 3).map(v => v.key) ?? [])
+    setCurveKeys(numericFields(selected).filter(v => v.unit === '%').slice(0, 3).map(v => v.key))
     setDimension(selected?.dimensions.find(d => /mechanical|zone group/i.test(d.label))?.key ?? '')
     setXKey(selected?.variables.find(v => /fracture frequency/i.test(v.label))?.key ?? '')
   }

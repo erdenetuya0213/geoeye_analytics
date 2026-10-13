@@ -26,6 +26,7 @@ import { useDataPoolWorkspace } from '../state/DataPoolWorkspaceContext.js'
 import type { SectionId } from '../types.js'
 import { usePersistentState } from '../state/persistentState.js'
 import { useProjectStorage } from '../state/ProjectStorageContext.js'
+import { numericFields } from '../data/fieldOptions.js'
 import {
   buildContactProfileOption, buildPopulationBoxOption, buildPopulationCdfOption, buildPopulationHistogramOption,
 } from '../visualization/domainCharts.js'
@@ -83,8 +84,7 @@ function primarySourceOptions(
     })
   }
   const preferredVariables = ['geotech.rmr76', 'geotech.rqd', 'geotech.ucs', 'assay.au', 'assay.cu', 'assay.as']
-  dataset.variables
-    .filter((variable) => variable.dataType !== 'category')
+  numericFields(dataset)
     .sort((left, right) => {
       const leftIndex = preferredVariables.indexOf(left.key)
       const rightIndex = preferredVariables.indexOf(right.key)
@@ -168,7 +168,7 @@ export function DomainPage({ onNavigate }: DomainPageProps) {
   const selectedGroup = candidateRun?.groups.find((group) => group.id === selectedGroupId) ?? candidateRun?.groups.find((group) => group.rowCount > 0) ?? candidateRun?.groups[0]
   const rmrUnavailable = selectedSource?.variableKey === 'geotech.rmr76' && !selectedSource.available
   const evidenceOptions = useMemo(() => dataset === undefined ? [] : [
-    ...dataset.variables.filter((v) => v.dataType !== 'category').map((v) => ({ category: v.origin === 'derived' ? 'Derived' : 'Variable', key: v.key, label: v.shortLabel })),
+    ...numericFields(dataset).map((v) => ({ category: v.origin === 'derived' ? 'Derived' : 'Variable', key: v.key, label: v.shortLabel })),
     ...dataset.dimensions.map((d) => ({ category: 'Category', key: d.key, label: d.label })),
     ...(multivariateEvidence === null ? [] : [{ category: 'Multivariate', key: 'multivariate.pc1', label: 'PCA scores' }, { category: 'Multivariate', key: 'multivariate.cluster_id', label: 'Cluster IDs' }]),
   ], [dataset, multivariateEvidence])

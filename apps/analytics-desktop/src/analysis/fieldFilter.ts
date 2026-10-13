@@ -7,6 +7,9 @@ export type FieldFilter = CategoryFilter | NumberFilter
 /** Saved filters. A plain string is a single category value written by an earlier build. */
 export type FieldFilters = Readonly<Record<string, FieldFilter | string>>
 
+/** A field a filter can be put on: a numeric field takes a range, a text field its own dictionary. */
+export interface FilterField { key: string; kind: 'category' | 'number'; label: string; unit?: string; values?: readonly string[] }
+
 export interface FilterRow {
   dimensions: Readonly<Record<string, string>>
   values?: Readonly<Record<string, number | null>>

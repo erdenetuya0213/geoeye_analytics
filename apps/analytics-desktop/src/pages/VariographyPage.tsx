@@ -10,6 +10,7 @@ import { usePersistentState } from '../state/persistentState.js'
 import { variogramExports, type AxisDirection } from '../data/resultExport.js'
 import { SaveExportBar, type ExportTable } from '../components/SaveExportBar.js'
 import { buildFanOption, buildVariogramMapOption, buildVariogramOption, directionColors } from '../visualization/variogramCharts.js'
+import { numericFields } from '../data/fieldOptions.js'
 
 type Transform = 'raw' | 'normal-scores' | 'log'
 interface Prepared { values: number[]; coordinates: number[][]; holeIds: string[]; extent: number; compositeLength: number; holeCount: number; collars: Array<[number, number]> }
@@ -52,7 +53,7 @@ export function VariographyPage() {
   const [error, setError] = useState<string | null>(null)
 
   const dataset = scope.dataset
-  const numeric = dataset?.variables.filter((v) => v.dataType !== 'category') ?? []
+  const numeric = numericFields(dataset)
   const variable = numeric.find((v) => v.key === variableKey) ?? numeric[0]
   const directions = principalDirections(strike, dip, plunge)
   const signature = `${scope.signature}|${variable?.key ?? ''}|${transform}`

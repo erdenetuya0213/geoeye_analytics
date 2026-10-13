@@ -17,6 +17,7 @@ import { useProjectEdaDatasets } from '../data/liveEda.js'
 import { csv } from '../data/resultExport.js'
 import { usePersistentState } from '../state/persistentState.js'
 import { geoEyeChartColors as c } from '../visualization/geoEyeTheme.js'
+import { numericFields } from '../data/fieldOptions.js'
 
 type SourceName = 'schmidt' | 'pointLoad' | 'grade' | 'lab'
 type Overrides = Partial<Record<SourceName, SourceRef | null>>
@@ -39,7 +40,7 @@ function SourceSelect({ datasets, kind, label, onChange, value }: { datasets: re
       <option value="">—</option>
       {datasets.map((dataset) => {
         const options = kind === 'numeric'
-          ? dataset.variables.filter((variable) => variable.dataType !== 'category').map((variable) => ({ key: variable.key, label: variable.shortLabel }))
+          ? numericFields(dataset).map((variable) => ({ key: variable.key, label: variable.shortLabel }))
           : dataset.dimensions.map((dimension) => ({ key: dimension.key, label: dimension.label }))
         return options.length === 0 ? null : <optgroup key={dataset.id} label={dataset.name}>{options.map((option) => <option key={option.key} value={encode({ datasetId: dataset.id, key: option.key })}>{option.label}</option>)}</optgroup>
       })}

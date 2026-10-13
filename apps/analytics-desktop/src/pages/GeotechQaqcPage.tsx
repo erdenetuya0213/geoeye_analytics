@@ -8,6 +8,7 @@ import { SaveExportBar, type ExportTable } from '../components/SaveExportBar.js'
 import { csv } from '../data/resultExport.js'
 import { usePersistentState } from '../state/persistentState.js'
 import { geoEyeChartColors as c } from '../visualization/geoEyeTheme.js'
+import { numericFields } from '../data/fieldOptions.js'
 
 const pct = (n: number, d: number) => d === 0 ? 0 : Math.round((n / d) * 100)
 
@@ -23,7 +24,7 @@ export function GeotechQaqcPage() {
   const [keys, setKeys] = usePersistentState<{ rqd?: string; scr?: string; tcr?: string }>('qaqc.keys', {})
   const [groupKey, setGroupKey] = usePersistentState('qaqc.groupKey', 'lithology')
   const effective = { rqd: keys.rqd ?? guessed.rqd, scr: keys.scr ?? guessed.scr, tcr: keys.tcr ?? guessed.tcr }
-  const numeric = dataset?.variables.filter((v) => v.dataType !== 'category') ?? []
+  const numeric = numericFields(dataset)
   const groups = [{ key: 'lithology', label: 'Lithology' }, ...(dataset?.dimensions.map((d) => ({ key: d.key, label: d.label })) ?? [])]
 
   const result = useMemo(() => dataset === undefined ? null : ({

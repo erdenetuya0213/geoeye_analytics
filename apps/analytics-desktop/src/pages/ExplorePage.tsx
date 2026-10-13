@@ -1,5 +1,6 @@
-import { FieldFilters, type FilterField } from '../components/FieldFilters.js'
+import { FieldFilters } from '../components/FieldFilters.js'
 import { FieldSelects } from '../components/FieldSelects.js'
+import { filterFields, numericFields } from '../data/fieldOptions.js'
 import { matchesFieldFilters, toFieldFilters, type FieldFilter, type FieldFilters as FilterMap } from '../analysis/fieldFilter.js'
 import { useQuery } from '@tanstack/react-query'
 import { prepareCorrelationMatrix } from '../analysis/correlationWorker.js'
@@ -141,8 +142,6 @@ export function ExplorePage() {
   const [yDatasetId, setYDatasetId] = usePersistentState('explore.yDatasetId', '')
   const [yVariableKey, setYVariableKey] = usePersistentState<EdaVariableKey>('explore.yVariableKey', 'geotech.rqd')
   const [relationshipView, setRelationshipView] = usePersistentState<RelationshipView>('explore.relationshipView', 'facets')
-  const [overlay, setOverlay] = usePersistentState<ScatterOverlay>('explore.scatterOverlay', 'none')
-  const [overlayFactor, setOverlayFactor] = usePersistentState('explore.scatterOverlayFactor', 24)
   const [relationshipPopulationId, setRelationshipPopulationId] = usePersistentState<string | null>('explore.relationshipPopulationId', null)
   const [correlationMethod, setCorrelationMethod] = usePersistentState<CorrelationMethod>('explore.correlationMethod', 'pearson')
   const [swathAxis, setSwathAxis] = usePersistentState<SwathAxis>('explore.swathAxis', 'easting')
@@ -186,7 +185,7 @@ export function ExplorePage() {
 
   useEffect(() => {
     if (dataset === undefined || dataset.source !== 'live') return
-    const numericKeys = dataset.variables.filter((variable) => variable.dataType !== 'category').map((variable) => variable.key)
+    const numericKeys = numericFields(dataset).map((variable) => variable.key)
     const validKeys = variableKeys.filter((key) => numericKeys.includes(key))
     const datasetChanged = datasetId !== dataset.id
     if (datasetChanged) setDatasetId(dataset.id)
@@ -194,7 +193,7 @@ export function ExplorePage() {
     else if (validKeys.length !== variableKeys.length) setVariableKeys(validKeys)
     const availableRelationshipIds = relationshipDatasetIds.filter((id) => datasets.some((candidate) => candidate.id === id))
     if (availableRelationshipIds.length === 0) setRelationshipDatasetIds(datasets.slice(0, 2).map((candidate) => candidate.id))
-    const firstVariable = dataset.variables.find((variable) => variable.dataType !== 'category')
+    const firstVariable = numericFields(dataset)[0]
     if (firstVariable !== undefined && !datasets.some((candidate) => candidate.id === xDatasetId)) { setXDatasetId(dataset.id); setXVariableKey(firstVariable.key) }
     if (firstVariable !== undefined && !datasets.some((candidate) => candidate.id === yDatasetId)) { setYDatasetId(dataset.id); setYVariableKey(firstVariable.key) }
     if (datasetChanged) { autoRunRequestedRef.current = false; setSubmittedRequest(null); setActiveRun(null) }
@@ -278,7 +277,7 @@ export function ExplorePage() {
     : relationshipPopulationFacets(xObservations, yObservations, xVariable.key, yVariable.key, activeRun?.configuration, xDataset?.dimensions ?? [])
   const selectedRelationshipFacet = relationshipFacets.find((facet) => facet.id === relationshipPopulationId)
   const detailRelationship = selectedRelationshipFacet?.result.relationship ?? relationshipResult
-  const overlayOptions = { kind: overlay, factor: overlayFactor }
+  const overlayOptions = { kind: 'none' as ScatterOverlay, factor: 24 }
   const scatterName = `${yVariable?.shortLabel ?? 'Y'} vs ${xVariable?.shortLabel ?? 'X'}`
   const scatterOption = buildScatterOption(detailRelationship, {
     x: axisTitle(xVariable?.label ?? 'X', xVariable?.unit),
@@ -287,28 +286,11 @@ export function ExplorePage() {
   const matrixOption = buildCorrelationOption(matrixQuery.data ?? { kind: 'correlation', cells: [], labels: [], method: correlationMethod })
   const detailVariables = (activeDataset?.variables ?? []).filter((variable) => activeRun?.populations.some((population) => population.variableKey === variable.key))
 
-  const filterFields = useMemo<FilterField[]>(() => {
-    if (dataset === undefined) return []
-    const dictionaries = new Map(dataset.dimensions.map((dimension) => [dimension.key, new Set<string>()]))
-    for (const observation of dataset.observations) {
-      for (const [key, values] of dictionaries) {
-        const value = observation.dimensions[key]
-        if (value !== undefined && value !== '') values.add(value)
-      }
-    }
-    return [
-      ...dataset.variables.filter((variable) => variable.dataType !== 'category')
-        .map((variable): FilterField => ({ key: variable.key, kind: 'number', label: variable.label, unit: variable.unit })),
-      ...dataset.dimensions.flatMap((dimension): FilterField[] => {
-        const values = [...(dictionaries.get(dimension.key) ?? [])].sort()
-        return values.length === 0 ? [] : [{ key: dimension.key, kind: 'category', label: dimension.label, values }]
-      }),
-    ]
-  }, [dataset])
+  const fields = useMemo(() => filterFields(dataset), [dataset])
   const selectDataset = (nextDatasetId: string) => {
     const nextDataset = datasets.find((candidate) => candidate.id === nextDatasetId)
     if (nextDataset === undefined) return
-    setDatasetId(nextDatasetId); setVariableKeys(nextDataset.variables.slice(0, 3).map((variable) => variable.key)); setActiveFilterKeys([]); setFilterValues({}); clearSelection()
+    setDatasetId(nextDatasetId); setVariableKeys(numericFields(nextDataset).slice(0, 3).map((variable) => variable.key)); setActiveFilterKeys([]); setFilterValues({}); clearSelection()
   }
   const changeFields = (keys: string[]) => { setVariableKeys(keys as EdaVariableKey[]); clearSelection() }
   const changeFilterKeys = (keys: string[]) => {
@@ -450,11 +432,9 @@ export function ExplorePage() {
     : <div className="segmented-control eda-detail-chart-picker" role="group" aria-label="Distribution chart"><button className={distributionChart === 'all' ? 'is-active' : ''} onClick={() => setDistributionChart('all')} type="button">All</button><button className={distributionChart === 'histogram' ? 'is-active' : ''} onClick={() => setDistributionChart('histogram')} type="button">Histogram</button><button className={distributionChart === 'cdf' ? 'is-active' : ''} onClick={() => setDistributionChart('cdf')} type="button">CDF</button><button className={distributionChart === 'probability' ? 'is-active' : ''} onClick={() => setDistributionChart('probability')} type="button">Probability</button><button className={distributionChart === 'box' ? 'is-active' : ''} onClick={() => setDistributionChart('box')} type="button">Box plot</button></div>}</div>
   const spatialAxisControl = activeRun === null || view !== 'swath' ? null : <div className="eda-inline-plot-tools eda-spatial-tool-control"><span>Spatial axis</span><div className="segmented-control" role="group" aria-label="Spatial axis">{(['easting', 'northing', 'depth'] as const).map((axis) => <button aria-pressed={swathAxis === axis} className={swathAxis === axis ? 'is-active' : ''} key={axis} onClick={() => setSwathAxis(axis)} type="button">{axis}</button>)}</div></div>
   const contextualTools = activeRun === null || view === 'statistics' ? null : <div className="eda-context-toolbar" role="region" aria-label={`${view === 'distribution' ? 'Distribution' : view === 'relationships' ? 'Relationships' : 'Spatial'} tools`}>
-    <div className="eda-context-toolbar-title"><strong>{view === 'distribution' ? 'Distribution' : view === 'relationships' ? 'Relationships' : 'Spatial'}</strong><span>View tools</span></div>
     {supportsPopulationModes ? <div className="eda-context-tool-group"><span>Layout</span>{resultModeControl}</div> : null}
     {detailVariableControl}
     {relationshipViewControl === null ? null : <div className="eda-context-tool-group"><span>Layout</span>{relationshipViewControl}</div>}
-    {view === 'relationships' ? <div className="eda-context-tool-group"><span>Reference</span><select aria-label="Scatter reference overlay" onChange={(event) => setOverlay(event.target.value as ScatterOverlay)} value={overlay}><option value="none">None</option><option value="one-to-one">1:1 line</option><option value="priest-hudson">Priest &amp; Hudson (RQD vs FF)</option><option value="calibration">y = k·x (Is50 → UCS)</option></select>{overlay === 'calibration' ? <input aria-label="Calibration factor k" inputMode="decimal" onChange={(event) => setOverlayFactor(Number(event.target.value) || 24)} style={{ width: 52 }} value={overlayFactor} /> : null}</div> : null}
     {relationshipMatrixControl}
     {distributionPlotControl === null ? null : <div className="eda-context-tool-group"><span>Chart</span>{distributionPlotControl}</div>}
     {spatialAxisControl}
@@ -470,8 +450,8 @@ export function ExplorePage() {
 
     <div className="analysis-toolbar eda-toolbar eda-run-toolbar">
       <DatasetScopePicker ariaPrefix="EDA" datasets={datasets} onChange={selectDataset} storageKey="explore" value={dataset.id} />
-      <FieldSelects ariaPrefix="EDA" onChange={changeFields} value={variableKeys} variables={dataset.variables} />
-      <FieldFilters ariaPrefix="EDA" fields={filterFields} filters={filterValues} keys={activeFilterKeys} onChangeFilter={changeFilter} onChangeKeys={changeFilterKeys} />
+      <FieldSelects ariaPrefix="EDA" onChange={changeFields} value={variableKeys} variables={numericFields(dataset)} />
+      <FieldFilters ariaPrefix="EDA" fields={fields} filters={filterValues} keys={activeFilterKeys} onChangeFilter={changeFilter} onChangeKeys={changeFilterKeys} />
       <div className="toolbar-spacer" />
       <div className={`eda-run-control ${configurationChanged ? 'is-stale' : ''}`}>{activeRun === null ? null : <span>{configurationChanged ? 'Configuration changed' : `Run #${String(activeRun.runNumber).padStart(2, '0')} · Up to date`}</span>}{activeRun === null || configurationChanged ? <button className="primary-button" disabled={runEngine.pending || variableKeys.length === 0} onClick={startRun} type="button">{runEngine.pending ? <RefreshCw className="is-spinning" size={13} /> : <Play size={13} />}{runEngine.pending ? 'Running…' : activeRun === null ? 'Run analysis' : 'Update analysis'}</button> : null}</div>
     </div>
@@ -544,11 +524,6 @@ export function ExplorePage() {
         </div> : null}
 
         {view === 'relationships' ? <div className="eda-workspace eda-workspace-wide eda-relationship-workspace"><section className="panel eda-main-panel"><div className="eda-relationship-view">
-          <div className="eda-relationship-config">
-            <div className="eda-relationship-datasets"><span>Datasets</span>{relationshipDatasets.map((item) => <span className="eda-dataset-chip" key={item.id}>{item.name}{relationshipDatasets.length > 1 ? <button aria-label={`Remove ${item.name}`} onClick={() => removeRelationshipDataset(item.id)} type="button"><X size={12} /></button> : null}</span>)}<select aria-label="Add relationship dataset" disabled={availableRelationshipDatasets.length === 0} onChange={(event) => addRelationshipDataset(event.target.value)} value=""><option value="">{availableRelationshipDatasets.length === 0 ? 'All datasets added' : '+ Add dataset'}</option>{availableRelationshipDatasets.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><small className="eda-match-method">{relationshipResult.matchMetadata.method === 'row-identity' ? 'same-row matching' : 'interval-overlap matching'}</small></div>
-            <div className="eda-axis-builder"><strong>X axis</strong><label><span>Dataset</span><select aria-label="X axis dataset" onChange={(event) => { const next = datasets.find((item) => item.id === event.target.value); const variable = next?.variables.find((item) => item.dataType !== 'category'); if (variable !== undefined) selectRelationshipAxis('x', event.target.value, variable.key) }} value={xDataset?.id}>{relationshipDatasets.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label><span>Variable</span><select aria-label="X axis variable" onChange={(event) => selectRelationshipAxis('x', xDataset?.id ?? '', event.target.value as EdaVariableKey)} value={xVariable?.key}>{xDataset?.variables.filter((item) => item.dataType !== 'category').map((item) => <option key={item.key} value={item.key}>{item.label} · {item.unit}</option>)}</select></label></div>
-            <div className="eda-axis-builder"><strong>Y axis</strong><label><span>Dataset</span><select aria-label="Y axis dataset" onChange={(event) => { const next = datasets.find((item) => item.id === event.target.value); const variable = next?.variables.find((item) => item.dataType !== 'category'); if (variable !== undefined) selectRelationshipAxis('y', event.target.value, variable.key) }} value={yDataset?.id}>{relationshipDatasets.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label><span>Variable</span><select aria-label="Y axis variable" onChange={(event) => selectRelationshipAxis('y', yDataset?.id ?? '', event.target.value as EdaVariableKey)} value={yVariable?.key}>{yDataset?.variables.filter((item) => item.dataType !== 'category').map((item) => <option key={item.key} value={item.key}>{item.label} · {item.unit}</option>)}</select></label></div>
-          </div>
 
           {relationshipView === 'facets' ? <section className="eda-facets-panel eda-relationship-facets"><GeoEyeFacetChart
             ariaLabel="Relationship population facets"

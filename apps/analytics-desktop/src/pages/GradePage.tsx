@@ -7,6 +7,7 @@ import { usePersistentState } from '../state/persistentState.js'
 import { csv } from '../data/resultExport.js'
 import { SaveExportBar, type ExportTable } from '../components/SaveExportBar.js'
 import { buildDeclusterCurveOption, buildLogProbabilityOption, buildMeanCvCurveOption } from '../visualization/gradeCharts.js'
+import { numericFields } from '../data/fieldOptions.js'
 
 type Target = 'minimum' | 'maximum'
 interface Prepared { values: number[]; coordinates: number[][]; extent: number; dropped: number; rows: Array<{ id: string; holeId: string; from: number; to: number }> }
@@ -32,7 +33,7 @@ export function GradePage() {
   const [error, setError] = useState<string | null>(null)
 
   const dataset = scope.dataset
-  const numeric = dataset?.variables.filter((v) => v.dataType !== 'category') ?? []
+  const numeric = numericFields(dataset)
   const variable = numeric.find((v) => v.key === variableKey) ?? numeric[0]
   const unit = variable?.unit ?? ''
   const signature = `${scope.signature}|${variable?.key ?? ''}`
