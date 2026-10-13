@@ -20,7 +20,9 @@ type OperationId = typeof operations[number][0]
 const composites = ['Category composite', 'Economic composite', 'Majority composite', 'Numeric composite']
 const positions: readonly (readonly [PointPosition, string])[] = [['mid', 'Interval mid'], ['above', 'Contact above (From)'], ['below', 'Contact below (To)']]
 const previewRows = 200
+const sourceRows = 50
 const count = (value: number) => value.toLocaleString('en-US')
+const plural = (value: number, noun: string) => `${count(value)} ${noun}${value === 1 ? '' : 's'}`
 const parts = (...items: (string | false)[]) => items.filter(Boolean).join(' · ')
 
 interface Created { columns: string[]; name: string; note: string; rows: string[][] }
@@ -34,72 +36,99 @@ function TableSelect({ label, onChange, tables, value }: { label: string; onChan
   </select></label>
 }
 
+/** What an operation reads from a table: the hole and depth columns it located, then the chosen fields. */
+function TablePreview({ fields, table }: { fields: readonly number[]; table: OperationTable | undefined }) {
+  const summary = useMemo(() => table === undefined ? null : {
+    holes: new Set(table.rows.map(row => normalizeStructureHoleId(row[table.hole] ?? ''))).size,
+    points: table.rows.filter(row => Number(row[table.from]) === Number(row[table.to])).length,
+  }, [table])
+  if (table === undefined || summary === null) return <div />
+  const columns = [...new Set([table.hole, table.from, table.to]), ...fields]
+  return <section className="panel operation-preview operation-source">
+    <div><table>
+      <thead><tr>{columns.map(index => <th key={index}>{table.columns[index]}</th>)}</tr></thead>
+      <tbody>{table.rows.slice(0, sourceRows).map((row, index) => <tr key={index}>{columns.map(column => <td key={column}>{row[column]}</td>)}</tr>)}</tbody>
+    </table></div>
+    <p>{parts(plural(table.rows.length, 'row'), plural(summary.holes, 'hole'), summary.points === 0 ? 'intervals' : summary.points === table.rows.length ? 'point samples' : `${plural(summary.points, 'point sample')}, the rest intervals`)}</p>
+  </section>
+}
+
+interface MergeSetup { fields: number[][]; ids: string[]; name: string; projectOnly: boolean }
+interface PointSetup { depthColumn: string; id: string; name: string; position: PointPosition }
+
+// Both forms keep their choices with the project: the page is rebuilt whenever the workspace refreshes its datasets.
 function MergeForm({ onCreate, projectHoles, tables }: { onCreate: (created: Created) => void; projectHoles: ReadonlySet<string>; tables: readonly OperationTable[] }) {
-  const intervalTables = useMemo(() => tables.filter(isIntervalTable), [tables])
-  const [ids, setIds] = useState<[string, string]>(['', ''])
-  const [fields, setFields] = useState<[number[], number[]]>([[], []])
-  const [name, setName] = useState('')
-  const [projectOnly, setProjectOnly] = useState(true)
-  const [first, second] = ids.map(id => intervalTables.find(table => table.id === id))
+  const [setup, setSetup] = usePersistentState<MergeSetup>('operations.merge', { fields: [[], []], ids: ['', ''], name: '', projectOnly: true })
+  const picked = [0, 1].map(side => tables.find(table => table.id === setup.ids[side]))
+  const [first, second] = picked
+  const fields = picked.map((table, side) => table === undefined ? [] : (setup.fields[side] ?? []).filter(index => fieldColumns(table).includes(index)))
   const defaultName = first && second ? `${first.name} + ${second.name}` : 'Merged table'
-  const set = <T,>(pair: [T, T], side: number, value: T): [T, T] => side === 0 ? [value, pair[1]] : [pair[0], value]
+  const choose = (side: number, id: string, list: number[]) => setSetup(current => ({
+    ...current,
+    fields: [0, 1].map(index => index === side ? list : current.fields[index] ?? []),
+    ids: [0, 1].map(index => index === side ? id : current.ids[index] ?? ''),
+  }))
   const toggle = (side: number, index: number) => {
     const list = fields[side]!
-    setFields(set(fields, side, list.includes(index) ? list.filter(item => item !== index) : [...list, index].sort((a, b) => a - b)))
+    choose(side, setup.ids[side] ?? '', list.includes(index) ? list.filter(item => item !== index) : [...list, index].sort((a, b) => a - b))
   }
   const create = () => {
     if (first === undefined || second === undefined) return
-    const merged = mergeTables(first, fields[0], second, fields[1], projectOnly && projectHoles.size > 0 ? projectHoles : undefined)
-    onCreate({ columns: merged.columns, name: name.trim() || defaultName, rows: merged.rows, note: parts(
-      `${count(merged.rows.length)} intervals in ${count(merged.holes)} holes`,
-      merged.overlaps > 0 && `${count(merged.overlaps)} overlapping pieces left blank`,
-      merged.skippedHoles > 0 && `${count(merged.skippedHoles)} holes not in Drillholes left out`) })
+    const merged = mergeTables(first, fields[0]!, second, fields[1]!, setup.projectOnly && projectHoles.size > 0 ? projectHoles : undefined)
+    onCreate({ columns: merged.columns, name: setup.name.trim() || defaultName, rows: merged.rows, note: parts(
+      `${plural(merged.rows.length, 'interval')} in ${plural(merged.holes, 'hole')}`,
+      merged.placed > 0 && `${plural(merged.placed, 'point sample')} placed`,
+      merged.combined > 0 && `several samples combined in ${plural(merged.combined, 'interval')}`,
+      merged.unplaced > 0 && `${plural(merged.unplaced, 'sample')} outside every interval left out`,
+      merged.overlaps > 0 && `${plural(merged.overlaps, 'overlapping piece')} left blank`,
+      merged.skippedHoles > 0 && `${plural(merged.skippedHoles, 'hole')} not in Drillholes left out`) })
   }
   return <>
     <div className="strength-form-grid">
-      {[first, second].map((_, side) => <TableSelect key={side} label={side === 0 ? 'First table' : 'Second table'} onChange={id => { setIds(set(ids, side, id)); setFields(set(fields, side, [])) }} tables={intervalTables} value={ids[side]!} />)}
-      {[first, second].map((table, side) => <fieldset className="operation-fields" key={side}>
+      {picked.map((table, side) => <TableSelect key={side} label={side === 0 ? 'First table' : 'Second table'} onChange={id => choose(side, id, [])} tables={tables} value={table?.id ?? ''} />)}
+      {picked.map((table, side) => <fieldset className="operation-fields" key={side}>
         <legend>{table === undefined ? 'Fields' : `${table.name} fields`}</legend>
         {table === undefined ? <small>Choose a table</small> : fieldColumns(table).map(index => <label key={index}><input checked={fields[side]!.includes(index)} onChange={() => toggle(side, index)} type="checkbox" />{table.columns[index]}</label>)}
       </fieldset>)}
-      <label><span>New table name</span><input onChange={event => setName(event.target.value)} placeholder={defaultName} value={name} /></label>
-      <label className="strength-validity-field"><input checked={projectOnly && projectHoles.size > 0} disabled={projectHoles.size === 0} onChange={event => setProjectOnly(event.target.checked)} type="checkbox" /><span><strong>Only holes in Drillholes</strong></span></label>
+      {picked.map((table, side) => <TablePreview fields={fields[side]!} key={side} table={table} />)}
+      <label><span>New table name</span><input onChange={event => setSetup(current => ({ ...current, name: event.target.value }))} placeholder={defaultName} value={setup.name} /></label>
+      <label className="strength-validity-field"><input checked={setup.projectOnly && projectHoles.size > 0} disabled={projectHoles.size === 0} onChange={event => setSetup(current => ({ ...current, projectOnly: event.target.checked }))} type="checkbox" /><span><strong>Only holes in Drillholes</strong></span></label>
     </div>
     <footer className="operation-footer">
-      <button className="button button-primary" disabled={first === undefined || second === undefined || first === second || fields.some(list => list.length === 0)} onClick={create} type="button">Create merged table</button>
-      <small>{intervalTables.length < 2 ? 'Needs two tables with Hole ID, From and To.' : 'Hole ID, From and To come from the tables; intervals split at every contact of both.'}</small>
+      <button className="button button-primary" disabled={first === undefined || second === undefined || first === second || fields.every(list => list.length === 0)} onClick={create} type="button">Create merged table</button>
+      <small>Intervals split at every contact of both tables. A sample with From = To goes into the interval that contains it.</small>
     </footer>
   </>
 }
 
 function PointForm({ collars, onCreate, surveys, tables }: { collars: readonly CollarRecord[]; onCreate: (created: Created) => void; surveys: readonly SurveyStation[]; tables: readonly OperationTable[] }) {
-  const [id, setId] = useState('')
-  const [depthColumn, setDepthColumn] = useState('')
-  const [position, setPosition] = useState<PointPosition>('mid')
-  const [name, setName] = useState('')
-  const table = tables.find(item => item.id === id)
+  const [setup, setSetup] = usePersistentState<PointSetup>('operations.point', { depthColumn: '', id: '', name: '', position: 'mid' })
+  const change = (next: Partial<PointSetup>) => setSetup(current => ({ ...current, ...next }))
+  const table = tables.find(item => item.id === setup.id)
+  const depthColumn = table !== undefined && setup.depthColumn !== '' && fieldColumns(table).includes(Number(setup.depthColumn)) ? setup.depthColumn : ''
   const defaultName = table ? `${table.name} points` : 'Points'
   const singleDepth = table !== undefined && (depthColumn !== '' || !isIntervalTable(table))
   const create = () => {
     if (table === undefined) return
-    const result = calculatePoints(table, position, collars, surveys, depthColumn === '' ? undefined : Number(depthColumn))
-    onCreate({ columns: result.columns, name: name.trim() || defaultName, rows: result.located === 0 ? [] : result.rows, note: parts(
-      `${count(result.located)} of ${count(result.rows.length)} rows located`,
-      result.noCollar > 0 && `${count(result.noCollar)} holes without a collar left blank`,
-      result.vertical > 0 && `${count(result.vertical)} holes without a survey taken as vertical`) })
+    const result = calculatePoints(table, setup.position, collars, surveys, depthColumn === '' ? undefined : Number(depthColumn))
+    onCreate({ columns: result.columns, name: setup.name.trim() || defaultName, rows: result.located === 0 ? [] : result.rows, note: parts(
+      `${count(result.located)} of ${plural(result.rows.length, 'row')} located`,
+      result.noCollar > 0 && `${plural(result.noCollar, 'hole')} without a collar left blank`,
+      result.vertical > 0 && `${plural(result.vertical, 'hole')} without a survey taken as vertical`) })
   }
   return <>
     <div className="strength-form-grid">
-      <TableSelect label="Table" onChange={value => { setId(value); setDepthColumn('') }} tables={tables} value={id} />
-      <label><span>Depth field</span><select aria-label="Depth field" disabled={table === undefined} onChange={event => setDepthColumn(event.target.value)} value={depthColumn}>
+      <TableSelect label="Table" onChange={id => change({ depthColumn: '', id })} tables={tables} value={table?.id ?? ''} />
+      <label><span>Depth field</span><select aria-label="Depth field" disabled={table === undefined} onChange={event => change({ depthColumn: event.target.value })} value={depthColumn}>
         <option value="">{table === undefined ? 'Choose a table' : isIntervalTable(table) ? `${table.columns[table.from]} – ${table.columns[table.to]}` : table.columns[table.from]}</option>
         {table === undefined ? null : fieldColumns(table).map(index => <option key={index} value={index}>{table.columns[index]}</option>)}
       </select></label>
-      <label><span>Coordinate at</span><select aria-label="Coordinate at" onChange={event => setPosition(event.target.value as PointPosition)} value={position}>
+      <label><span>Coordinate at</span><select aria-label="Coordinate at" onChange={event => change({ position: event.target.value as PointPosition })} value={setup.position}>
         {positions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
       </select></label>
-      <label><span>New table name</span><input onChange={event => setName(event.target.value)} placeholder={defaultName} value={name} /></label>
+      <label><span>New table name</span><input onChange={event => change({ name: event.target.value })} placeholder={defaultName} value={setup.name} /></label>
     </div>
+    {table === undefined ? null : <div className="operation-sources"><TablePreview fields={depthColumn === '' ? [] : [Number(depthColumn)]} table={table} /></div>}
     <footer className="operation-footer">
       <button className="button button-primary" disabled={table === undefined || collars.length === 0} onClick={create} type="button">Calculate points</button>
       <small>{collars.length === 0 ? 'Import collars in Drillholes first.' : singleDepth ? 'One depth per row: every position gives the same point.' : 'X, Y and Z are added to a copy of the table.'}</small>
@@ -133,19 +162,21 @@ export function OperationsPage() {
 
   const report = (text: string, error = false) => setNotice({ error, text })
   const fail = (error: unknown) => report(error instanceof Error ? error.message : 'The change could not be saved.', true)
-  const store = async (change: () => void, text: string) => {
+  const store = (change: () => void, text: string) => {
     setDialog(null)
-    try {
-      change()
-      await storage.flush?.()
-      setRevision(value => value + 1)
-      report(text)
-    } catch (error) { fail(error) }
+    try { change() } catch (error) { fail(error); return }
+    // The table is in the open project at once. Its write to the project file follows; the storage retries a failed one.
+    setRevision(value => value + 1)
+    report(text)
+    void storage.flush?.().catch(() => report(`${text} · not written to the project file yet`, true))
   }
   const add = ({ columns, name, note, rows }: Created) => {
     if (rows.length === 0) { report(parts('No rows were produced', note), true); return }
-    const id = crypto.randomUUID()
-    void store(() => { writeOperationTable(storage, { columns, createdAt: new Date().toISOString(), id, name, note, rows }); setActiveId(id) }, parts(`${name} created`, note))
+    // Running an operation again makes another table, so the new one gets a name of its own.
+    const id = crypto.randomUUID(), taken = new Set(made.map(table => table.name))
+    let unique = name
+    for (let copy = 2; taken.has(unique); copy++) unique = `${name} ${copy}`
+    store(() => { writeOperationTable(storage, { columns, createdAt: new Date().toISOString(), id, name: unique, note, rows }); setActiveId(id) }, parts(`${unique} created`, note))
   }
   const importFile = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
@@ -153,7 +184,7 @@ export function OperationsPage() {
     if (file === undefined) return
     try {
       const [header = [], ...rows] = csvRows((await readImportSource(file)).contents)
-      const columns = header.map(column => column.replace(/^﻿/, '').trim())
+      const columns = header.map(column => column.replace(/^\uFEFF/, '').trim())
       if (operationTable('', '', '', columns, rows) === null) throw new Error('The CSV needs a Hole ID column with From and To, or with Depth.')
       add({ columns, name: file.name.replace(/\.[^.]+$/, ''), note: 'Imported CSV', rows: rows.map(row => columns.map((_, index) => (row[index] ?? '').trim())) })
     } catch (error) { fail(error) }
@@ -161,7 +192,7 @@ export function OperationsPage() {
   const rename = (table: StoredOperationTable, value: string) => {
     const name = value.trim()
     if (name === '' || name === table.name) setDialog(null)
-    else void store(() => writeOperationTable(storage, { ...table, name }), `Renamed to ${name}`)
+    else store(() => writeOperationTable(storage, { ...table, name }), `Renamed to ${name}`)
   }
   const exportCsv = async (table: StoredOperationTable, name: string) => {
     setDialog(null)
@@ -209,7 +240,7 @@ export function OperationsPage() {
       {dialog === 'delete' && active ? <div className="dialog-backdrop">
         <section aria-labelledby="operation-delete-title" aria-modal="true" className="strength-dialog" role="dialog">
           <header className="strength-dialog-header"><h2 id="operation-delete-title">Delete {active.name}?</h2><button aria-label="Close delete confirmation" className="icon-button" onClick={() => setDialog(null)} type="button"><X size={18} /></button></header>
-          <footer className="strength-dialog-footer"><p>{count(active.rows.length)} rows</p><div><button className="button button-secondary" onClick={() => setDialog(null)} type="button">Cancel</button><button className="button button-accent" onClick={() => void store(() => removeOperationTable(storage, active.id), `${active.name} deleted`)} type="button">Delete table</button></div></footer>
+          <footer className="strength-dialog-footer"><p>{count(active.rows.length)} rows</p><div><button className="button button-secondary" onClick={() => setDialog(null)} type="button">Cancel</button><button className="button button-accent" onClick={() => store(() => removeOperationTable(storage, active.id), `${active.name} deleted`)} type="button">Delete table</button></div></footer>
         </section>
       </div> : null}
     </div>

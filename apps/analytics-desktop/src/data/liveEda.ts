@@ -730,6 +730,8 @@ export function useProjectEdaDatasets() {
     enabled: workspace.live && !workspace.projectsLoading && !workspace.localLoading,
     queryFn: ({ signal }) => buildLocalEdaInWorker([workspace.localSnapshot, workspace.localDrillholeDraft, workspace.localTabularDrafts, workspace.project, savedRmrDatasets, operationTables, classTables], signal),
     queryKey: ['eda-datasets', 'local', projectId, workspace.localSnapshot?.refreshedAt ?? 'empty', workspace.localDrillholeDraft?.updatedAt ?? 'no-draft', localDraftSignature, savedSignature, operationIndex, classSignature],
+    // While a rebuild runs, pages keep this project's previous datasets instead of being torn down.
+    placeholderData: (previous, previousQuery) => previousQuery?.queryKey[2] === projectId ? previous : undefined,
     staleTime: Number.POSITIVE_INFINITY,
   })
 }

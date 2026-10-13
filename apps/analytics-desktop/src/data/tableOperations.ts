@@ -45,49 +45,78 @@ function uniqueLabel(taken: Set<string>, label: string): string {
   return unique
 }
 
-function intervalsByHole(table: OperationTable) {
-  const holes = new Map<string, { intervals: { from: number; row: readonly string[]; to: number }[]; name: string }>()
+interface Sample { from: number; row: readonly string[]; to: number }
+
+/** Rows of each hole: intervals (To > From) and point samples (To = From, or a table with a single Depth). */
+function samplesByHole(table: OperationTable) {
+  const holes = new Map<string, { intervals: Sample[]; name: string; points: Sample[] }>()
   for (const row of table.rows) {
     const name = (row[table.hole] ?? '').trim(), from = contact(depth(row[table.from])), to = contact(depth(row[table.to]))
-    if (name === '' || !(to > from)) continue
+    if (name === '' || !(to >= from)) continue
     const key = normalizeStructureHoleId(name)
-    const hole = holes.get(key) ?? { intervals: [], name }
-    hole.intervals.push({ from, row, to })
+    const hole = holes.get(key) ?? { intervals: [], name, points: [] }
+    const list = to > from ? hole.intervals : hole.points
+    list.push({ from, row, to })
     holes.set(key, hole)
   }
   return holes
 }
 
+/** Several point samples in one piece give their mean when every value is a number, otherwise their distinct values. */
+function combineSamples(values: readonly string[]): string {
+  const filled = values.filter(value => value !== ''), numbers = filled.map(Number)
+  if (filled.length < 2 || !numbers.every(Number.isFinite)) return [...new Set(filled)].join(' / ')
+  return String(Number((numbers.reduce((sum, value) => sum + value, 0) / numbers.length).toPrecision(6)))
+}
+
 /**
  * Interval merge, as Leapfrog builds a merged table: every From and To of both tables becomes a contact, each piece
  * between two contacts takes a field from the one interval covering it, and a piece with no value at all is dropped.
- * Where a table's own intervals overlap, that table gives the piece no value. `onlyHoles` holds normalized hole names.
+ * Where a table's own intervals overlap, that table gives the piece no value. A point sample never makes a contact:
+ * it gives its values to the piece that contains its depth. `onlyHoles` holds normalized hole names.
  */
 export function mergeTables(first: OperationTable, firstFields: readonly number[], second: OperationTable, secondFields: readonly number[], onlyHoles?: ReadonlySet<string>) {
-  const sides = [{ fields: firstFields, holes: intervalsByHole(first), table: first }, { fields: secondFields, holes: intervalsByHole(second), table: second }]
+  const sides = [{ fields: firstFields, holes: samplesByHole(first), table: first }, { fields: secondFields, holes: samplesByHole(second), table: second }]
   const taken = new Set(['holeid', 'from', 'to'])
   const columns = ['Hole ID', 'From', 'To', ...sides.flatMap(side => side.fields.map(field => uniqueLabel(taken, side.table.columns[field] ?? '')))]
   // The first table's spelling of a hole name wins.
   const names = new Map([...sides].reverse().flatMap(side => [...side.holes].map(([key, hole]) => [key, hole.name] as const)))
   const rows: string[][] = []
-  let holes = 0, overlaps = 0, skippedHoles = 0
+  let combined = 0, holes = 0, overlaps = 0, placed = 0, skippedHoles = 0, unplaced = 0
   for (const [key, name] of [...names].sort((a, b) => a[1].localeCompare(b[1], undefined, { numeric: true }))) {
     if (onlyHoles !== undefined && !onlyHoles.has(key)) { skippedHoles++; continue }
-    const intervals = sides.map(side => side.holes.get(key)?.intervals ?? [])
+    const samples = sides.map(side => side.holes.get(key))
+    const intervals = samples.map(sample => sample?.intervals ?? [])
     const contacts = [...new Set(intervals.flat().flatMap(interval => [interval.from, interval.to]))].sort((a, b) => a - b)
+    // A gap between intervals is not an interval: only pieces that some interval covers exist.
+    const pieces = contacts.slice(0, -1).flatMap((from, index) => {
+      const to = contacts[index + 1]!
+      const covering = intervals.map(list => list.filter(interval => interval.from <= from && interval.to >= to))
+      return covering.some(list => list.length > 0) ? [{ covering, from, points: sides.map((): (readonly string[])[] => []), to }] : []
+    })
+    // A sample exactly on a contact belongs to the piece below it.
+    samples.forEach((sample, sideIndex) => sample?.points.forEach(point => {
+      const piece = pieces.find(item => item.from <= point.from && point.from < item.to) ?? pieces.find(item => item.to === point.from)
+      if (piece === undefined) { unplaced++; return }
+      piece.points[sideIndex]!.push(point.row)
+      placed++
+    }))
     const before = rows.length
-    for (let index = 0; index < contacts.length - 1; index++) {
-      const from = contacts[index]!, to = contacts[index + 1]!
+    for (const piece of pieces) {
       const values = sides.flatMap((side, sideIndex) => {
-        const covering = intervals[sideIndex]!.filter(interval => interval.from <= from && interval.to >= to)
+        const covering = piece.covering[sideIndex]!, points = piece.points[sideIndex]!
         if (covering.length > 1) overlaps++
-        return side.fields.map(field => covering.length === 1 ? (covering[0]!.row[field] ?? '').trim() : '')
+        if (points.length > 1) combined++
+        return side.fields.map(field => {
+          const value = covering.length === 1 ? (covering[0]!.row[field] ?? '').trim() : ''
+          return value !== '' ? value : combineSamples(points.map(row => (row[field] ?? '').trim()))
+        })
       })
-      if (values.some(value => value !== '')) rows.push([name, String(from), String(to), ...values])
+      if (values.some(value => value !== '')) rows.push([name, String(piece.from), String(piece.to), ...values])
     }
     if (rows.length > before) holes++
   }
-  return { columns, holes, overlaps, rows, skippedHoles }
+  return { columns, combined, holes, overlaps, placed, rows, skippedHoles, unplaced }
 }
 
 /**

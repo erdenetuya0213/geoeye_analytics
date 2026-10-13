@@ -7323,3 +7323,6 @@ select::picker(select) { white-space: normal; }
 .operation-preview th, .operation-preview td { height: 30px; padding: 4px 12px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
 .operation-preview th { position: sticky; top: 0; color: var(--muted-foreground); background: var(--workspace-chrome); font-family: inherit; font-size: 10.5px; font-weight: 650; }
 .operation-preview p { margin: 0; padding: 9px 12px; }
+.operation-source { min-width: 0; }
+.operation-source > div { max-height: 172px; }
+.operation-sources { padding: 0 18px 18px; }

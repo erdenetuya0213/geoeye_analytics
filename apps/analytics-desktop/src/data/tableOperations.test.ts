@@ -48,6 +48,35 @@ describe('mergeTables', () => {
   })
 })
 
+describe('mergeTables with point samples', () => {
+  const logging = table('logging', ['Hole ID', 'From', 'To', 'grade'], [['DH1', '36.9', '37.4', 'R3'], ['DH1', '146.5', '147.4', 'R2'], ['DH1', '147.4', '148.27', 'R3'], ['DH1', '150', '151', 'R4']])
+  const pointLoad = table('point load', ['Hole ID', 'Sample ID', 'From', 'To', 'Test Type', 'Is(50) (MPa)'], [
+    ['DH1', 'PL-1', '37.07', '37.07', 'diametral', '0.15'],
+    ['DH1', 'PL-2', '147.4', '147.4', 'diametral', '0.17'], ['DH1', 'PL-3', '147.56', '147.56', 'axial', '0.18'],
+    ['DH1', 'PL-4', '151', '151', 'axial', '0.3'], ['DH1', 'PL-5', '149', '149', 'axial', '0.4'], ['DH2', 'PL-6', '5', '5', 'axial', '0.5'],
+  ])
+
+  it('puts each sample in the interval that contains its depth, without splitting the interval', () => {
+    const merged = mergeTables(logging, [3], pointLoad, [4, 5])
+    expect(merged.rows).toEqual([
+      ['DH1', '36.9', '37.4', 'R3', 'diametral', '0.15'],
+      ['DH1', '146.5', '147.4', 'R2', '', ''],
+      // A sample on a contact goes below it; two samples give the mean of numbers and the distinct texts.
+      ['DH1', '147.4', '148.27', 'R3', 'diametral / axial', '0.175'],
+      // The last contact of the hole belongs to the interval above it.
+      ['DH1', '150', '151', 'R4', 'axial', '0.3'],
+    ])
+    // PL-5 sits in a gap between intervals and DH2 has no interval at all.
+    expect(merged).toMatchObject({ combined: 1, holes: 1, placed: 4, unplaced: 2 })
+  })
+
+  it('reads a table with a single Depth column as point samples, whichever side it is on', () => {
+    const xrf = table('xrf', ['Hole ID', 'Depth', 'Cu'], [['DH1', '37', '120'], ['DH1', '37.2', '140']])
+    expect(mergeTables(xrf, [2], logging, [3]).rows[0]).toEqual(['DH1', '36.9', '37.4', '130', 'R3'])
+    expect(mergeTables(xrf, [2], pointLoad, [5]).rows).toEqual([])
+  })
+})
+
 describe('calculatePoints', () => {
   const collars = [{ easting: 1000, elevation: 500, holeId: 'DH-1', northing: 2000 }, { easting: 10, elevation: 100, holeId: 'DH2', northing: 20 }]
   const surveys = [{ azimuth: 90, depth: 0, dip: -60, holeId: 'DH1' }, { azimuth: 90, depth: 200, dip: -60, holeId: 'DH1' }]
