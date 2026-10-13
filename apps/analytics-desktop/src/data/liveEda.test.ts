@@ -169,6 +169,21 @@ describe('live EDA adapter', () => {
     }, project)
 
     expect(result.map(edaDatasetKind)).toEqual(['integrated', 'laboratory', 'logging', 'drillholes'])
+
+    // Operation tables are project data of their own source, categorised without guessing from the name.
+    const withOperation = buildLocalEdaDatasets(snapshot, null, {}, project, [], [{
+      columns: ['Hole ID', 'From', 'To', 'RQD', 'Au g/t'],
+      createdAt: '2026-10-13T04:00:00.000Z',
+      id: 'merge-1',
+      name: 'RQD + Au',
+      note: 'Merged',
+      rows: [['DH-001', '10', '12', '88', '1.42']],
+    }])
+    const operation = withOperation.find(dataset => dataset.id === 'operation-table:merge-1')
+    expect(edaDatasetKind(operation!)).toBe('operations')
+    expect(operation).toMatchObject({ kind: 'operations', name: 'RQD + Au · operation' })
+    expect(operation!.variables.map(variable => variable.key)).toEqual(['operations.rqd', 'operations.au_g_t'])
+    expect(withOperation.filter(dataset => edaDatasetKind(dataset) === 'operations')).toHaveLength(1)
     expect(result.find((dataset) => edaDatasetKind(dataset) === 'logging')).toMatchObject({
       id: 'local-field-logging-core-log',
       name: 'Core logging · Live',

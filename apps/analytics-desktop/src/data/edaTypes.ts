@@ -21,9 +21,13 @@ export interface EdaDimensionDefinition {
   label: string
 }
 
+/** Where a dataset came from. Set when the dataset is built; guessed from its name only for Database datasets. */
+export type EdaDatasetKind = 'integrated' | 'drillholes' | 'logging' | 'laboratory' | 'strength' | 'xrf' | 'spectral' | 'operations' | 'other'
+
 export interface EdaDataset {
   dimensions: readonly EdaDimensionDefinition[]
   id: string
+  kind?: EdaDatasetKind
   name: string
   observations: EdaObservation[]
   producer: string

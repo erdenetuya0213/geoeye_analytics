@@ -91,7 +91,7 @@ export interface GeoEyeDesktopBridge {
   engineCall(input: { method: string; params?: unknown }): Promise<EngineCallResponse>
 }
 
-export type ExportFeature = 'statistics' | 'multivariate' | 'domain' | 'grade' | 'variography' | 'structure' | 'geotechnical' | 'custom' | 'data' | '3d'
+export type ExportFeature = 'statistics' | 'multivariate' | 'domain' | 'grade' | 'variography' | 'structure' | 'geotechnical' | 'custom' | 'data' | 'operations' | '3d'
 export interface ExportFile { name: string; kind: 'png' | 'csv' | 'json' | 'txt' | 'svg'; dataUrl?: string; contents?: string }
 export interface ExportNamesInput { address: ProjectStorageAddress; feature: ExportFeature; files: Array<Pick<ExportFile, 'name' | 'kind'>> }
 export interface ExportBundleInput { address: ProjectStorageAddress; feature: ExportFeature; files: ExportFile[] }

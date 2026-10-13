@@ -6,12 +6,12 @@ import { projectStorageAddress, useProjectStorage } from './ProjectStorageContex
 /** Export folder per app feature, named like the sidebar: <project>/export/<Folder>/. */
 export const EXPORT_FOLDERS: Record<ExportFeature, string> = {
   '3d': '3D Analysis', custom: 'Custom', data: 'Data', domain: 'Domain', geotechnical: 'Geotech', grade: 'Grade',
-  multivariate: 'Multivariate', statistics: 'Statistics', structure: 'Structure', variography: 'Variography',
+  multivariate: 'Multivariate', operations: 'Operations', statistics: 'Statistics', structure: 'Structure', variography: 'Variography',
 }
 
 const sectionFeatures: Partial<Record<SectionId, ExportFeature>> = {
   custom: 'custom', domain: 'domain', explore: 'statistics', geotechnical: 'geotechnical', grade: 'grade',
-  multivariate: 'multivariate', structure: 'structure', variography: 'variography', 'view-3d': '3d',
+  multivariate: 'multivariate', operations: 'operations', structure: 'structure', variography: 'variography', 'view-3d': '3d',
 }
 /** Data pages (pool, drillholes, logging, lab, strength…) share the Data folder. */
 export const exportFeatureForSection = (section: SectionId): ExportFeature => sectionFeatures[section] ?? 'data'

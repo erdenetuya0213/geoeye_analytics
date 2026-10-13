@@ -834,7 +834,7 @@ function StructureWorkbench({ data }: { data: StructureWorkspaceData }) {
     <div className="page structure-page">
       {durable.notice ? <p role="status">{durable.notice}</p> : null}
       {exportPath ? <p role="status">Export saved: {exportPath}</p> : null}
-      {pendingExport !== null ? <ExportDialog items={pendingExport} onCancel={() => setPendingExport(null)} onConfirm={(names) => { void savePlot(pendingExport, names) }} target={exportTarget} title={`Save to export/${exportTarget.folder}`} /> : null}
+      {pendingExport !== null ? <ExportDialog items={pendingExport} onCancel={() => setPendingExport(null)} onConfirm={(names) => { void savePlot(pendingExport, names) }} target={exportTarget} title={`Save to ${exportTarget.folder}/export`} /> : null}
       <h1 className="sr-only">Structure</h1>
 
       <div className="analysis-toolbar structure-analysis-toolbar">

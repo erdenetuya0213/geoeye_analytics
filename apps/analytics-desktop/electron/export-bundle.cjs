@@ -6,6 +6,7 @@ const path = require('node:path')
 const FEATURE_FOLDERS = {
   data: 'Data', statistics: 'Statistics', multivariate: 'Multivariate', domain: 'Domain', grade: 'Grade',
   variography: 'Variography', structure: 'Structure', geotechnical: 'Geotech', custom: 'Custom', '3d': '3D Analysis',
+  operations: 'Operations',
 }
 const KINDS = new Set(['png', 'csv', 'json', 'txt', 'svg'])
 

@@ -351,7 +351,7 @@ export function GeoEyeChart({
     }
   }, [addSelection, brushSelection, clickSelection, designId, onDatumClick, onObservationClick, onObservationSelection, renderer, replaceSelection, stableOption, toggleSelection, visible])
 
-  // Publication figures: render PNG/SVG at the requested size, then name and save them into export/<Feature>.
+  // Publication figures: render PNG/SVG at the requested size, then name and save them into <Feature>/export.
   const exportImages = (formats: Array<'png' | 'svg'>) => {
     if (chartRef.current === null || exporting) return
     setExportNotice('')
@@ -389,7 +389,7 @@ export function GeoEyeChart({
   }
   if (exportFileName === undefined) return <div className="geoeye-chart-wrap">
     <div aria-label={ariaLabel} className={`geoeye-chart geoeye-chart-${designId} ${className}`.trim()} ref={containerRef} role="img" />
-    <button aria-label={`Download ${graphName} as PNG`} className="chart-download" onClick={() => setNaming(true)} title={`Download PNG (transparent) to export/${exportTarget.folder}`} type="button"><Download size={13} /></button>
+    <button aria-label={`Download ${graphName} as PNG`} className="chart-download" onClick={() => setNaming(true)} title={`Download PNG (transparent) to ${exportTarget.folder}/export`} type="button"><Download size={13} /></button>
     {downloadNotice ? <span className="chart-download-notice" role="status">{downloadNotice}</span> : null}
     {naming ? <ExportDialog items={[{ kind: 'png', name: graphName }]} onCancel={() => setNaming(false)} onConfirm={([name]) => { void downloadOne(name ?? graphName) }} target={exportTarget} title="Download chart" /> : null}
   </div>

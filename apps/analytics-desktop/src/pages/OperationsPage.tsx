@@ -205,7 +205,7 @@ export function OperationsPage() {
           <p>{parts(active.note, active.rows.length > previewRows && `first ${previewRows} of ${count(active.rows.length)} rows shown`)}</p>
         </>}
       </section>
-      {dialog === 'export' && active ? <FileNameDialog defaultName={active.name} detail={`Saved as CSV in export/${exportTarget.folder}/`} onCancel={() => setDialog(null)} onConfirm={name => void exportCsv(active, name)} title="Export table" /> : null}
+      {dialog === 'export' && active ? <FileNameDialog defaultName={active.name} detail={`Saved as CSV in ${exportTarget.folder}/export/`} onCancel={() => setDialog(null)} onConfirm={name => void exportCsv(active, name)} title="Export table" /> : null}
       {dialog === 'delete' && active ? <div className="dialog-backdrop">
         <section aria-labelledby="operation-delete-title" aria-modal="true" className="strength-dialog" role="dialog">
           <header className="strength-dialog-header"><h2 id="operation-delete-title">Delete {active.name}?</h2><button aria-label="Close delete confirmation" className="icon-button" onClick={() => setDialog(null)} type="button"><X size={18} /></button></header>

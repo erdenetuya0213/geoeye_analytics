@@ -7,11 +7,14 @@ import type {
   FieldLoggingDataset,
   ObservationValue,
   ProjectSummary,
+  TabularImportSection,
   VariableDefinition,
 } from '@geoeye/datapool-client'
 import { useQuery } from '@tanstack/react-query'
 import { useMemo } from 'react'
+import type { EdaDatasetKind } from './edaTypes.js'
 import { useProjectStorage } from '../state/ProjectStorageContext.js'
+import { readOperationTables, type StoredOperationTable } from './operationTableStore.js'
 import { readSavedRmrDatasets, type SavedRmrDataset } from './savedRmrDatasets.js'
 import { buildLocalEdaInWorker } from './localEdaWorker.js'
 import { datasetDisplayLabel, fieldLoggingDisplayLabel } from './datasetLabels.js'
@@ -38,7 +41,7 @@ const baseDimensions: readonly EdaDimensionDefinition[] = [
   { key: 'quality', label: 'Quality' },
 ]
 
-export type EdaDatasetKind = 'integrated' | 'drillholes' | 'logging' | 'laboratory' | 'strength' | 'xrf' | 'spectral' | 'other'
+export type { EdaDatasetKind }
 
 export const EDA_DATASET_CATALOG: ReadonlyArray<{ id: EdaDatasetKind; label: string }> = [
   { id: 'integrated', label: 'All data' },
@@ -48,10 +51,12 @@ export const EDA_DATASET_CATALOG: ReadonlyArray<{ id: EdaDatasetKind; label: str
   { id: 'strength', label: 'Strength' },
   { id: 'xrf', label: 'XRF' },
   { id: 'spectral', label: 'Spectral' },
+  { id: 'operations', label: 'Operations' },
   { id: 'other', label: 'Other' },
 ]
 
-export function edaDatasetKind(dataset: Pick<EdaDataset, 'id' | 'name' | 'producer' | 'variables'>): EdaDatasetKind {
+export function edaDatasetKind(dataset: Pick<EdaDataset, 'id' | 'kind' | 'name' | 'producer' | 'variables'>): EdaDatasetKind {
+  if (dataset.kind !== undefined) return dataset.kind
   const identity = `${dataset.id} ${dataset.name} ${dataset.producer}`.toLocaleLowerCase()
   const variables = dataset.variables.map((variable) => `${variable.key} ${variable.label}`).join(' ').toLocaleLowerCase()
   if (/integrated|all local data/.test(identity)) return 'integrated'
@@ -88,6 +93,7 @@ function mergeVariables(...groups: ReadonlyArray<readonly EdaVariableDefinition[
 const localImportLabels = {
   geotechnical: 'RMR76 analysis results',
   laboratory: 'Laboratory CSV imports',
+  operations: 'Operation table',
   spectral: 'Spectral CSV imports',
   strength: 'Strength CSV imports',
   xrf: 'XRF CSV imports',
@@ -96,12 +102,15 @@ const localImportLabels = {
 const localImportKinds: Record<keyof typeof localImportLabels, EdaDatasetKind> = {
   geotechnical: 'other',
   laboratory: 'laboratory',
+  operations: 'operations',
   spectral: 'spectral',
   strength: 'strength',
   xrf: 'xrf',
 }
 
-type LocalTabularDrafts = Partial<Record<keyof typeof localImportLabels, LocalTabularDraft>>
+type LocalTabularDrafts = Partial<Record<TabularImportSection, LocalTabularDraft>>
+/** A local CSV table with the section it belongs to; operation tables reuse the same builder. */
+type TabularDatasetSource = Omit<LocalTabularDraft, 'section'> & { section: keyof typeof localImportLabels }
 
 function normalizedIdentifier(value: string): string {
   return value.trim().toLocaleLowerCase().replace(/[^a-z0-9]/g, '')
@@ -140,10 +149,10 @@ function unitForColumn(column: string): string {
 }
 
 function localTabularDataset(
-  draft: LocalTabularDraft,
+  draft: TabularDatasetSource,
   project: ProjectSummary,
   drillholes: readonly DrillholeSummary[],
-  saved?: { id: string; name: string },
+  saved?: { id: string; name: string; prefix?: string },
 ): EdaDataset {
   const locationColumnsByRole = importLocationColumns(draft.columns)
   const { hole: holeIndex, from: fromIndex, to: toIndex, depth: depthIndex } = locationColumnsByRole
@@ -220,7 +229,8 @@ function localTabularDataset(
       ...baseDimensions,
       ...columns.filter((column) => column.dataType === 'category').map((column) => ({ key: column.key, label: column.label })),
     ],
-    id: saved ? `saved-rmr:${saved.id}` : `local-csv-${draft.section}`,
+    id: saved ? `${saved.prefix ?? 'saved-rmr'}:${saved.id}` : `local-csv-${draft.section}`,
+    kind: localImportKinds[draft.section],
     name: `${datasetLabel} · local`,
     observations,
     producer: 'GeoEye Analytics local database',
@@ -274,6 +284,7 @@ function localDrillholeDatasets(
   if (collarObservations.length > 0) datasets.push({
     dimensions: baseDimensions,
     id: 'local-drillhole-collars',
+    kind: 'drillholes',
     name: 'Drillhole collars · local',
     observations: collarObservations,
     producer: 'GeoEye Analytics local database',
@@ -317,6 +328,7 @@ function localDrillholeDatasets(
   if (surveyObservations.length > 0) datasets.push({
     dimensions: baseDimensions,
     id: 'local-drillhole-surveys',
+    kind: 'drillholes',
     name: 'Drillhole surveys · local',
     observations: surveyObservations,
     producer: 'GeoEye Analytics local database',
@@ -389,6 +401,7 @@ function fieldLoggingDataset(
       { key: 'logging_category', label: 'Logging category' },
     ], categoryColumns.map((column) => ({ key: column.key, label: column.label }))),
     id: `local-field-logging-${dataset.id}`,
+    kind: 'logging',
     name: fieldLoggingDisplayLabel(dataset),
     observations,
     producer: 'GeoEye Field local database',
@@ -434,6 +447,7 @@ function integratedLocalDataset(datasets: readonly EdaDataset[], project: Projec
     drillholes: 10,
     laboratory: 50,
     logging: 70,
+    operations: 60,
     other: 30,
     spectral: 40,
     strength: 45,
@@ -469,6 +483,7 @@ function integratedLocalDataset(datasets: readonly EdaDataset[], project: Projec
   return {
     dimensions: mergeDimensions(baseDimensions, [{ key: 'data_coverage', label: 'Available data types' }], ...sourceDatasets.map((dataset) => dataset.dimensions)),
     id: 'local-all-data-integrated',
+    kind: 'integrated',
     name: 'All local data · integrated',
     observations,
     producer: 'GeoEye Analytics local database',
@@ -635,17 +650,32 @@ export function buildEdaDatasets(input: {
   })
 }
 
+/** Tables made on the Operations page are project data too, and analyses read them like any other source. */
+function operationTableDatasets(
+  tables: readonly StoredOperationTable[],
+  project: ProjectSummary,
+  drillholes: readonly DrillholeSummary[],
+): EdaDataset[] {
+  return tables.map((table) => localTabularDataset(
+    { columns: table.columns, dirty: false, fileName: `${table.name}.csv`, rows: table.rows, section: 'operations', updatedAt: table.createdAt },
+    project,
+    drillholes,
+    { id: table.id, name: table.name, prefix: 'operation-table' },
+  )).map((dataset, index) => ({ ...dataset, name: `${tables[index]!.name} · operation` }))
+}
+
 export function buildLocalEdaDatasets(
   snapshot: LocalProjectSnapshot | null,
   drillholeDraft: LocalDrillholeDraft | null,
   tabularDrafts: LocalTabularDrafts = {},
   activeProject: ProjectSummary | null = null,
   savedRmrDatasets: readonly SavedRmrDataset[] = [],
+  operationTables: readonly StoredOperationTable[] = [],
 ): EdaDataset[] {
   const project = activeProject ?? snapshot?.project ?? null
   if (project === null) return []
   const drillholes = effectiveDrillholes(snapshot, drillholeDraft)
-  const localDraftDatasets = (Object.keys(localImportLabels) as Array<keyof typeof localImportLabels>)
+  const localDraftDatasets = (Object.keys(tabularDrafts) as TabularImportSection[])
     .flatMap((section) => tabularDrafts[section] === undefined ? [] : [localTabularDataset(tabularDrafts[section], project, drillholes)])
   const replacedDatasetNames = new Set(localDraftDatasets.map((dataset) => dataset.name.replace(/ · local$/, '')))
   const snapshotDatasets = snapshot === null ? [] : buildEdaDatasets({
@@ -660,7 +690,8 @@ export function buildLocalEdaDatasets(
       const converted = fieldLoggingDataset(prepareFieldLoggingDataset(dataset), project, drillholes)
       return converted === null ? [] : [converted]
     })
-  const sourceDatasets = [...localDraftDatasets, ...loggingDatasets, ...snapshotDatasets, ...localDrillholeDatasets(snapshot, drillholeDraft, project)]
+  const sourceDatasets = [...localDraftDatasets, ...loggingDatasets, ...snapshotDatasets,
+    ...operationTableDatasets(operationTables, project, drillholes), ...localDrillholeDatasets(snapshot, drillholeDraft, project)]
   const integrated = integratedLocalDataset(sourceDatasets, project)
   // Historical scenarios are alternatives, not extra measurements to join
   // into the project's integrated input population.
@@ -679,10 +710,13 @@ export function useProjectEdaDatasets() {
     .join('|')
   const savedRmrDatasets = useMemo(() => readSavedRmrDatasets(storage), [storage, localDraftSignature])
   const savedSignature = savedRmrDatasets.map(item => `${item.id}:${item.draft.updatedAt}`).join('|')
+  // The stored index changes whenever an operation table is added or removed; reading it is cheap, the tables are not.
+  const operationIndex = storage.getItem('geoeye.analytics.operation-tables.v1') ?? ''
+  const operationTables = useMemo(() => readOperationTables(storage), [operationIndex, storage])
   return useQuery<EdaDataset[]>({
     enabled: workspace.live && !workspace.projectsLoading && !workspace.localLoading,
-    queryFn: ({ signal }) => buildLocalEdaInWorker([workspace.localSnapshot, workspace.localDrillholeDraft, workspace.localTabularDrafts, workspace.project, savedRmrDatasets], signal),
-    queryKey: ['eda-datasets', 'local', projectId, workspace.localSnapshot?.refreshedAt ?? 'empty', workspace.localDrillholeDraft?.updatedAt ?? 'no-draft', localDraftSignature, savedSignature],
+    queryFn: ({ signal }) => buildLocalEdaInWorker([workspace.localSnapshot, workspace.localDrillholeDraft, workspace.localTabularDrafts, workspace.project, savedRmrDatasets, operationTables], signal),
+    queryKey: ['eda-datasets', 'local', projectId, workspace.localSnapshot?.refreshedAt ?? 'empty', workspace.localDrillholeDraft?.updatedAt ?? 'no-draft', localDraftSignature, savedSignature, operationIndex],
     staleTime: Number.POSITIVE_INFINITY,
   })
 }

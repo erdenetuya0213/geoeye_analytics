@@ -1,7 +1,7 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import type { EdaDataset } from '../data/edaDemo.js'
+import type { EdaDataset } from '../data/edaTypes.js'
 import { EdaDatasetOptions } from './EdaDatasetOptions.js'
 
 const loggingDataset: EdaDataset = {
@@ -27,5 +27,14 @@ describe('EdaDatasetOptions', () => {
     expect(markup).toContain('<optgroup label="Strength">')
     expect(markup).toContain('<optgroup label="XRF">')
     expect(markup).toContain('<optgroup label="Spectral">')
+    expect(markup).toContain('<optgroup label="Operations">')
+  })
+
+  it('files a dataset under the source it was built from, not the words in its name', () => {
+    const operation: EdaDataset = { ...loggingDataset, id: 'operation-table:merge-1', kind: 'operations', name: 'Core logging + Au · operation' }
+    const markup = renderToStaticMarkup(createElement('select', null, createElement(EdaDatasetOptions, { datasets: [loggingDataset, operation] })))
+
+    expect(markup).toContain('<optgroup label="Operations"><option value="operation-table:merge-1">Core logging + Au · operation</option>')
+    expect(markup).toContain('<optgroup label="Logging"><option value="local-field-logging-core-log">Core logging · Logging v2</option></optgroup>')
   })
 })

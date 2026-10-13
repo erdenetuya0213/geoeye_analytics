@@ -59,7 +59,7 @@ test('project files live under tenant and project names, with import and export 
   const projectPath = path.join(workspaceRoot, 'ASTROGEO ХХК', 'Төмөртолгой')
   assert.ok(fs.existsSync(path.join(projectPath, 'project.sqlite')), 'the project database sits under tenant/project names')
   assert.ok(!fs.existsSync(path.join(workspaceRoot, 'tenants')), 'no id-named scaffolding is left behind')
-  for (const folder of ['Data', 'Statistics', 'Geotech', '3D Analysis', 'Variography']) {
+  for (const folder of ['Data', 'Statistics', 'Geotech', 'Operations', '3D Analysis', 'Variography']) {
     for (const kind of ['import', 'export']) assert.ok(fs.statSync(path.join(projectPath, folder, kind)).isDirectory(), `${folder}/${kind}`)
   }
 
