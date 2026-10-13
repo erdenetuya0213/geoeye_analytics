@@ -7304,3 +7304,22 @@ select::picker(select) { white-space: normal; }
 .export-name-list { display: grid; gap: 6px; max-height: 52vh; overflow: auto; }
 .export-name-list label { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px; }
 .export-name-list em { color: var(--muted-foreground, var(--muted)); font-family: var(--font-code); font-size: 0.75rem; font-style: normal; }
+
+/* Data → Operations */
+.operation-panel { margin-bottom: 14px; }
+.operation-fields { min-width: 0; display: flex; flex-wrap: wrap; align-content: flex-start; gap: 8px 16px; margin: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 3px; }
+.operation-fields legend { padding: 0 4px; color: var(--muted-foreground); font-size: 10.5px; font-weight: 600; }
+.operation-fields label { display: inline-flex; align-items: center; gap: 6px; color: var(--foreground); font-size: 12px; cursor: pointer; }
+.operation-fields input { width: 14px; height: 14px; accent-color: var(--primary); }
+.operation-fields small, .operation-footer small, .operation-planned span, .operation-preview p { color: var(--muted-foreground); font-size: 11px; }
+.operation-footer { display: flex; align-items: center; gap: 12px; padding: 0 18px 18px; }
+.operation-planned { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; padding: 18px; }
+.operation-planned > div { display: flex; flex-direction: column; gap: 4px; padding: 14px; border: 1px dashed var(--border); border-radius: 3px; }
+.operation-planned strong { color: var(--foreground); font-size: 12.5px; }
+.operation-notice { align-self: center; margin-left: 12px; }
+.operation-preview { overflow: hidden; }
+.operation-preview > div { max-height: 46vh; overflow: auto; }
+.operation-preview table { width: 100%; border-collapse: separate; border-spacing: 0; color: var(--foreground); font-family: var(--font-code); font-size: 11.5px; }
+.operation-preview th, .operation-preview td { height: 30px; padding: 4px 12px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
+.operation-preview th { position: sticky; top: 0; color: var(--muted-foreground); background: var(--workspace-chrome); font-family: inherit; font-size: 10.5px; font-weight: 650; }
+.operation-preview p { margin: 0; padding: 9px 12px; }

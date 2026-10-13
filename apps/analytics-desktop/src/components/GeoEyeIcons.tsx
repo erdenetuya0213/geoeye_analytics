@@ -265,3 +265,12 @@ export function CustomIcon({ className, size = 20, strokeWidth = 1.6 }: GeoIconP
     </svg>
   )
 }
+
+export function OperationsIcon({ className, size = 20, strokeWidth = 1.6 }: GeoIconProps) {
+  return (
+    <svg {...iconDefaults} aria-hidden="true" className={className} height={size} stroke="currentColor" strokeWidth={strokeWidth} width={size}>
+      <path d="M3.5 4.5h6v5h-6zM3.5 14.5h6v5h-6zM15 9.5h5.5v5H15z" />
+      <path className="geo-icon-accent" d="M9.5 7h2.7v10H9.5M12.2 12H15" />
+    </svg>
+  )
+}

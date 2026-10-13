@@ -1,7 +1,7 @@
 import { Construction } from 'lucide-react'
 import type { SectionId } from '../types.js'
 
-type PlaceholderSection = Exclude<SectionId, 'overview' | 'data-pool' | 'drillholes' | 'field-logging' | 'laboratory' | 'strength' | 'xrf' | 'spectral' | 'structure' | 'view-3d' | 'grade' | 'variography' | 'custom'>
+type PlaceholderSection = Exclude<SectionId, 'overview' | 'data-pool' | 'drillholes' | 'field-logging' | 'laboratory' | 'strength' | 'xrf' | 'spectral' | 'operations' | 'structure' | 'view-3d' | 'grade' | 'variography' | 'custom'>
 
 const details: Record<PlaceholderSection, { title: string; next: string }> = {
   'spatial-reference': { title: 'Spatial reference', next: 'Coordinate systems and project extents' },

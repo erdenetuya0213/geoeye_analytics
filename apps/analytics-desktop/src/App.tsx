@@ -30,6 +30,7 @@ import { ExplorePage } from './pages/ExplorePage.js'
 import { GeotechnicalPage } from './pages/GeotechnicalPage.js'
 import { LoggingPage } from './pages/LoggingPage.js'
 import { MultivariatePage } from './pages/MultivariatePage.js'
+import { OperationsPage } from './pages/OperationsPage.js'
 import { OverviewPage } from './pages/OverviewPage.js'
 import { PlaceholderPage } from './pages/PlaceholderPage.js'
 import { GeologicalAnalysis3DPage } from './pages/GeologicalAnalysis3DPage.js'
@@ -115,7 +116,7 @@ function loadConnection(): ConnectionSettings {
 function loadInitialSection(): SectionId {
   const rawRequested = new URLSearchParams(window.location.search).get('section')
   const requested = (rawRequested === 'view-2d' ? 'view-3d' : rawRequested) as SectionId | null
-  const sections: readonly SectionId[] = ['overview', 'data-pool', 'drillholes', 'field-logging', 'laboratory', 'strength', 'xrf', 'spectral', 'spatial-reference', 'explore', 'domain', 'grade', 'variography', 'structure', 'geotechnical', 'custom', 'multivariate', 'view-3d']
+  const sections: readonly SectionId[] = ['overview', 'data-pool', 'drillholes', 'field-logging', 'laboratory', 'strength', 'xrf', 'spectral', 'operations', 'spatial-reference', 'explore', 'domain', 'grade', 'variography', 'structure', 'geotechnical', 'custom', 'multivariate', 'view-3d']
   if (requested !== null && sections.includes(requested)) return requested
   const saved = loadWorkspaceState<SectionId>(sectionStateKey, 'data-pool')
   return saved !== undefined && sections.includes(saved) ? saved : 'data-pool'
@@ -317,6 +318,8 @@ export function App() {
     page = <ClassDataPage section={section} />
   } else if (isDatasetSection(section)) {
     page = <DatasetToolPage section={section} />
+  } else if (section === 'operations') {
+    page = <OperationsPage />
   } else if (section === 'explore') {
     page = <ExplorePage />
   } else if (section === 'structure') {

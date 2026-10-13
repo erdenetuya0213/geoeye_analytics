@@ -8,6 +8,7 @@ export type SectionId =
   | 'strength'
   | 'xrf'
   | 'spectral'
+  | 'operations'
   | 'spatial-reference'
   | 'explore'
   | 'domain'

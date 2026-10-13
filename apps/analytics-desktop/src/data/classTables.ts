@@ -15,11 +15,11 @@ export interface ClassImport {
 
 export const requiredColumns = ['Hole ID', 'Sample ID', 'From', 'To'] as const
 
-const requiredAliases: readonly (readonly string[])[] = [
+export const requiredAliases: readonly (readonly string[])[] = [
   ['holeid', 'hole', 'holeno', 'holenumber', 'borehole', 'boreholeid', 'boreholeno', 'drillhole', 'drillholeid', 'bhid'],
   ['sampleid', 'sample', 'sampleno', 'samplenumber'],
-  ['from', 'fromm', 'depthfrom', 'depthfromm', 'fromdepth', 'fromdepthm', 'startdepth', 'startdepthm'],
-  ['to', 'tom', 'depthto', 'depthtom', 'todepth', 'todepthm', 'enddepth', 'enddepthm'],
+  ['from', 'fromm', 'mfrom', 'depthfrom', 'depthfromm', 'fromdepth', 'fromdepthm', 'startdepth', 'startdepthm'],
+  ['to', 'tom', 'mto', 'depthto', 'depthtom', 'todepth', 'todepthm', 'enddepth', 'enddepthm'],
 ]
 
 /** Header identity: case, spacing and punctuation are ignored, so "Is(50) (MPa)" matches "is50 mpa". */

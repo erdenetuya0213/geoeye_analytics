@@ -21,7 +21,7 @@ interface FeatureItem {
 }
 
 const features: FeatureItem[] = [
-  { label: 'Data', icon: DataPoolIcon, target: 'data-pool', activeSections: ['data-pool', 'drillholes', 'field-logging', 'laboratory', 'strength', 'xrf', 'spectral'] },
+  { label: 'Data', icon: DataPoolIcon, target: 'data-pool', activeSections: ['data-pool', 'drillholes', 'field-logging', 'laboratory', 'strength', 'xrf', 'spectral', 'operations'] },
   { label: 'Statistics', icon: ExploreIcon, target: 'explore' },
   { label: 'Multivariate', icon: MultivariateIcon, target: 'multivariate' },
   { label: 'Domain', icon: DomainIcon, target: 'domain' },

@@ -6,6 +6,7 @@ import {
   DataPoolIcon,
   DrillholeIcon,
   FieldLoggingIcon,
+  OperationsIcon,
   SpectralIcon,
   StrengthIcon,
   XrfIcon,
@@ -29,6 +30,7 @@ const dataRibbon = {
     { label: 'Strength', icon: StrengthIcon, primary: true, section: 'strength' },
     { label: 'XRF', icon: XrfIcon, primary: true, section: 'xrf' },
     { label: 'Spectral', icon: SpectralIcon, primary: true, section: 'spectral' },
+    { label: 'Operations', icon: OperationsIcon, primary: true, section: 'operations' },
   ] satisfies RibbonTool[],
 } as const
 
@@ -40,6 +42,7 @@ const dataSections: readonly SectionId[] = [
   'strength',
   'xrf',
   'spectral',
+  'operations',
 ]
 
 function groupForSection(section: SectionId) {

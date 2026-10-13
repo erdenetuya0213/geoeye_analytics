@@ -29,7 +29,7 @@ export function AppShell({
   onThemeChange,
   theme,
 }: AppShellProps) {
-  const ribbonSections: readonly SectionId[] = ['data-pool', 'drillholes', 'field-logging', 'laboratory', 'strength', 'xrf', 'spectral']
+  const ribbonSections: readonly SectionId[] = ['data-pool', 'drillholes', 'field-logging', 'laboratory', 'strength', 'xrf', 'spectral', 'operations']
   const hasWorkspaceRibbon = ribbonSections.includes(active)
 
   return (
